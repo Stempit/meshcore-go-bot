@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
+	"os"
 	"strings"
 	"time"
 
@@ -11,6 +13,14 @@ import (
 )
 
 func main() {
+
+	opts := &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}
+	handler := slog.NewTextHandler(os.Stdout, opts)
+	logger := slog.New(handler)
+	slog.SetDefault(logger)
+
 	adapter := bluetooth.DefaultAdapter
 	if err := adapter.Enable(); err != nil {
 		panic(err)

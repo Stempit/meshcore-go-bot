@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -43,6 +44,9 @@ type MeshCoreClient struct {
 	onBattery        func(millivolts int, usedKb, totalKb int)
 	onError          func(error)
 	onNoMoreMessages func()
+
+	// Логгер
+	logger *slog.Logger
 }
 
 func NewMeshCoreClient(adapter *bluetooth.Adapter) *MeshCoreClient {
@@ -54,7 +58,13 @@ func NewMeshCoreClient(adapter *bluetooth.Adapter) *MeshCoreClient {
 		channelMsgs: make(map[int][]*ChannelMessage),
 		notifyCh:    make(chan []byte, 100),
 		doneCh:      make(chan struct{}),
+		logger:      slog.Default(),
 	}
+}
+
+// SetLogger позволяет установить собственный логгер.
+func (c *MeshCoreClient) SetLogger(logger *slog.Logger) {
+	c.logger = logger
 }
 
 // ============================================================================
@@ -70,13 +80,15 @@ func (c *MeshCoreClient) Connect(address bluetooth.Address) error {
 
 	device, err := c.adapter.Connect(address, bluetooth.ConnectionParams{})
 	if err != nil {
+		c.logger.Error("Connect failed", "address", address.String(), "error", err)
 		return fmt.Errorf("connect failed: %w", err)
 	}
 	c.device = &device
-	fmt.Println("Connected to device")
+	c.logger.Info("Connected to device", "address", address.String())
 
 	services, err := device.DiscoverServices(nil)
 	if err != nil {
+		c.logger.Error("Discover services failed", "error", err)
 		device.Disconnect()
 		return fmt.Errorf("discover services failed: %w", err)
 	}
@@ -88,13 +100,15 @@ func (c *MeshCoreClient) Connect(address bluetooth.Address) error {
 		}
 	}
 	if targetService == nil {
+		c.logger.Error("MeshCore service not found")
 		device.Disconnect()
 		return fmt.Errorf("meshcore service not found")
 	}
-	fmt.Println("Found MeshCore service")
+	c.logger.Info("Found MeshCore service")
 
 	chars, err := targetService.DiscoverCharacteristics(nil)
 	if err != nil {
+		c.logger.Error("Discover characteristics failed", "error", err)
 		device.Disconnect()
 		return fmt.Errorf("discover characteristics failed: %w", err)
 	}
@@ -102,39 +116,42 @@ func (c *MeshCoreClient) Connect(address bluetooth.Address) error {
 		uuid := ch.UUID().String()
 		switch uuid {
 		case rxCharacteristicUUID:
-			c.rxChar = &ch // теперь корректно
-			fmt.Println("Found RX characteristic")
+			c.rxChar = &ch
+			c.logger.Info("Found RX characteristic")
 		case txCharacteristicUUID:
-			c.txChar = &ch // теперь корректно
-			fmt.Println("Found TX characteristic")
+			c.txChar = &ch
+			c.logger.Info("Found TX characteristic")
 		}
 	}
 
 	if c.rxChar == nil || c.txChar == nil {
+		c.logger.Error("RX/TX characteristics not found")
 		device.Disconnect()
 		return fmt.Errorf("RX/TX characteristics not found")
 	}
 
-	fmt.Println("Enabling notifications on TX characteristic...")
+	c.logger.Info("Enabling notifications on TX characteristic...")
 	if err := c.txChar.EnableNotifications(func(data []byte) {
-		fmt.Printf("Notification received: %x\n", data)
+		c.logger.Debug("Notification received", "data", fmt.Sprintf("%x", data))
 		select {
 		case c.notifyCh <- data:
 		default:
+			c.logger.Warn("Notification channel full, dropping data")
 		}
 	}); err != nil {
-		fmt.Printf("EnableNotifications error: %v\n", err)
+		c.logger.Error("EnableNotifications failed", "error", err)
 		device.Disconnect()
 		return fmt.Errorf("enable notifications failed: %w", err)
 	}
-	fmt.Println("Notifications enabled")
-	time.Sleep(500 * time.Millisecond) // даём время на активацию
+	c.logger.Info("Notifications enabled")
+	time.Sleep(500 * time.Millisecond)
 
 	c.connected = true
 	go c.frameHandler()
-	c.mu.Unlock() // освобождаем мьютекс, чтобы write не блокировался
+	c.mu.Unlock()
 
-	fmt.Printf("%%+v Output: %+v\n", c)
+	c.logger.Debug("MeshCoreClient state", "client", fmt.Sprintf("%+v", c))
+
 	// Отправка инициализационных команд
 	if err := c.sendAppStart(); err != nil {
 		c.Disconnect()
@@ -181,6 +198,7 @@ func (c *MeshCoreClient) Disconnect() error {
 	c.connected = false
 	close(c.doneCh)
 	if c.device != nil {
+		c.logger.Info("Disconnecting from device")
 		return c.device.Disconnect()
 	}
 	return nil
@@ -194,18 +212,18 @@ func (c *MeshCoreClient) sendAppStart() error {
 	// [cmd][app_ver][reserved 6][app_name]\0
 	buf := new(bytes.Buffer)
 	buf.WriteByte(cmdAppStart)
-	buf.WriteByte(1)                    // appVersion = 1, как в Dart
-	buf.Write([]byte{0, 0, 0, 0, 0, 0}) // reserved 6 bytes
+	buf.WriteByte(1)
+	buf.Write([]byte{0, 0, 0, 0, 0, 0})
 	buf.WriteString("MeshCoreOpen")
 	buf.WriteByte(0)
 	data := buf.Bytes()
-	fmt.Printf("Sending AppStart: %x\n", data)
+	c.logger.Debug("Sending AppStart", "data", fmt.Sprintf("%x", data))
 	return c.write(data)
 }
 
 func (c *MeshCoreClient) sendDeviceQuery() error {
 	data := []byte{cmdDeviceQuery, appProtocolVersion}
-	fmt.Printf("Sending DeviceQuery: %x\n", data)
+	c.logger.Debug("Sending DeviceQuery", "data", fmt.Sprintf("%x", data))
 	return c.write(data)
 }
 
@@ -373,6 +391,9 @@ func (c *MeshCoreClient) write(data []byte) error {
 		return fmt.Errorf("not connected")
 	}
 	_, err := c.rxChar.Write(data)
+	if err != nil {
+		c.logger.Error("Write to characteristic failed", "error", err)
+	}
 	return err
 }
 
@@ -384,7 +405,7 @@ func (c *MeshCoreClient) frameHandler() {
 	for {
 		select {
 		case data := <-c.notifyCh:
-			fmt.Printf("RX frame: %x\n", data)
+			c.logger.Debug("RX frame", "data", fmt.Sprintf("%x", data))
 			c.handleFrame(data)
 		case <-c.doneCh:
 			return
@@ -396,11 +417,13 @@ func (c *MeshCoreClient) parseContactMessageV3(data []byte) {
 	// Минимальная длина: код (1) + префикс (6) + служебные (9)
 	const headerLen = 1 + 6 + 9
 	if len(data) < headerLen {
+		c.logger.Warn("parseContactMessageV3: data too short", "len", len(data))
 		return
 	}
 	prefix := data[1:7]
 	textStart := headerLen
 	if textStart >= len(data) {
+		c.logger.Warn("parseContactMessageV3: no text data")
 		return
 	}
 	textBytes := data[textStart:]
@@ -424,6 +447,7 @@ func (c *MeshCoreClient) parseContactMessageV3(data []byte) {
 	c.mu.RUnlock()
 	if fullKey == nil {
 		fullKey = prefix
+		c.logger.Warn("parseContactMessageV3: unknown sender", "prefix", fmt.Sprintf("%x", prefix))
 	}
 
 	msg := &Message{
@@ -442,6 +466,8 @@ func (c *MeshCoreClient) parseContactMessageV3(data []byte) {
 	c.messages[key] = append(c.messages[key], msg)
 	c.mu.Unlock()
 
+	c.logger.Debug("Received contact message V3", "sender", key, "text", text)
+
 	if c.onMessage != nil {
 		c.onMessage(msg)
 	}
@@ -452,8 +478,7 @@ func (c *MeshCoreClient) handleFrame(data []byte) {
 		return
 	}
 	code := data[0]
-	fmt.Printf("handleFrame: code=0x%02x, len=%d\n", code, len(data))
-	fmt.Printf("handleFrame: code=0x%02x\n", code)
+	c.logger.Debug("handleFrame", "code", fmt.Sprintf("0x%02x", code), "len", len(data))
 	switch code {
 	case respCodeSelfInfo:
 		c.parseSelfInfo(data)
@@ -471,6 +496,7 @@ func (c *MeshCoreClient) handleFrame(data []byte) {
 		// Конец списка
 	case respCodeChannelInfo:
 		if len(data) < 2 {
+			c.logger.Warn("ChannelInfo too short", "len", len(data))
 			return
 		}
 		// Можно добавить проверку на сокращённый формат канала, если нужно
@@ -490,7 +516,7 @@ func (c *MeshCoreClient) handleFrame(data []byte) {
 	case respCodeSent:
 		c.parseSent(data)
 	case respCodeNoMoreMessages:
-		fmt.Println("Received respCodeNoMoreMessages")
+		c.logger.Debug("Received respCodeNoMoreMessages")
 		if c.onNoMoreMessages != nil {
 			c.onNoMoreMessages()
 		}
@@ -500,6 +526,7 @@ func (c *MeshCoreClient) handleFrame(data []byte) {
 		c.parsePathUpdated(data)
 	case pushCodeMsgWaiting:
 		// Есть сообщения в очереди, запросить
+		c.logger.Debug("Messages waiting, requesting sync")
 		_ = c.sendSyncNextMessage()
 	case respCodeBattAndStorage:
 		c.parseBatteryAndStorage(data)
@@ -512,9 +539,9 @@ func (c *MeshCoreClient) handleFrame(data []byte) {
 	case respCodeOk:
 		// OK – можно использовать для синхронизации
 	case respCodeErr:
-		// Ошибка, можно прочитать код ошибки
+		c.logger.Error("Received error response", "data", fmt.Sprintf("%x", data))
 	default:
-		// Неизвестный код
+		c.logger.Warn("Unknown frame code", "code", code)
 	}
 }
 
@@ -523,8 +550,9 @@ func (c *MeshCoreClient) handleFrame(data []byte) {
 // ============================================================================
 
 func (c *MeshCoreClient) parseSelfInfo(data []byte) {
-	fmt.Printf("parseSelfInfo called with %d bytes\n", len(data))
+	c.logger.Debug("parseSelfInfo", "bytes", len(data))
 	if len(data) < 59 {
+		c.logger.Warn("parseSelfInfo: data too short", "len", len(data))
 		return
 	}
 	info := &SelfInfo{}
@@ -592,6 +620,7 @@ func (c *MeshCoreClient) parseSelfInfo(data []byte) {
 	c.mu.Lock()
 	c.selfInfo = info
 	c.mu.Unlock()
+	c.logger.Info("SelfInfo updated", "name", info.Name, "public_key", fmt.Sprintf("%x", info.PublicKey))
 	if c.onSelfInfo != nil {
 		c.onSelfInfo(info)
 	}
@@ -599,20 +628,15 @@ func (c *MeshCoreClient) parseSelfInfo(data []byte) {
 
 func (c *MeshCoreClient) parseDeviceInfo(data []byte) {
 	if len(data) < 4 {
+		c.logger.Warn("DeviceInfo too short", "len", len(data))
 		return
 	}
-	// firmware_ver_code = data[1]
-	// max_contacts = data[2] * 2
-	// max_channels = data[3]
-	// client_repeat = data[80] (если есть)
-	// path_hash_mode = data[81] (если есть)
-	// можно сохранить в структуре устройства
+	// Можно добавить логирование полученных данных
+	c.logger.Debug("DeviceInfo received", "data", fmt.Sprintf("%x", data))
 }
 
 func (c *MeshCoreClient) parseContact(data []byte) {
-	const (
-		minLen = 1 + 32 + 1 + 1 + 1 + 64 + 32 + 4 + 4 + 4 // примерно 144, но точно не менее 100
-	)
+	const minLen = 1 + 32 + 1 + 1 + 1 + 64 + 32 + 4 + 4 + 4
 	if len(data) < minLen {
 		// Недостаточно данных для полного контакта, возможно это сокращённый формат
 		c.parseContactV3(data)
@@ -634,18 +658,20 @@ func (c *MeshCoreClient) parseContact(data []byte) {
 
 	// Имя начинается со смещения 100
 	if len(data) < 132 {
-		// Не хватает данных для имени
+		c.logger.Warn("Contact data too short for name", "len", len(data))
 		return
 	}
 	nameBytes := data[100:132]
 	name := string(bytes.TrimRight(nameBytes, "\x00"))
 
 	if len(data) < 136 {
+		c.logger.Warn("Contact data too short for last_seen", "len", len(data))
 		return
 	}
 	lastSeen := time.Unix(int64(binary.LittleEndian.Uint32(data[132:136])), 0)
 
 	if len(data) < 144 {
+		c.logger.Warn("Contact data too short for location", "len", len(data))
 		return
 	}
 	latInt := int32(binary.LittleEndian.Uint32(data[136:140]))
@@ -673,6 +699,7 @@ func (c *MeshCoreClient) parseContact(data []byte) {
 	c.mu.Lock()
 	c.contacts[pubKeyHex(pubKey)] = contact
 	c.mu.Unlock()
+	c.logger.Debug("Contact parsed", "name", name, "public_key", fmt.Sprintf("%x", pubKey))
 	if c.onContact != nil {
 		c.onContact(contact)
 	}
@@ -681,10 +708,10 @@ func (c *MeshCoreClient) parseContact(data []byte) {
 func (c *MeshCoreClient) parseContactV3(data []byte) {
 	// Минимальная длина: код + 6-байтный префикс + имя (хотя бы 1 байт) + нуль
 	if len(data) < 1+6+2 {
+		c.logger.Warn("ContactV3 too short", "len", len(data))
 		return
 	}
-	prefix := data[1:7] // 6-байтный префикс публичного ключа
-	// Далее может идти имя, завершённое нулём
+	prefix := data[1:7]
 	nameStart := 7
 	nameBytes := data[nameStart:]
 	nullIdx := bytes.IndexByte(nameBytes, 0)
@@ -707,12 +734,12 @@ func (c *MeshCoreClient) parseContactV3(data []byte) {
 	c.mu.RUnlock()
 	if fullKey == nil {
 		fullKey = prefix
+		c.logger.Warn("ContactV3: unknown prefix, using as key", "prefix", fmt.Sprintf("%x", prefix))
 	}
 
 	contact := &Contact{
-		PublicKey: fullKey,
-		Name:      name,
-		// Остальные поля заполняем значениями по умолчанию
+		PublicKey:  fullKey,
+		Name:       name,
 		Type:       0,
 		Flags:      0,
 		PathLength: 0,
@@ -725,6 +752,7 @@ func (c *MeshCoreClient) parseContactV3(data []byte) {
 	c.mu.Lock()
 	c.contacts[pubKeyHex(fullKey)] = contact
 	c.mu.Unlock()
+	c.logger.Debug("ContactV3 parsed", "name", name, "public_key", fmt.Sprintf("%x", fullKey))
 	if c.onContact != nil {
 		c.onContact(contact)
 	}
@@ -751,6 +779,7 @@ func (c *MeshCoreClient) parseChannelInfo(data []byte) {
 	c.mu.Lock()
 	c.channels[index] = ch
 	c.mu.Unlock()
+	c.logger.Debug("Channel info parsed", "index", index, "name", name)
 	if c.onChannel != nil {
 		c.onChannel(ch)
 	}
@@ -763,9 +792,7 @@ func (c *MeshCoreClient) parseContactMessage(data []byte) {
 		Timestamp:  time.Now(),
 		IsOutgoing: false,
 	}
-	fmt.Printf("Message received: %s\n", msg)
-
-	// реализация парсинга опущена для краткости
+	c.logger.Debug("Message received (legacy)", "msg", fmt.Sprintf("%+v", msg))
 	if c.onMessage != nil {
 		c.onMessage(msg)
 	}
@@ -773,18 +800,21 @@ func (c *MeshCoreClient) parseContactMessage(data []byte) {
 
 func (c *MeshCoreClient) parseChannelMessage(data []byte) {
 	// Аналогично
+	c.logger.Debug("Channel message received (legacy)")
 }
 
 func (c *MeshCoreClient) parseChannelMessageV3(data []byte) {
 	// Минимальная длина: код (1) + channel (1) + префикс (6) + служебные (9)
 	const headerLen = 1 + 1 + 6 + 9
 	if len(data) < headerLen {
+		c.logger.Warn("ChannelMessageV3 too short", "len", len(data))
 		return
 	}
 	channelIndex := int(data[1])
 	prefix := data[2:8]
 	textStart := headerLen
 	if textStart >= len(data) {
+		c.logger.Warn("ChannelMessageV3: no text data")
 		return
 	}
 	textBytes := data[textStart:]
@@ -808,6 +838,7 @@ func (c *MeshCoreClient) parseChannelMessageV3(data []byte) {
 	c.mu.RUnlock()
 	if senderName == "" {
 		senderName = fmt.Sprintf("?%x", prefix)
+		c.logger.Warn("ChannelMessageV3: unknown sender", "prefix", fmt.Sprintf("%x", prefix))
 	}
 
 	msg := &ChannelMessage{
@@ -822,7 +853,7 @@ func (c *MeshCoreClient) parseChannelMessageV3(data []byte) {
 		MessageID:    fmt.Sprintf("%d-%d-%x", channelIndex, time.Now().Unix(), prefix),
 	}
 
-	fmt.Printf("Message received: %s\n", msg)
+	c.logger.Debug("Channel message V3 received", "channel", channelIndex, "sender", senderName, "text", text)
 
 	c.mu.Lock()
 	c.channelMsgs[channelIndex] = append(c.channelMsgs[channelIndex], msg)
@@ -834,24 +865,26 @@ func (c *MeshCoreClient) parseChannelMessageV3(data []byte) {
 }
 
 func (c *MeshCoreClient) parseSent(data []byte) {
-	// Обработка подтверждения отправки
+	c.logger.Debug("Sent confirmation received")
 }
 
 func (c *MeshCoreClient) parseSendConfirmed(data []byte) {
-	// ACK от получателя
+	c.logger.Debug("Send confirmed")
 }
 
 func (c *MeshCoreClient) parsePathUpdated(data []byte) {
-	// Обновление пути контакта
+	c.logger.Debug("Path updated")
 }
 
 func (c *MeshCoreClient) parseBatteryAndStorage(data []byte) {
 	if len(data) < 11 {
+		c.logger.Warn("BatteryAndStorage too short", "len", len(data))
 		return
 	}
 	mv := binary.LittleEndian.Uint16(data[1:3])
 	usedKb := binary.LittleEndian.Uint32(data[3:7])
 	totalKb := binary.LittleEndian.Uint32(data[7:11])
+	c.logger.Info("Battery and storage", "millivolts", mv, "used_kb", usedKb, "total_kb", totalKb)
 	if c.onBattery != nil {
 		c.onBattery(int(mv), int(usedKb), int(totalKb))
 	}
@@ -859,6 +892,7 @@ func (c *MeshCoreClient) parseBatteryAndStorage(data []byte) {
 
 func (c *MeshCoreClient) parseStats(data []byte) {
 	if len(data) < 9 {
+		c.logger.Warn("Stats too short", "len", len(data))
 		return
 	}
 	stats := &CompanionRadioStats{}
@@ -871,17 +905,18 @@ func (c *MeshCoreClient) parseStats(data []byte) {
 	if len(data) > 10 {
 		stats.LastSnrDb = float32(int8(data[10])) / 4.0
 	}
+	c.logger.Debug("Stats received", "stats", fmt.Sprintf("%+v", stats))
 	if c.onStats != nil {
 		c.onStats(stats)
 	}
 }
 
 func (c *MeshCoreClient) parseAutoAddConfig(data []byte) {
-	// флаги в data[1]
+	c.logger.Debug("AutoAddConfig received")
 }
 
 func (c *MeshCoreClient) parseCustomVars(data []byte) {
-	// строка в data[1:]
+	c.logger.Debug("CustomVars received")
 }
 
 // ============================================================================
