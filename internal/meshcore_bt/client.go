@@ -42,6 +42,7 @@ type MeshCoreClient struct {
 	onStats          func(*CompanionRadioStats)
 	onBattery        func(millivolts int, usedKb, totalKb int)
 	onError          func(error)
+	onNoMoreMessages func()
 }
 
 func NewMeshCoreClient(adapter *bluetooth.Adapter) *MeshCoreClient {
@@ -391,6 +392,61 @@ func (c *MeshCoreClient) frameHandler() {
 	}
 }
 
+func (c *MeshCoreClient) parseContactMessageV3(data []byte) {
+	// Минимальная длина: код (1) + префикс (6) + служебные (9)
+	const headerLen = 1 + 6 + 9
+	if len(data) < headerLen {
+		return
+	}
+	prefix := data[1:7]
+	textStart := headerLen
+	if textStart >= len(data) {
+		return
+	}
+	textBytes := data[textStart:]
+	nullIdx := bytes.IndexByte(textBytes, 0)
+	var text string
+	if nullIdx >= 0 {
+		text = string(textBytes[:nullIdx])
+	} else {
+		text = string(textBytes)
+	}
+
+	// Поиск полного ключа по префиксу
+	var fullKey []byte
+	c.mu.RLock()
+	for _, contact := range c.contacts {
+		if len(contact.PublicKey) >= 6 && bytes.Equal(contact.PublicKey[:6], prefix) {
+			fullKey = contact.PublicKey
+			break
+		}
+	}
+	c.mu.RUnlock()
+	if fullKey == nil {
+		fullKey = prefix
+	}
+
+	msg := &Message{
+		SenderKey:  fullKey,
+		Text:       text,
+		Timestamp:  time.Now(),
+		IsOutgoing: false,
+		Status:     "delivered",
+		PathLength: 0,
+		PathBytes:  []byte{},
+		MessageID:  fmt.Sprintf("%x-%d", prefix, time.Now().Unix()),
+	}
+
+	c.mu.Lock()
+	key := pubKeyHex(fullKey)
+	c.messages[key] = append(c.messages[key], msg)
+	c.mu.Unlock()
+
+	if c.onMessage != nil {
+		c.onMessage(msg)
+	}
+}
+
 func (c *MeshCoreClient) handleFrame(data []byte) {
 	if len(data) == 0 {
 		return
@@ -406,19 +462,38 @@ func (c *MeshCoreClient) handleFrame(data []byte) {
 	case respCodeContactsStart:
 		// Начало списка контактов
 	case respCodeContact:
-		c.parseContact(data)
+		if len(data) < contactFrameSize {
+			c.parseContactV3(data)
+		} else {
+			c.parseContact(data)
+		}
 	case respCodeEndOfContacts:
 		// Конец списка
 	case respCodeChannelInfo:
+		if len(data) < 2 {
+			return
+		}
+		// Можно добавить проверку на сокращённый формат канала, если нужно
 		c.parseChannelInfo(data)
 	case respCodeContactMsgRecv, respCodeContactMsgRecvV3:
-		c.parseContactMessage(data)
+		if code == respCodeContactMsgRecvV3 {
+			c.parseContactMessageV3(data)
+		} else {
+			c.parseContactMessage(data)
+		}
 	case respCodeChannelMsgRecv, respCodeChannelMsgRecvV3:
-		c.parseChannelMessage(data)
+		if code == respCodeChannelMsgRecvV3 {
+			c.parseChannelMessageV3(data)
+		} else {
+			c.parseChannelMessage(data)
+		}
 	case respCodeSent:
 		c.parseSent(data)
 	case respCodeNoMoreMessages:
-		// Обработка окончания очереди
+		fmt.Println("Received respCodeNoMoreMessages")
+		if c.onNoMoreMessages != nil {
+			c.onNoMoreMessages()
+		}
 	case pushCodeSendConfirmed:
 		c.parseSendConfirmed(data)
 	case pushCodePathUpdated:
@@ -535,17 +610,44 @@ func (c *MeshCoreClient) parseDeviceInfo(data []byte) {
 }
 
 func (c *MeshCoreClient) parseContact(data []byte) {
-	if len(data) < contactFrameSize {
+	const (
+		minLen = 1 + 32 + 1 + 1 + 1 + 64 + 32 + 4 + 4 + 4 // примерно 144, но точно не менее 100
+	)
+	if len(data) < minLen {
+		// Недостаточно данных для полного контакта, возможно это сокращённый формат
+		c.parseContactV3(data)
 		return
 	}
 	pubKey := data[1:33]
 	contactType := int(data[33])
 	flags := int(data[34])
 	pathLen := int(data[35])
-	path := data[36 : 36+pathLen] // первые pathLen байт из 64
+	// Ограничиваем pathLen доступной длиной (макс 64, но может быть и меньше)
+	maxPathLen := len(data) - 36
+	if pathLen > maxPathLen {
+		pathLen = maxPathLen
+	}
+	if pathLen > 64 {
+		pathLen = 64
+	}
+	path := data[36 : 36+pathLen]
+
+	// Имя начинается со смещения 100
+	if len(data) < 132 {
+		// Не хватает данных для имени
+		return
+	}
 	nameBytes := data[100:132]
 	name := string(bytes.TrimRight(nameBytes, "\x00"))
+
+	if len(data) < 136 {
+		return
+	}
 	lastSeen := time.Unix(int64(binary.LittleEndian.Uint32(data[132:136])), 0)
+
+	if len(data) < 144 {
+		return
+	}
 	latInt := int32(binary.LittleEndian.Uint32(data[136:140]))
 	lonInt := int32(binary.LittleEndian.Uint32(data[140:144]))
 	var lat, lon *float64
@@ -555,6 +657,7 @@ func (c *MeshCoreClient) parseContact(data []byte) {
 		lat = &latVal
 		lon = &lonVal
 	}
+
 	contact := &Contact{
 		PublicKey:  pubKey,
 		Name:       name,
@@ -566,8 +669,61 @@ func (c *MeshCoreClient) parseContact(data []byte) {
 		Longitude:  lon,
 		LastSeen:   lastSeen,
 	}
+
 	c.mu.Lock()
 	c.contacts[pubKeyHex(pubKey)] = contact
+	c.mu.Unlock()
+	if c.onContact != nil {
+		c.onContact(contact)
+	}
+}
+
+func (c *MeshCoreClient) parseContactV3(data []byte) {
+	// Минимальная длина: код + 6-байтный префикс + имя (хотя бы 1 байт) + нуль
+	if len(data) < 1+6+2 {
+		return
+	}
+	prefix := data[1:7] // 6-байтный префикс публичного ключа
+	// Далее может идти имя, завершённое нулём
+	nameStart := 7
+	nameBytes := data[nameStart:]
+	nullIdx := bytes.IndexByte(nameBytes, 0)
+	var name string
+	if nullIdx >= 0 {
+		name = string(nameBytes[:nullIdx])
+	} else {
+		name = string(nameBytes)
+	}
+
+	// Пытаемся найти полный ключ по префиксу
+	var fullKey []byte
+	c.mu.RLock()
+	for _, contact := range c.contacts {
+		if len(contact.PublicKey) >= 6 && bytes.Equal(contact.PublicKey[:6], prefix) {
+			fullKey = contact.PublicKey
+			break
+		}
+	}
+	c.mu.RUnlock()
+	if fullKey == nil {
+		fullKey = prefix
+	}
+
+	contact := &Contact{
+		PublicKey: fullKey,
+		Name:      name,
+		// Остальные поля заполняем значениями по умолчанию
+		Type:       0,
+		Flags:      0,
+		PathLength: 0,
+		Path:       []byte{},
+		Latitude:   nil,
+		Longitude:  nil,
+		LastSeen:   time.Now(),
+	}
+
+	c.mu.Lock()
+	c.contacts[pubKeyHex(fullKey)] = contact
 	c.mu.Unlock()
 	if c.onContact != nil {
 		c.onContact(contact)
@@ -579,13 +735,14 @@ func (c *MeshCoreClient) parseChannelInfo(data []byte) {
 		return
 	}
 	index := int(data[1])
+	// Имя может быть сокращённым, ищем нуль
 	nameBytes := data[2:]
 	nullIdx := bytes.IndexByte(nameBytes, 0)
 	if nullIdx == -1 {
 		nullIdx = len(nameBytes)
 	}
 	name := string(nameBytes[:nullIdx])
-	// PSK находится после имени, но для простоты не парсим
+	// PSK идёт после имени, но для простоты не парсим
 	ch := &Channel{
 		Index:   index,
 		Name:    name,
@@ -606,6 +763,8 @@ func (c *MeshCoreClient) parseContactMessage(data []byte) {
 		Timestamp:  time.Now(),
 		IsOutgoing: false,
 	}
+	fmt.Printf("Message received: %s\n", msg)
+
 	// реализация парсинга опущена для краткости
 	if c.onMessage != nil {
 		c.onMessage(msg)
@@ -614,6 +773,64 @@ func (c *MeshCoreClient) parseContactMessage(data []byte) {
 
 func (c *MeshCoreClient) parseChannelMessage(data []byte) {
 	// Аналогично
+}
+
+func (c *MeshCoreClient) parseChannelMessageV3(data []byte) {
+	// Минимальная длина: код (1) + channel (1) + префикс (6) + служебные (9)
+	const headerLen = 1 + 1 + 6 + 9
+	if len(data) < headerLen {
+		return
+	}
+	channelIndex := int(data[1])
+	prefix := data[2:8]
+	textStart := headerLen
+	if textStart >= len(data) {
+		return
+	}
+	textBytes := data[textStart:]
+	nullIdx := bytes.IndexByte(textBytes, 0)
+	var text string
+	if nullIdx >= 0 {
+		text = string(textBytes[:nullIdx])
+	} else {
+		text = string(textBytes)
+	}
+
+	// Поиск имени отправителя по префиксу
+	senderName := ""
+	c.mu.RLock()
+	for _, contact := range c.contacts {
+		if len(contact.PublicKey) >= 6 && bytes.Equal(contact.PublicKey[:6], prefix) {
+			senderName = contact.Name
+			break
+		}
+	}
+	c.mu.RUnlock()
+	if senderName == "" {
+		senderName = fmt.Sprintf("?%x", prefix)
+	}
+
+	msg := &ChannelMessage{
+		ChannelIndex: channelIndex,
+		SenderName:   senderName,
+		Text:         text,
+		Timestamp:    time.Now(),
+		IsOutgoing:   false,
+		Status:       "delivered",
+		PathLength:   0,
+		PathBytes:    []byte{},
+		MessageID:    fmt.Sprintf("%d-%d-%x", channelIndex, time.Now().Unix(), prefix),
+	}
+
+	fmt.Printf("Message received: %s\n", msg)
+
+	c.mu.Lock()
+	c.channelMsgs[channelIndex] = append(c.channelMsgs[channelIndex], msg)
+	c.mu.Unlock()
+
+	if c.onChannelMessage != nil {
+		c.onChannelMessage(msg)
+	}
 }
 
 func (c *MeshCoreClient) parseSent(data []byte) {
@@ -763,6 +980,36 @@ func (c *MeshCoreClient) RequestStats() error {
 
 func (c *MeshCoreClient) RequestBattery() error {
 	return c.sendGetBatteryAndStorage()
+}
+
+// SyncNextMessage запрашивает следующее сообщение из очереди устройства.
+func (c *MeshCoreClient) SyncNextMessage() error {
+	return c.sendSyncNextMessage()
+}
+
+// OnNoMoreMessages устанавливает коллбэк, вызываемый при получении respCodeNoMoreMessages.
+func (c *MeshCoreClient) OnNoMoreMessages(f func()) {
+	c.onNoMoreMessages = f
+}
+
+func (c *MeshCoreClient) GetAllMessages() []*Message {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	var all []*Message
+	for _, msgs := range c.messages {
+		all = append(all, msgs...)
+	}
+	return all
+}
+
+func (c *MeshCoreClient) GetAllChannelMessages() []*ChannelMessage {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	var all []*ChannelMessage
+	for _, msgs := range c.channelMsgs {
+		all = append(all, msgs...)
+	}
+	return all
 }
 
 // ============================================================================

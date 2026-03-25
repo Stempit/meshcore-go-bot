@@ -71,18 +71,41 @@ func main() {
 	// Ждём немного, чтобы каналы успели прийти
 	time.Sleep(2 * time.Second)
 
-	// Получаем список каналов
-	channels := client.GetChannels()
-	if ch, ok := channels[0]; ok && !ch.IsEmpty {
-		fmt.Printf("Sending 'ping' to channel %d (%s)\n", ch.Index, ch.Name)
-		if err := client.SendChannelMessage(ch, "cli ping"); err != nil {
-			fmt.Printf("Failed to send message: %v\n", err)
-		} else {
-			fmt.Println("Message sent")
-		}
-	} else {
-		fmt.Println("Channel 2 not found or empty")
+	// Запрос всех контактов (since=0)
+	if err := client.RequestContacts(0); err != nil {
+		fmt.Printf("RequestContacts error: %v\n", err)
 	}
+
+	// Ждём, пока контакты загрузятся (не надёжно, но для теста)
+	time.Sleep(3 * time.Second)
+
+	contacts := client.GetContacts()
+
+	//client.SendMessage(&cont, "ответь ок")
+	for _, v := range contacts {
+		if v.Name == "Короед" {
+			if err := client.SendMessage(v, "cli ping"); err != nil {
+				fmt.Printf("Failed to send message: %v\n", err)
+			} else {
+				fmt.Println("Message sent")
+			}
+		}
+		fmt.Printf("%v+", v)
+	}
+
+	fmt.Println("====")
+	// // Получаем список каналов
+	// channels := client.GetChannels()
+	// if ch, ok := channels[0]; ok && !ch.IsEmpty {
+	// 	fmt.Printf("Sending 'ping' to channel %d (%s)\n", ch.Index, ch.Name)
+	// 	if err := client.SendChannelMessage(ch, "cli ping"); err != nil {
+	// 		fmt.Printf("Failed to send message: %v\n", err)
+	// 	} else {
+	// 		fmt.Println("Message sent")
+	// 	}
+	// } else {
+	// 	fmt.Println("Channel 2 not found or empty")
+	// }
 }
 
 func scanMeshCore(adapter *bluetooth.Adapter) (bluetooth.Address, string, error) {
