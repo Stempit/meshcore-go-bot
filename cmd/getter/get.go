@@ -2,28 +2,24 @@ package main
 
 import (
 	"fmt"
-	"strings"
-	"time"
+	"log/slog"
+	"os"
 
 	meshcore "meshbot/internal/meshcore_bt"
-
-	"tinygo.org/x/bluetooth"
 )
 
 func main() {
-	adapter := bluetooth.DefaultAdapter
-	if err := adapter.Enable(); err != nil {
-		panic(err)
+	// logging
+	opts := &slog.HandlerOptions{
+		Level: slog.LevelInfo,
 	}
-	fmt.Println("Bluetooth enabled")
+	handler := slog.NewTextHandler(os.Stdout, opts)
+	logger := slog.New(handler)
+	slog.SetDefault(logger)
 
-	addr, name, err := scanMeshCore(adapter)
-	if err != nil {
-		panic(err)
-	}
-	fmt.Printf("Found device: %s (%s)\n", name, addr.String())
-
-	client := meshcore.NewMeshCoreClient(adapter)
+	// meshcore client
+	client := meshcore.CreateClient()
+	defer client.Disconnect()
 
 	// Канал для сигнала о завершении (например, при нажатии Ctrl+C)
 	done := make(chan struct{})
@@ -62,19 +58,6 @@ func main() {
 		}
 	})
 
-	// Подключаемся
-	if err := client.Connect(addr); err != nil {
-		panic(err)
-	}
-	defer client.Disconnect()
-
-	// Запрашиваем список каналов (например, 8 каналов)
-	if err := client.RequestChannels(3); err != nil {
-		fmt.Printf("Request channels error: %v\n", err)
-	}
-
-	// Отправляем тестовое сообщение в канал 2, если он существует
-	time.Sleep(2 * time.Second) // Ждём загрузки каналов
 	// channels := client.GetChannels()
 	// if ch, ok := channels[2]; ok && !ch.IsEmpty {
 	// 	fmt.Printf("Sending 'ping' to channel %d (%s)\n", ch.Index, ch.Name)
@@ -88,24 +71,4 @@ func main() {
 	// Блокируемся, пока не получим сигнал завершения
 	fmt.Println("Waiting for messages... Press Ctrl+C to exit.")
 	<-done
-}
-
-func scanMeshCore(adapter *bluetooth.Adapter) (bluetooth.Address, string, error) {
-	resultChan := make(chan bluetooth.ScanResult)
-	err := adapter.Scan(func(adapter *bluetooth.Adapter, result bluetooth.ScanResult) {
-		if strings.HasPrefix(result.LocalName(), "MeshCore-") {
-			adapter.StopScan()
-			resultChan <- result
-		}
-	})
-	if err != nil {
-		return bluetooth.Address{}, "", err
-	}
-	select {
-	case res := <-resultChan:
-		return res.Address, res.LocalName(), nil
-	case <-time.After(10 * time.Second):
-		adapter.StopScan()
-		return bluetooth.Address{}, "", fmt.Errorf("scan timeout")
-	}
 }

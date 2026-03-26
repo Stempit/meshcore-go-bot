@@ -25,9 +25,9 @@ type MeshCoreClient struct {
 
 	// Состояние
 	selfInfo    *SelfInfo
-	contacts    map[string]*Contact
+	contacts    map[string]*Contact // ключ – hex(pubKey)
 	channels    map[int]*Channel
-	messages    map[string][]*Message // contactKey -> messages
+	messages    map[string][]*Message // ключ – hex(senderKey)
 	channelMsgs map[int][]*ChannelMessage
 
 	// Каналы для обработки
@@ -44,6 +44,11 @@ type MeshCoreClient struct {
 	onBattery        func(millivolts int, usedKb, totalKb int)
 	onError          func(error)
 	onNoMoreMessages func()
+
+	// для ожидания подтверждения
+	sentConfirmCh      chan struct{} // для respCodeSent
+	deliveredConfirmCh chan struct{} // для pushCodeSendConfirmed
+	confirmMu          sync.Mutex
 
 	// Логгер
 	logger *slog.Logger
@@ -77,13 +82,24 @@ func (c *MeshCoreClient) Connect(address bluetooth.Address) error {
 		c.mu.Unlock()
 		return nil
 	}
+	// Закрываем старый doneCh, если он ещё не закрыт (например, после разрыва)
+	select {
+	case <-c.doneCh:
+		// уже закрыт
+	default:
+		close(c.doneCh)
+	}
+	c.doneCh = make(chan struct{})
+	c.mu.Unlock()
 
 	device, err := c.adapter.Connect(address, bluetooth.ConnectionParams{})
 	if err != nil {
 		c.logger.Error("Connect failed", "address", address.String(), "error", err)
 		return fmt.Errorf("connect failed: %w", err)
 	}
+	c.mu.Lock()
 	c.device = &device
+	c.mu.Unlock()
 	c.logger.Info("Connected to device", "address", address.String())
 
 	services, err := device.DiscoverServices(nil)
@@ -146,11 +162,10 @@ func (c *MeshCoreClient) Connect(address bluetooth.Address) error {
 	c.logger.Info("Notifications enabled")
 	time.Sleep(500 * time.Millisecond)
 
+	c.mu.Lock()
 	c.connected = true
-	go c.frameHandler()
 	c.mu.Unlock()
-
-	c.logger.Debug("MeshCoreClient state", "client", fmt.Sprintf("%+v", c))
+	go c.frameHandler()
 
 	// Отправка инициализационных команд
 	if err := c.sendAppStart(); err != nil {
@@ -260,20 +275,46 @@ func (c *MeshCoreClient) sendSetChannel(index byte, name string, psk []byte) err
 	return c.write(buf.Bytes())
 }
 
-func (c *MeshCoreClient) sendTextMessage(recipient []byte, text string, attempt byte, timestamp uint32) error {
+func (c *MeshCoreClient) sendTextMessage(recipient []byte, text string, attempt byte, timestamp uint32) (string, error) {
 	buf := new(bytes.Buffer)
 	buf.WriteByte(cmdSendTxtMsg)
 	buf.WriteByte(txtTypePlain)
 	buf.WriteByte(attempt)
 	_ = binary.Write(buf, binary.LittleEndian, timestamp)
-	// 6-байтовый префикс публичного ключа
 	if len(recipient) < 6 {
-		return fmt.Errorf("recipient key too short")
+		return "", fmt.Errorf("recipient key too short")
 	}
 	buf.Write(recipient[:6])
 	buf.WriteString(text)
 	buf.WriteByte(0)
-	return c.write(buf.Bytes())
+
+	// Генерируем ID сообщения так же, как в парсере
+	messageID := fmt.Sprintf("%x-%d", recipient[:6], timestamp)
+
+	if err := c.write(buf.Bytes()); err != nil {
+		return messageID, err
+	}
+	return messageID, nil
+}
+
+// подтверждение отправки
+func (c *MeshCoreClient) notifySent() {
+	c.confirmMu.Lock()
+	defer c.confirmMu.Unlock()
+	if c.sentConfirmCh != nil {
+		close(c.sentConfirmCh)
+		c.sentConfirmCh = nil
+	}
+}
+
+// подтверждение доставки
+func (c *MeshCoreClient) notifyDelivered() {
+	c.confirmMu.Lock()
+	defer c.confirmMu.Unlock()
+	if c.deliveredConfirmCh != nil {
+		close(c.deliveredConfirmCh)
+		c.deliveredConfirmCh = nil
+	}
 }
 
 func (c *MeshCoreClient) sendChannelTextMessage(channelIndex byte, text string) error {
@@ -324,16 +365,22 @@ func (c *MeshCoreClient) sendSetAdvertLatLon(lat, lon float64) error {
 }
 
 func (c *MeshCoreClient) sendResetPath(pubKey []byte) error {
+	if len(pubKey) < 32 {
+		return fmt.Errorf("reset path requires full 32-byte public key")
+	}
 	buf := new(bytes.Buffer)
 	buf.WriteByte(cmdResetPath)
-	buf.Write(pubKey)
+	buf.Write(pubKey[:32])
 	return c.write(buf.Bytes())
 }
 
 func (c *MeshCoreClient) sendUpdateContact(contact *Contact) error {
+	if len(contact.PublicKey) < 32 {
+		return fmt.Errorf("update contact requires full 32-byte public key")
+	}
 	buf := new(bytes.Buffer)
 	buf.WriteByte(cmdAddUpdateContact)
-	buf.Write(contact.PublicKey)
+	buf.Write(contact.PublicKey[:32])
 	buf.WriteByte(byte(contact.Type))
 	buf.WriteByte(byte(contact.Flags))
 	pathLen := len(contact.Path)
@@ -370,9 +417,12 @@ func (c *MeshCoreClient) sendUpdateContact(contact *Contact) error {
 }
 
 func (c *MeshCoreClient) sendRemoveContact(pubKey []byte) error {
+	if len(pubKey) < 32 {
+		return fmt.Errorf("remove contact requires full 32-byte public key")
+	}
 	buf := new(bytes.Buffer)
 	buf.WriteByte(cmdRemoveContact)
-	buf.Write(pubKey)
+	buf.Write(pubKey[:32])
 	return c.write(buf.Bytes())
 }
 
@@ -413,17 +463,152 @@ func (c *MeshCoreClient) frameHandler() {
 	}
 }
 
+// parseContactMessageV3 разбирает сообщение V3 от контакта (код 0x10)
 func (c *MeshCoreClient) parseContactMessageV3(data []byte) {
-	// Минимальная длина: код (1) + префикс (6) + служебные (9)
-	const headerLen = 1 + 6 + 9
-	if len(data) < headerLen {
+	// формат: [code][snr][res][res][prefix(6)][path_len(1)][txt_type(1)][timestamp(4)][text\0]
+	const minLen = 1 + 3 + 6 + 1 + 1 + 4 + 1 // 17
+	if len(data) < minLen {
 		c.logger.Warn("parseContactMessageV3: data too short", "len", len(data))
 		return
 	}
+	// Пропускаем code и 3 служебных байта
+	prefix := data[4:10] // 6 байт префикса
+	pathLen := int(data[10])
+	_ = pathLen // не используется в V3
+	txtType := data[11]
+	_ = txtType // может пригодиться в будущем
+	timestampRaw := binary.LittleEndian.Uint32(data[12:16])
+
+	// Текст начинается с 16-го байта, ищется нуль-терминатор
+	textStart := 16
+	textEnd := bytes.IndexByte(data[textStart:], 0)
+	var text string
+	if textEnd >= 0 {
+		text = string(data[textStart : textStart+textEnd])
+	} else {
+		text = string(data[textStart:])
+	}
+
+	// Поиск контакта по первым 6 байтам публичного ключа
+	var fullKey []byte
+	var senderName string
+	c.mu.RLock()
+	for _, contact := range c.contacts {
+		if len(contact.PublicKey) >= 6 && bytes.Equal(contact.PublicKey[:6], prefix) {
+			fullKey = contact.PublicKey
+			senderName = contact.Name
+			break
+		}
+	}
+	c.mu.RUnlock()
+
+	if fullKey == nil {
+		fullKey = prefix
+		c.logger.Warn("parseContactMessageV3: unknown sender", "prefix", fmt.Sprintf("%x", prefix))
+	}
+
+	msg := &Message{
+		SenderKey:  fullKey,
+		Text:       text,
+		Timestamp:  time.Unix(int64(timestampRaw), 0),
+		IsOutgoing: false,
+		Status:     "delivered",
+		MessageID:  fmt.Sprintf("%x-%d", prefix, timestampRaw),
+	}
+
+	c.mu.Lock()
+	key := pubKeyHex(fullKey)
+	c.messages[key] = append(c.messages[key], msg)
+	c.mu.Unlock()
+
+	c.logger.Info("Received contact message V3", "sender", senderName, "key", key, "text", text)
+
+	if c.onMessage != nil {
+		c.onMessage(msg)
+	}
+}
+
+// parseChannelMessageV3 разбирает сообщение V3 в канале (код 0x11)
+func (c *MeshCoreClient) parseChannelMessageV3(data []byte) {
+	// формат: [code][snr][res][res][channel][prefix(6)][path_len(1)][txt_type(1)][timestamp(4)][text\0]
+	const minLen = 1 + 3 + 1 + 6 + 1 + 1 + 4 + 1 // 18
+	if len(data) < minLen {
+		c.logger.Warn("parseChannelMessageV3: data too short", "len", len(data))
+		return
+	}
+	// Пропускаем code и 3 служебных байта
+	channelIndex := int(data[4]) // канал
+	prefix := data[5:11]         // 6 байт префикса
+	pathLen := int(data[11])
+	_ = pathLen // не используется в V3
+	txtType := data[12]
+	_ = txtType
+	timestampRaw := binary.LittleEndian.Uint32(data[13:17])
+
+	textStart := 17
+	textEnd := bytes.IndexByte(data[textStart:], 0)
+	var text string
+	if textEnd >= 0 {
+		text = string(data[textStart : textStart+textEnd])
+	} else {
+		text = string(data[textStart:])
+	}
+
+	// Поиск имени отправителя по префиксу
+	senderName := ""
+	c.mu.RLock()
+	for _, contact := range c.contacts {
+		if len(contact.PublicKey) >= 6 && bytes.Equal(contact.PublicKey[:6], prefix) {
+			senderName = contact.Name
+			break
+		}
+	}
+	c.mu.RUnlock()
+	if senderName == "" {
+		senderName = fmt.Sprintf("?%x", prefix)
+		c.logger.Warn("ChannelMessageV3: unknown sender", "prefix", fmt.Sprintf("%x", prefix))
+	}
+
+	msg := &ChannelMessage{
+		ChannelIndex: channelIndex,
+		SenderName:   senderName,
+		Text:         text,
+		Timestamp:    time.Unix(int64(timestampRaw), 0),
+		IsOutgoing:   false,
+		Status:       "delivered",
+		MessageID:    fmt.Sprintf("%d-%d-%x", channelIndex, timestampRaw, prefix),
+	}
+
+	c.mu.Lock()
+	c.channelMsgs[channelIndex] = append(c.channelMsgs[channelIndex], msg)
+	c.mu.Unlock()
+
+	c.logger.Info("Channel message V3 received", "channel", channelIndex, "sender", senderName, "text", text)
+
+	if c.onChannelMessage != nil {
+		c.onChannelMessage(msg)
+	}
+}
+
+// parseContactMessage разбирает старое сообщение от контакта (код 0x07)
+func (c *MeshCoreClient) parseContactMessage(data []byte) {
+	// формат: [code][prefix(6)][timestamp(4)][path_len(1)][path(path_len)][text\0]
+	if len(data) < 1+6+4+1+1 {
+		c.logger.Warn("parseContactMessage: data too short", "len", len(data))
+		return
+	}
 	prefix := data[1:7]
-	textStart := headerLen
+	timestampRaw := binary.LittleEndian.Uint32(data[7:11])
+	pathLen := int(data[11])
+	pathStart := 12
+	if pathStart+pathLen > len(data) {
+		c.logger.Warn("parseContactMessage: invalid path length", "pathLen", pathLen, "dataLen", len(data))
+		return
+	}
+	path := data[pathStart : pathStart+pathLen]
+	textStart := pathStart + pathLen
 	if textStart >= len(data) {
-		c.logger.Warn("parseContactMessageV3: no text data")
+		c.logger.Warn("parseContactMessage: no text data")
 		return
 	}
 	textBytes := data[textStart:]
@@ -435,7 +620,6 @@ func (c *MeshCoreClient) parseContactMessageV3(data []byte) {
 		text = string(textBytes)
 	}
 
-	// Поиск полного ключа по префиксу
 	var fullKey []byte
 	c.mu.RLock()
 	for _, contact := range c.contacts {
@@ -447,18 +631,18 @@ func (c *MeshCoreClient) parseContactMessageV3(data []byte) {
 	c.mu.RUnlock()
 	if fullKey == nil {
 		fullKey = prefix
-		c.logger.Warn("parseContactMessageV3: unknown sender", "prefix", fmt.Sprintf("%x", prefix))
+		c.logger.Warn("parseContactMessage: unknown sender", "prefix", fmt.Sprintf("%x", prefix))
 	}
 
 	msg := &Message{
 		SenderKey:  fullKey,
 		Text:       text,
-		Timestamp:  time.Now(),
+		Timestamp:  time.Unix(int64(timestampRaw), 0),
 		IsOutgoing: false,
 		Status:     "delivered",
-		PathLength: 0,
-		PathBytes:  []byte{},
-		MessageID:  fmt.Sprintf("%x-%d", prefix, time.Now().Unix()),
+		PathLength: pathLen,
+		PathBytes:  path,
+		MessageID:  fmt.Sprintf("%x-%d", prefix, timestampRaw),
 	}
 
 	c.mu.Lock()
@@ -466,10 +650,78 @@ func (c *MeshCoreClient) parseContactMessageV3(data []byte) {
 	c.messages[key] = append(c.messages[key], msg)
 	c.mu.Unlock()
 
-	c.logger.Debug("Received contact message V3", "sender", key, "text", text)
+	c.logger.Debug("Received contact message", "sender", key, "text", text)
 
 	if c.onMessage != nil {
 		c.onMessage(msg)
+	}
+}
+
+// parseChannelMessage разбирает старое сообщение в канале (код 0x08)
+func (c *MeshCoreClient) parseChannelMessage(data []byte) {
+	// формат: [code][channel][prefix(6)][timestamp(4)][path_len(1)][path(path_len)][text\0]
+	if len(data) < 1+1+6+4+1+1 {
+		c.logger.Warn("parseChannelMessage: data too short", "len", len(data))
+		return
+	}
+	channelIndex := int(data[1])
+	prefix := data[2:8]
+	timestampRaw := binary.LittleEndian.Uint32(data[8:12])
+	pathLen := int(data[12])
+	pathStart := 13
+	if pathStart+pathLen > len(data) {
+		c.logger.Warn("parseChannelMessage: invalid path length", "pathLen", pathLen, "dataLen", len(data))
+		return
+	}
+	path := data[pathStart : pathStart+pathLen]
+	textStart := pathStart + pathLen
+	if textStart >= len(data) {
+		c.logger.Warn("parseChannelMessage: no text data")
+		return
+	}
+	textBytes := data[textStart:]
+	nullIdx := bytes.IndexByte(textBytes, 0)
+	var text string
+	if nullIdx >= 0 {
+		text = string(textBytes[:nullIdx])
+	} else {
+		text = string(textBytes)
+	}
+
+	senderName := ""
+	c.mu.RLock()
+	for _, contact := range c.contacts {
+		if len(contact.PublicKey) >= 6 && bytes.Equal(contact.PublicKey[:6], prefix) {
+			senderName = contact.Name
+			break
+		}
+	}
+	c.mu.RUnlock()
+	if senderName == "" {
+		senderName = fmt.Sprintf("?%x", prefix)
+		c.logger.Warn("parseChannelMessage: unknown sender", "prefix", fmt.Sprintf("%x", prefix))
+	}
+
+	msg := &ChannelMessage{
+		ChannelIndex: channelIndex,
+		SenderName:   senderName,
+		Text:         text,
+		Timestamp:    time.Unix(int64(timestampRaw), 0),
+		IsOutgoing:   false,
+		Status:       "delivered",
+		PathLength:   pathLen,
+		PathBytes:    path,
+		MessageID:    fmt.Sprintf("%d-%d-%x", channelIndex, timestampRaw, prefix),
+	}
+
+	c.mu.Lock()
+	c.channelMsgs[channelIndex] = append(c.channelMsgs[channelIndex], msg)
+	c.mu.Unlock()
+
+	c.logger.Debug("Channel message received", "channel", channelIndex, "sender", senderName, "text", text)
+
+	if c.onChannelMessage != nil {
+		c.onChannelMessage(msg)
 	}
 }
 
@@ -540,6 +792,10 @@ func (c *MeshCoreClient) handleFrame(data []byte) {
 		// OK – можно использовать для синхронизации
 	case respCodeErr:
 		c.logger.Error("Received error response", "data", fmt.Sprintf("%x", data))
+	case pushCodeAdvert:
+		c.parseAdvert(data)
+	case pushCodeLogRxData:
+		c.parseLogRxData(data)
 	default:
 		c.logger.Warn("Unknown frame code", "code", code)
 	}
@@ -617,6 +873,13 @@ func (c *MeshCoreClient) parseSelfInfo(data []byte) {
 	}
 	info.Name = string(nameBytes)
 
+	// Читаем client_repeat, если есть (после имени идёт 1 байт)
+	if r.Len() >= 1 {
+		var clientRepeat byte
+		_ = binary.Read(r, binary.LittleEndian, &clientRepeat)
+		info.ClientRepeat = clientRepeat != 0
+	}
+
 	c.mu.Lock()
 	c.selfInfo = info
 	c.mu.Unlock()
@@ -631,14 +894,12 @@ func (c *MeshCoreClient) parseDeviceInfo(data []byte) {
 		c.logger.Warn("DeviceInfo too short", "len", len(data))
 		return
 	}
-	// Можно добавить логирование полученных данных
 	c.logger.Debug("DeviceInfo received", "data", fmt.Sprintf("%x", data))
 }
 
 func (c *MeshCoreClient) parseContact(data []byte) {
 	const minLen = 1 + 32 + 1 + 1 + 1 + 64 + 32 + 4 + 4 + 4
 	if len(data) < minLen {
-		// Недостаточно данных для полного контакта, возможно это сокращённый формат
 		c.parseContactV3(data)
 		return
 	}
@@ -646,34 +907,19 @@ func (c *MeshCoreClient) parseContact(data []byte) {
 	contactType := int(data[33])
 	flags := int(data[34])
 	pathLen := int(data[35])
-	// Ограничиваем pathLen доступной длиной (макс 64, но может быть и меньше)
-	maxPathLen := len(data) - 36
-	if pathLen > maxPathLen {
-		pathLen = maxPathLen
-	}
+	// Ограничиваем длину пути максимально допустимой (64)
 	if pathLen > 64 {
 		pathLen = 64
 	}
-	path := data[36 : 36+pathLen]
+	// путь всегда 64 байта
+	path := data[36:100]
+	// Используем только pathLen байт (гарантированно не более 64)
+	actualPath := path[:pathLen]
 
-	// Имя начинается со смещения 100
-	if len(data) < 132 {
-		c.logger.Warn("Contact data too short for name", "len", len(data))
-		return
-	}
 	nameBytes := data[100:132]
 	name := string(bytes.TrimRight(nameBytes, "\x00"))
 
-	if len(data) < 136 {
-		c.logger.Warn("Contact data too short for last_seen", "len", len(data))
-		return
-	}
 	lastSeen := time.Unix(int64(binary.LittleEndian.Uint32(data[132:136])), 0)
-
-	if len(data) < 144 {
-		c.logger.Warn("Contact data too short for location", "len", len(data))
-		return
-	}
 	latInt := int32(binary.LittleEndian.Uint32(data[136:140]))
 	lonInt := int32(binary.LittleEndian.Uint32(data[140:144]))
 	var lat, lon *float64
@@ -683,6 +929,7 @@ func (c *MeshCoreClient) parseContact(data []byte) {
 		lat = &latVal
 		lon = &lonVal
 	}
+	// last_modified (144:148) игнорируется
 
 	contact := &Contact{
 		PublicKey:  pubKey,
@@ -690,11 +937,13 @@ func (c *MeshCoreClient) parseContact(data []byte) {
 		Type:       contactType,
 		Flags:      flags,
 		PathLength: pathLen,
-		Path:       path,
+		Path:       actualPath,
 		Latitude:   lat,
 		Longitude:  lon,
 		LastSeen:   lastSeen,
 	}
+
+	c.updateMessagesWithFullKey(contact.PublicKey)
 
 	c.mu.Lock()
 	c.contacts[pubKeyHex(pubKey)] = contact
@@ -770,10 +1019,18 @@ func (c *MeshCoreClient) parseChannelInfo(data []byte) {
 		nullIdx = len(nameBytes)
 	}
 	name := string(nameBytes[:nullIdx])
-	// PSK идёт после имени, но для простоты не парсим
+	// PSK находится после имени, 16 байт (если данные есть)
+	var psk []byte
+	if len(data) > 2+nullIdx+1 {
+		pskStart := 2 + nullIdx + 1 // после нуля
+		if pskStart+16 <= len(data) {
+			psk = data[pskStart : pskStart+16]
+		}
+	}
 	ch := &Channel{
 		Index:   index,
 		Name:    name,
+		PSK:     psk,
 		IsEmpty: len(name) == 0,
 	}
 	c.mu.Lock()
@@ -785,95 +1042,29 @@ func (c *MeshCoreClient) parseChannelInfo(data []byte) {
 	}
 }
 
-func (c *MeshCoreClient) parseContactMessage(data []byte) {
-	// Упрощённый парсинг, можно расширить
-	// Аналогично parseContactMessageText из Dart
-	msg := &Message{
-		Timestamp:  time.Now(),
-		IsOutgoing: false,
-	}
-	c.logger.Debug("Message received (legacy)", "msg", fmt.Sprintf("%+v", msg))
-	if c.onMessage != nil {
-		c.onMessage(msg)
-	}
-}
-
-func (c *MeshCoreClient) parseChannelMessage(data []byte) {
-	// Аналогично
-	c.logger.Debug("Channel message received (legacy)")
-}
-
-func (c *MeshCoreClient) parseChannelMessageV3(data []byte) {
-	// Минимальная длина: код (1) + channel (1) + префикс (6) + служебные (9)
-	const headerLen = 1 + 1 + 6 + 9
-	if len(data) < headerLen {
-		c.logger.Warn("ChannelMessageV3 too short", "len", len(data))
-		return
-	}
-	channelIndex := int(data[1])
-	prefix := data[2:8]
-	textStart := headerLen
-	if textStart >= len(data) {
-		c.logger.Warn("ChannelMessageV3: no text data")
-		return
-	}
-	textBytes := data[textStart:]
-	nullIdx := bytes.IndexByte(textBytes, 0)
-	var text string
-	if nullIdx >= 0 {
-		text = string(textBytes[:nullIdx])
-	} else {
-		text = string(textBytes)
-	}
-
-	// Поиск имени отправителя по префиксу
-	senderName := ""
-	c.mu.RLock()
-	for _, contact := range c.contacts {
-		if len(contact.PublicKey) >= 6 && bytes.Equal(contact.PublicKey[:6], prefix) {
-			senderName = contact.Name
-			break
-		}
-	}
-	c.mu.RUnlock()
-	if senderName == "" {
-		senderName = fmt.Sprintf("?%x", prefix)
-		c.logger.Warn("ChannelMessageV3: unknown sender", "prefix", fmt.Sprintf("%x", prefix))
-	}
-
-	msg := &ChannelMessage{
-		ChannelIndex: channelIndex,
-		SenderName:   senderName,
-		Text:         text,
-		Timestamp:    time.Now(),
-		IsOutgoing:   false,
-		Status:       "delivered",
-		PathLength:   0,
-		PathBytes:    []byte{},
-		MessageID:    fmt.Sprintf("%d-%d-%x", channelIndex, time.Now().Unix(), prefix),
-	}
-
-	c.logger.Debug("Channel message V3 received", "channel", channelIndex, "sender", senderName, "text", text)
-
-	c.mu.Lock()
-	c.channelMsgs[channelIndex] = append(c.channelMsgs[channelIndex], msg)
-	c.mu.Unlock()
-
-	if c.onChannelMessage != nil {
-		c.onChannelMessage(msg)
-	}
-}
-
 func (c *MeshCoreClient) parseSent(data []byte) {
 	c.logger.Debug("Sent confirmation received")
+	c.notifySent()
 }
 
 func (c *MeshCoreClient) parseSendConfirmed(data []byte) {
 	c.logger.Debug("Send confirmed")
+	c.notifyDelivered()
 }
 
 func (c *MeshCoreClient) parsePathUpdated(data []byte) {
-	c.logger.Debug("Path updated")
+	c.logger.Debug("Path updated", "data", fmt.Sprintf("%x", data))
+}
+
+func (c *MeshCoreClient) parseAdvert(data []byte) {
+	// Пока просто логируем
+	c.logger.Info("Advert received", "data", fmt.Sprintf("%x", data))
+	// Здесь можно разобрать пакет и уведомить коллбэк, если нужно
+}
+
+func (c *MeshCoreClient) parseLogRxData(data []byte) {
+	c.logger.Info("Log RX data received", "data", fmt.Sprintf("%x", data))
+	// Можно игнорировать или использовать для отладки
 }
 
 func (c *MeshCoreClient) parseBatteryAndStorage(data []byte) {
@@ -917,6 +1108,29 @@ func (c *MeshCoreClient) parseAutoAddConfig(data []byte) {
 
 func (c *MeshCoreClient) parseCustomVars(data []byte) {
 	c.logger.Debug("CustomVars received")
+}
+
+// updateMessagesWithFullKey заменяет префиксные ключи в сообщениях на полный ключ,
+// когда становится известен полный публичный ключ контакта.
+func (c *MeshCoreClient) updateMessagesWithFullKey(fullKey []byte) {
+	if len(fullKey) < 6 {
+		return
+	}
+	prefix := fullKey[:6]
+	prefixStr := pubKeyHex(prefix)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	// Ищем сообщения, у которых senderKey == prefix
+	if messages, ok := c.messages[prefixStr]; ok {
+		// Перекладываем в новый ключ
+		fullKeyStr := pubKeyHex(fullKey)
+		c.messages[fullKeyStr] = append(c.messages[fullKeyStr], messages...)
+		delete(c.messages, prefixStr)
+		// Обновляем SenderKey в каждом сообщении
+		for _, msg := range c.messages[fullKeyStr] {
+			msg.SenderKey = fullKey
+		}
+	}
 }
 
 // ============================================================================
@@ -968,9 +1182,61 @@ func (c *MeshCoreClient) RequestChannels(maxChannels int) error {
 	return nil
 }
 
+// SendMessageWithRetry отправляет сообщение с повторными попытками.
+// waitForDelivery: true - ждать pushCodeSendConfirmed (доставка), false - ждать respCodeSent (отправка в эфир)
+// maxRetries: максимальное число повторных попыток (0 - одна попытка без повторов)
+// timeout: таймаут ожидания подтверждения после каждой отправки
+func (c *MeshCoreClient) SendMessageWithRetry(contact *Contact, text string, waitForDelivery bool, maxRetries int, timeout time.Duration) error {
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		timestamp := uint32(time.Now().Unix())
+		_, err := c.sendTextMessage(contact.PublicKey, text, byte(attempt), timestamp)
+		if err != nil {
+			if attempt == maxRetries {
+				return fmt.Errorf("send failed after %d attempts: %w", maxRetries+1, err)
+			}
+			time.Sleep(timeout)
+			continue
+		}
+
+		// Создаём канал для ожидания
+		confirmCh := make(chan struct{})
+		c.confirmMu.Lock()
+		if waitForDelivery {
+			c.deliveredConfirmCh = confirmCh
+		} else {
+			c.sentConfirmCh = confirmCh
+		}
+		c.confirmMu.Unlock()
+
+		select {
+		case <-confirmCh:
+			return nil
+		case <-time.After(timeout):
+			c.confirmMu.Lock()
+			if waitForDelivery {
+				if c.deliveredConfirmCh == confirmCh {
+					c.deliveredConfirmCh = nil
+				}
+			} else {
+				if c.sentConfirmCh == confirmCh {
+					c.sentConfirmCh = nil
+				}
+			}
+			c.confirmMu.Unlock()
+			if attempt == maxRetries {
+				return fmt.Errorf("no %s confirmation after %d attempts",
+					map[bool]string{true: "delivery", false: "sent"}[waitForDelivery], maxRetries+1)
+			}
+		}
+	}
+	return nil
+}
+
+// Для обратной совместимости оставляем старый SendMessage
 func (c *MeshCoreClient) SendMessage(contact *Contact, text string) error {
 	timestamp := uint32(time.Now().Unix())
-	return c.sendTextMessage(contact.PublicKey, text, 0, timestamp)
+	_, err := c.sendTextMessage(contact.PublicKey, text, 0, timestamp)
+	return err
 }
 
 func (c *MeshCoreClient) SendChannelMessage(channel *Channel, text string) error {

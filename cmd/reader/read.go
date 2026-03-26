@@ -2,29 +2,26 @@ package main
 
 import (
 	"fmt"
-	"strings"
+	"log/slog"
+	"os"
 	"sync"
 	"time"
 
 	meshcore "meshbot/internal/meshcore_bt"
-
-	"tinygo.org/x/bluetooth"
 )
 
 func main() {
-	adapter := bluetooth.DefaultAdapter
-	if err := adapter.Enable(); err != nil {
-		panic(err)
+	// logging
+	opts := &slog.HandlerOptions{
+		Level: slog.LevelInfo,
 	}
-	fmt.Println("Bluetooth enabled")
+	handler := slog.NewTextHandler(os.Stdout, opts)
+	logger := slog.New(handler)
+	slog.SetDefault(logger)
 
-	addr, name, err := scanMeshCore(adapter)
-	if err != nil {
-		panic(err)
-	}
-	fmt.Printf("Found device: %s (%s)\n", name, addr.String())
-
-	client := meshcore.NewMeshCoreClient(adapter)
+	// meshcore client
+	client := meshcore.CreateClient()
+	defer client.Disconnect()
 
 	// Канал для сигнала окончания синхронизации
 	syncDone := make(chan struct{})
@@ -72,12 +69,6 @@ func main() {
 		fmt.Println("No more messages in queue.")
 	})
 
-	// Подключение
-	if err := client.Connect(addr); err != nil {
-		panic(err)
-	}
-	defer client.Disconnect()
-
 	// (Опционально) Загружаем контакты и каналы, чтобы имена отображались
 	if err := client.RequestChannels(8); err != nil {
 		fmt.Printf("RequestChannels error: %v\n", err)
@@ -123,24 +114,4 @@ func main() {
 	// После синхронизации можно продолжать слушать новые сообщения
 	fmt.Println("Now listening for new messages...")
 	select {} // блокировка, чтобы программа не завершилась
-}
-
-func scanMeshCore(adapter *bluetooth.Adapter) (bluetooth.Address, string, error) {
-	resultChan := make(chan bluetooth.ScanResult)
-	err := adapter.Scan(func(adapter *bluetooth.Adapter, result bluetooth.ScanResult) {
-		if strings.HasPrefix(result.LocalName(), "MeshCore-") {
-			adapter.StopScan()
-			resultChan <- result
-		}
-	})
-	if err != nil {
-		return bluetooth.Address{}, "", err
-	}
-	select {
-	case res := <-resultChan:
-		return res.Address, res.LocalName(), nil
-	case <-time.After(10 * time.Second):
-		adapter.StopScan()
-		return bluetooth.Address{}, "", fmt.Errorf("scan timeout")
-	}
 }

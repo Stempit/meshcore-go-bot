@@ -25,7 +25,7 @@ type Contact struct {
 type Channel struct {
 	Index       int
 	Name        string
-	PSK         []byte
+	PSK         []byte // поле для ключа канала
 	UnreadCount int
 	IsEmpty     bool
 }

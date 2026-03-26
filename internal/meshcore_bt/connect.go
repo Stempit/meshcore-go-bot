@@ -1,0 +1,115 @@
+package meshcore_bt
+
+import (
+	"fmt"
+	"log/slog"
+	"strings"
+	"time"
+
+	"tinygo.org/x/bluetooth"
+)
+
+func CreateClient() *MeshCoreClient {
+	adapter := bluetooth.DefaultAdapter
+	if err := adapter.Enable(); err != nil {
+		slog.Error("Failed to enable Bluetooth", "error", err)
+		panic(err)
+	}
+	slog.Info("Bluetooth enabled")
+
+	addr, name, err := scanMeshCore(adapter)
+	if err != nil {
+		slog.Error("Failed to scan MeshCore device", "error", err)
+		panic(err)
+	}
+	slog.Info("Found device", "name", name, "address", addr.String())
+
+	client := NewMeshCoreClient(adapter)
+
+	// Канал для синхронизации получения SelfInfo
+	selfInfoReceived := make(chan struct{})
+
+	client.OnSelfInfo(func(info *SelfInfo) {
+		slog.Info("Self info received",
+			"name", info.Name,
+			"pubkey", fmt.Sprintf("%x", info.PublicKey),
+		)
+		close(selfInfoReceived)
+	})
+
+	client.OnChannel(func(ch *Channel) {
+		if ch.IsEmpty {
+			slog.Info("Channel empty", "index", ch.Index)
+		} else {
+			slog.Info("Channel", "index", ch.Index, "name", ch.Name)
+		}
+	})
+
+	if err := client.Connect(addr); err != nil {
+		slog.Error("Failed to connect to device", "error", err)
+		panic(err)
+	}
+	// defer func() {
+	// 	client.Disconnect()
+	// 	slog.Info("Disconnected from device")
+	// }()
+
+	slog.Info("Connected to device, waiting for data...")
+
+	time.Sleep(2 * time.Second) // даём время для инициализации
+	slog.Info("Waiting for self info...")
+
+	// Ждём получения SelfInfo (или таймаут)
+	select {
+	case <-selfInfoReceived:
+		slog.Info("Self info ready, requesting channels...")
+	case <-time.After(5 * time.Second):
+		slog.Warn("Timeout waiting for self info")
+	}
+
+	// Запрашиваем каналы
+	slog.Info("Requesting channels (count=8)")
+	if err := client.RequestChannels(8); err != nil {
+		slog.Error("Failed to request channels", "error", err)
+		panic(err)
+	}
+
+	// Ждём ответы на каналы
+	time.Sleep(5 * time.Second)
+	slog.Info("Waiting for channels completed")
+
+	// Ждём немного, чтобы каналы успели прийти
+	time.Sleep(2 * time.Second)
+
+	// Запрос всех контактов (since=0)
+	slog.Info("Requesting contacts (since=0)")
+	if err := client.RequestContacts(0); err != nil {
+		slog.Error("RequestContacts error", "error", err)
+	}
+
+	// Ждём, пока контакты загрузятся (не надёжно, но для теста)
+	time.Sleep(3 * time.Second)
+	slog.Info("Client started")
+
+	return client
+}
+
+func scanMeshCore(adapter *bluetooth.Adapter) (bluetooth.Address, string, error) {
+	resultChan := make(chan bluetooth.ScanResult)
+	err := adapter.Scan(func(adapter *bluetooth.Adapter, result bluetooth.ScanResult) {
+		if strings.HasPrefix(result.LocalName(), "MeshCore-") {
+			adapter.StopScan()
+			resultChan <- result
+		}
+	})
+	if err != nil {
+		return bluetooth.Address{}, "", err
+	}
+	select {
+	case res := <-resultChan:
+		return res.Address, res.LocalName(), nil
+	case <-time.After(10 * time.Second):
+		adapter.StopScan()
+		return bluetooth.Address{}, "", fmt.Errorf("timeout")
+	}
+}
