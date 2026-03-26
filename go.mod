@@ -1,19 +1,20 @@
 module meshbot
 
-go 1.25.0
+go 1.26.1
 
 require tinygo.org/x/bluetooth v0.14.0
 
 require (
-	github.com/go-ole/go-ole v1.2.6 // indirect
-	github.com/godbus/dbus/v5 v5.1.0 // indirect
-	github.com/saltosystems/winrt-go v0.0.0-20240509164145-4f7860a3bd2b // indirect
-	github.com/sirupsen/logrus v1.9.3 // indirect
-	github.com/soypat/cyw43439 v0.0.0-20250505012923-830110c8f4af // indirect
-	github.com/soypat/seqs v0.0.0-20250124201400-0d65bc7c1710 // indirect
-	github.com/stretchr/testify v1.8.4 // indirect
+	github.com/go-ole/go-ole v1.3.0 // indirect
+	github.com/godbus/dbus/v5 v5.2.2 // indirect
+	github.com/saltosystems/winrt-go v0.0.0-20260317170058-9c2fec580d96 // indirect
+	github.com/sirupsen/logrus v1.9.4 // indirect
+	github.com/soypat/cyw43439 v0.0.0-20260321224103-c7bb279d9c72 // indirect
+	github.com/soypat/lneto v0.0.0-20260326185445-c06a4fa99b8d // indirect
+	github.com/soypat/seqs v0.0.0-20260125140838-2c1c6b1bd69e // indirect
+	github.com/stretchr/testify v1.10.0 // indirect
 	github.com/tinygo-org/cbgo v0.0.4 // indirect
-	github.com/tinygo-org/pio v0.2.0 // indirect
-	golang.org/x/exp v0.0.0-20241204233417-43b7b7cde48d // indirect
-	golang.org/x/sys v0.19.0 // indirect
+	github.com/tinygo-org/pio v0.3.0 // indirect
+	golang.org/x/exp v0.0.0-20260312153236-7ab1446f8b90 // indirect
+	golang.org/x/sys v0.42.0 // indirect
 )
