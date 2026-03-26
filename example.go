@@ -22,79 +22,126 @@ func main() {
 	client := meshcore.CreateClient()
 	defer client.Disconnect()
 
-	// actions
+	if false {
+		// ============================
+		// отправка сообщения контакту
+		// ============================
 
-	contacts := client.GetContacts()
+		contacts := client.GetContacts()
 
-	for _, v := range contacts {
-		if v.Name == "Короед" {
-			// if err := client.SendMessage(v, "Далеко ли до Таллина?"); err != nil {
-			// 	fmt.Printf("Failed to send message: %v\n", err)
-			// } else {
-			// 	fmt.Println("Message sent")
-			// }
-			err := client.SendMessageWithRetry(v, "Ответь текстом 'ввв'!", false, 5, 5*time.Second)
+		for _, v := range contacts {
+			if v.Name == "Короед" {
+				// отправка с ретраями до подтверждения отправки
+				err := client.SendMessageWithRetry(v, "Пинг А", false, 5, 5*time.Second)
+				if err != nil {
+					fmt.Printf("Ошибка: %v\n", err)
+				} else {
+					fmt.Println("Сообщение отправлено и подтверждено")
+				}
+
+				// отправка с ретраями до подтверждения доставки
+				err = client.SendMessageWithRetry(v, "Пинг Б", true, 5, 5*time.Second)
+				if err != nil {
+					fmt.Printf("Ошибка: %v\n", err)
+				} else {
+					fmt.Println("Сообщение отправлено и доставлено")
+				}
+			}
+		}
+	}
+
+	if false {
+		// ============================
+		// отправка сообщения в канал
+		// ============================
+
+		channels := client.GetChannels()
+		if ch, ok := channels[0]; ok && !ch.IsEmpty {
+			err := client.SendChannelMessageWithRetry(ch, "ping С", false, 3, 5*time.Second)
 			if err != nil {
 				fmt.Printf("Ошибка: %v\n", err)
 			} else {
-				fmt.Println("Сообщение отправлено и подтверждено")
+				fmt.Println("Сообщение отправлено в канал и подтверждено")
 			}
-			//time.Sleep(3000 * time.Millisecond)
-			err = client.SendMessageWithRetry(v, "Ответь текстом 'ггг'!", true, 5, 5*time.Second)
-			if err != nil {
-				fmt.Printf("Ошибка: %v\n", err)
-			} else {
-				fmt.Println("Сообщение отправлено и доставлено")
-			}
+		} else {
+			fmt.Println("Channel not found or empty")
 		}
-		//fmt.Printf("%v+", v)
 	}
 
-	// Получаем список каналов
-	channels := client.GetChannels()
-	if ch, ok := channels[0]; ok && !ch.IsEmpty {
-		err := client.SendChannelMessageWithRetry(ch, "ping H", false, 3, 5*time.Second)
-		if err != nil {
-			fmt.Printf("Ошибка: %v\n", err)
-		} else {
-			fmt.Println("Сообщение отправлено в канал и подтверждено")
-		}
+	if false {
+		// =================================
+		// Обработка входящих сообщений
+		// =================================
 
-		err = client.SendChannelMessageWithRetry(ch, "ping I", true, 3, 5*time.Second)
-		if err != nil {
-			fmt.Printf("Ошибка: %v\n", err)
-		} else {
-			fmt.Println("Сообщение отправлено в канал и доставлено")
-		}
-	} else {
-		fmt.Println("Channel not found or empty")
-	}
+		go func() {
+			// слушаем поступающие сообщения
+			for msg := range client.IncomingMessages() {
 
-	// // Получаем список каналов
-	// channels := client.GetChannels()
-	// if ch, ok := channels[0]; ok && !ch.IsEmpty {
-	// 	fmt.Printf("Sending 'ping' to channel %d (%s)\n", ch.Index, ch.Name)
-	// 	if err := client.SendChannelMessage(ch, "cli ping"); err != nil {
-	// 		fmt.Printf("Failed to send message: %v\n", err)
-	// 	} else {
-	// 		fmt.Println("Message sent")
-	// 	}
-	// } else {
-	// 	fmt.Println("Channel 2 not found or empty")
-	// }
+				// в зависимости от - личка или канал
+				switch m := msg.(type) {
+				case *meshcore.Message: // личные сообщения
 
-	go func() {
-		for msg := range client.IncomingMessages() {
-			switch m := msg.(type) {
-			case *meshcore.Message:
-				fmt.Printf("Личное сообщение от %x: %s\n", m.SenderKey[:6], m.Text)
-			case *meshcore.ChannelMessage:
-				fmt.Printf("Канальное сообщение в канале %d от %s: %s\n", m.ChannelIndex, m.SenderName, m.Text)
+					// Находим контакт отправителя по ключу
+					senderKeyHex := fmt.Sprintf("%x", m.SenderKey[:6]) // можно использовать префикс
+					var contact *meshcore.Contact
+					for _, c := range client.GetContacts() {
+						if fmt.Sprintf("%x", c.PublicKey[:6]) == senderKeyHex {
+							contact = c
+							break
+						}
+					}
+					if contact == nil {
+						// Если контакт не найден, создаём временный (не сохраняем)
+						contact = &meshcore.Contact{
+							PublicKey: m.SenderKey,
+							Name:      fmt.Sprintf("?%x", m.SenderKey[:6]),
+						}
+					}
+
+					fmt.Printf("Личное сообщение от %x: %s\n", m.SenderKey[:6], m.Text)
+					fmt.Printf("Отвечаем")
+
+					// ответ без подтверждения
+					err := client.SendMessageWithRetry(contact, "Ответ без подтверждения доставки!", false, 5, 5*time.Second)
+					if err != nil {
+						fmt.Printf("Ошибка: %v\n", err)
+					} else {
+						fmt.Println("Сообщение отправлено и подтверждено")
+					}
+
+					// ответ с подтверждением
+					err = client.SendMessageWithRetry(contact, "Ответ с подтверждением доставки!", true, 5, 5*time.Second)
+					if err != nil {
+						fmt.Printf("Ошибка: %v\n", err)
+					} else {
+						fmt.Println("Сообщение отправлено и доставлено")
+					}
+				case *meshcore.ChannelMessage: // сообщения в каналах
+
+					fmt.Printf("Канальное сообщение в канале %d от %s: %s\n", m.ChannelIndex, m.SenderName, m.Text)
+
+					// находим канал по номеру
+					channels := client.GetChannels()
+					channel, ok := channels[m.ChannelIndex]
+					if !ok || channel.IsEmpty {
+						fmt.Printf("Канал %d не найден или пуст\n", m.ChannelIndex)
+						continue
+					}
+
+					// отправляем ответ
+					err := client.SendChannelMessageWithRetry(channel, fmt.Sprintf("@[%s] ack", m.SenderName), false, 5, 5*time.Second)
+					if err != nil {
+						fmt.Printf("Ошибка: %v\n", err)
+					} else {
+						fmt.Println("Сообщение в канал отправлено")
+					}
+				}
 			}
-		}
-	}()
-	// Блокируемся, пока не получим сигнал завершения
-	fmt.Println("Waiting for messages... Press Ctrl+C to exit.")
-	done := make(chan struct{}) // Канал для сигнала о завершении (например, при нажатии Ctrl+C)
-	<-done
+		}()
+
+		// Блокируемся, пока не получим сигнал завершения
+		fmt.Println("Waiting for messages... Press Ctrl+C to exit.")
+		done := make(chan struct{}) // Канал для сигнала о завершении (например, при нажатии Ctrl+C)
+		<-done
+	}
 }

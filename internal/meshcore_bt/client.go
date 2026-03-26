@@ -1126,8 +1126,17 @@ func (c *MeshCoreClient) parseChannelInfo(data []byte) {
 		return
 	}
 	index := int(data[1])
-	// Имя занимает фиксированные 32 байта в позиции 2..33
-	name := string(bytes.TrimRight(data[2:34], "\x00"))
+	// Имя занимает фиксированные 32 байта в позиции 2..33.
+	// Firmware пишет имя через strcpy(), поэтому после нуль-терминатора
+	// могут идти произвольные байты из буфера — берём только до первого нуля.
+	nameRaw := data[2:34]
+	nameEnd := bytes.IndexByte(nameRaw, 0)
+	var name string
+	if nameEnd >= 0 {
+		name = string(nameRaw[:nameEnd])
+	} else {
+		name = string(nameRaw)
+	}
 	// PSK — 16 байт после фиксированного имени, в позиции 34..49
 	psk := make([]byte, 16)
 	copy(psk, data[34:50])
@@ -1321,7 +1330,7 @@ func (c *MeshCoreClient) RequestChannels(maxChannels int) error {
 func (c *MeshCoreClient) SendMessageWithRetry(contact *Contact, text string, waitForDelivery bool, maxRetries int, timeout time.Duration) error {
 	defer time.Sleep(150 * time.Microsecond) // частая отправка приводит к пропаже сообщений
 
-	c.logger.Debug("Sending private message with retry",
+	c.logger.Info("Sending private message with retry",
 		"key", fmt.Sprintf("%x", contact.PublicKey), "name", contact.Name,
 		"text", text, "waitForDelivery", waitForDelivery)
 
@@ -1384,7 +1393,7 @@ func (c *MeshCoreClient) SendMessage(contact *Contact, text string) error {
 func (c *MeshCoreClient) SendChannelMessageWithRetry(channel *Channel, text string, waitForDelivery bool, maxRetries int, timeout time.Duration) error {
 	defer time.Sleep(150 * time.Microsecond) // частая отправка приводит к пропаже сообщений
 
-	c.logger.Debug("Sending channel message with retry",
+	c.logger.Info("Sending channel message with retry",
 		"channel", channel.Index, "name", channel.Name,
 		"text", text, "waitForDelivery", waitForDelivery)
 
