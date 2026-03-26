@@ -1162,6 +1162,7 @@ func (c *MeshCoreClient) parsePathUpdated(data []byte) {
 }
 
 func (c *MeshCoreClient) parseAdvert(data []byte) {
+	// Пока просто логируем
 	c.logger.Info("Advert received", "data", fmt.Sprintf("%x", data))
 	// Здесь можно разобрать пакет и уведомить коллбэк, если нужно
 }
@@ -1401,6 +1402,7 @@ func (c *MeshCoreClient) SendChannelMessageWithRetry(channel *Channel, text stri
 			continue
 		}
 
+		// Создаём канал для ожидания нужного подтверждения
 		confirmCh := make(chan struct{})
 		c.confirmMu.Lock()
 		c.sentConfirmCh = confirmCh
@@ -1425,10 +1427,11 @@ func (c *MeshCoreClient) SendChannelMessageWithRetry(channel *Channel, text stri
 
 // SendChannelMessage отправляет сообщение в канал (без ожидания подтверждения).
 func (c *MeshCoreClient) SendChannelMessage(channel *Channel, text string) error {
-	return c.sendChannelTextMessage(byte(channel.Index), text)
+	return c.sendChannelTextMessage(byte(channel.Index), text) //todo: обратную совместимость
 }
 
 func (c *MeshCoreClient) SetContactPath(contact *Contact, path []byte, pathLen int) error {
+	// Создаём копию с новым путём
 	updated := *contact
 	updated.Path = path
 	updated.PathLength = pathLen
