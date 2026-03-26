@@ -39,8 +39,8 @@ func main() {
 			} else {
 				fmt.Println("Сообщение отправлено и подтверждено")
 			}
-			time.Sleep(5000 * time.Millisecond)
-			err = client.SendMessageWithRetry(v, "Ответь текстом 'ггг'!", true, 15, 10*time.Second)
+			time.Sleep(3000 * time.Millisecond)
+			err = client.SendMessageWithRetry(v, "Ответь текстом 'ггг'!", true, 5, 5*time.Second)
 			if err != nil {
 				fmt.Printf("Ошибка: %v\n", err)
 			} else {
@@ -50,7 +50,26 @@ func main() {
 		//fmt.Printf("%v+", v)
 	}
 
-	fmt.Println("====")
+	// Получаем список каналов
+	channels := client.GetChannels()
+	if ch, ok := channels[0]; ok && !ch.IsEmpty {
+		err := client.SendChannelMessageWithRetry(ch, "ping D", false, 3, 5*time.Second)
+		if err != nil {
+			fmt.Printf("Ошибка: %v\n", err)
+		} else {
+			fmt.Println("Сообщение отправлено в канал и подтверждено")
+		}
+
+		err = client.SendChannelMessageWithRetry(ch, "ping E", true, 3, 5*time.Second)
+		if err != nil {
+			fmt.Printf("Ошибка: %v\n", err)
+		} else {
+			fmt.Println("Сообщение отправлено в канал и доставлено")
+		}
+	} else {
+		fmt.Println("Channel not found or empty")
+	}
+
 	// // Получаем список каналов
 	// channels := client.GetChannels()
 	// if ch, ok := channels[0]; ok && !ch.IsEmpty {
@@ -63,4 +82,19 @@ func main() {
 	// } else {
 	// 	fmt.Println("Channel 2 not found or empty")
 	// }
+
+	go func() {
+		for msg := range client.IncomingMessages() {
+			switch m := msg.(type) {
+			case *meshcore.Message:
+				fmt.Printf("Личное сообщение от %x: %s\n", m.SenderKey[:6], m.Text)
+			case *meshcore.ChannelMessage:
+				fmt.Printf("Канальное сообщение в канале %d от %s: %s\n", m.ChannelIndex, m.SenderName, m.Text)
+			}
+		}
+	}()
+	// Блокируемся, пока не получим сигнал завершения
+	fmt.Println("Waiting for messages... Press Ctrl+C to exit.")
+	done := make(chan struct{}) // Канал для сигнала о завершении (например, при нажатии Ctrl+C)
+	<-done
 }

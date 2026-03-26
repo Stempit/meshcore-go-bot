@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -50,6 +51,10 @@ type MeshCoreClient struct {
 	deliveredConfirmCh chan struct{} // для pushCodeSendConfirmed
 	confirmMu          sync.Mutex
 
+	// канал входящих сообщений
+	incomingCh chan interface{}
+	wg         sync.WaitGroup
+
 	// Логгер
 	logger *slog.Logger
 }
@@ -63,6 +68,7 @@ func NewMeshCoreClient(adapter *bluetooth.Adapter) *MeshCoreClient {
 		channelMsgs: make(map[int][]*ChannelMessage),
 		notifyCh:    make(chan []byte, 100),
 		doneCh:      make(chan struct{}),
+		incomingCh:  make(chan interface{}, 100),
 		logger:      slog.Default(),
 	}
 }
@@ -165,6 +171,7 @@ func (c *MeshCoreClient) Connect(address bluetooth.Address) error {
 	c.mu.Lock()
 	c.connected = true
 	c.mu.Unlock()
+	c.wg.Add(1) // для канала входящих сообщений
 	go c.frameHandler()
 
 	// Отправка инициализационных команд
@@ -212,6 +219,8 @@ func (c *MeshCoreClient) Disconnect() error {
 	}
 	c.connected = false
 	close(c.doneCh)
+	c.wg.Wait()         // ждём завершения frameHandler
+	close(c.incomingCh) // закрываем канал сообщений
 	if c.device != nil {
 		c.logger.Info("Disconnecting from device")
 		return c.device.Disconnect()
@@ -452,6 +461,8 @@ func (c *MeshCoreClient) write(data []byte) error {
 // ============================================================================
 
 func (c *MeshCoreClient) frameHandler() {
+	defer c.wg.Done() // для канала входящих сообщений
+
 	for {
 		select {
 		case data := <-c.notifyCh:
@@ -526,6 +537,13 @@ func (c *MeshCoreClient) parseContactMessageV3(data []byte) {
 	if c.onMessage != nil {
 		c.onMessage(msg)
 	}
+
+	// отправляем в канал входящих сообщений
+	select {
+	case c.incomingCh <- msg:
+	default:
+		c.logger.Warn("Incoming message channel full, dropping message")
+	}
 }
 
 // parseChannelMessageV3 разбирает сообщение V3 в канале (код 0x11)
@@ -564,9 +582,17 @@ func (c *MeshCoreClient) parseChannelMessageV3(data []byte) {
 		}
 	}
 	c.mu.RUnlock()
+
 	if senderName == "" {
-		senderName = fmt.Sprintf("?%x", prefix)
-		c.logger.Warn("ChannelMessageV3: unknown sender", "prefix", fmt.Sprintf("%x", prefix))
+		// Извлекаем имя из текста: ищем ": " в начале
+		if idx := strings.Index(text, ": "); idx > 0 {
+			senderName = text[:idx]
+			text = text[idx+2:] // удаляем "Имя: " из текста
+			c.logger.Debug("Extracted sender name from text", "name", senderName, "cleanText", text)
+		} else {
+			senderName = fmt.Sprintf("?%x", prefix)
+			c.logger.Warn("ChannelMessageV3: unknown sender", "prefix", fmt.Sprintf("%x", prefix))
+		}
 	}
 
 	msg := &ChannelMessage{
@@ -587,6 +613,13 @@ func (c *MeshCoreClient) parseChannelMessageV3(data []byte) {
 
 	if c.onChannelMessage != nil {
 		c.onChannelMessage(msg)
+	}
+
+	// отправляем в канал входящих сообщений
+	select {
+	case c.incomingCh <- msg:
+	default:
+		c.logger.Warn("Incoming message channel full, dropping message")
 	}
 }
 
@@ -655,6 +688,13 @@ func (c *MeshCoreClient) parseContactMessage(data []byte) {
 	if c.onMessage != nil {
 		c.onMessage(msg)
 	}
+
+	// отправляем в канал входящих сообщений
+	select {
+	case c.incomingCh <- msg:
+	default:
+		c.logger.Warn("Incoming message channel full, dropping message")
+	}
 }
 
 // parseChannelMessage разбирает старое сообщение в канале (код 0x08)
@@ -688,6 +728,7 @@ func (c *MeshCoreClient) parseChannelMessage(data []byte) {
 		text = string(textBytes)
 	}
 
+	// Поиск имени отправителя по префиксу
 	senderName := ""
 	c.mu.RLock()
 	for _, contact := range c.contacts {
@@ -697,9 +738,17 @@ func (c *MeshCoreClient) parseChannelMessage(data []byte) {
 		}
 	}
 	c.mu.RUnlock()
+
 	if senderName == "" {
-		senderName = fmt.Sprintf("?%x", prefix)
-		c.logger.Warn("parseChannelMessage: unknown sender", "prefix", fmt.Sprintf("%x", prefix))
+		// Извлекаем имя из текста: ищем ": " в начале
+		if idx := strings.Index(text, ": "); idx > 0 {
+			senderName = text[:idx]
+			text = text[idx+2:] // удаляем "Имя: " из текста
+			c.logger.Debug("Extracted sender name from text", "name", senderName, "cleanText", text)
+		} else {
+			senderName = fmt.Sprintf("?%x", prefix)
+			c.logger.Warn("ChannelMessageV3: unknown sender", "prefix", fmt.Sprintf("%x", prefix))
+		}
 	}
 
 	msg := &ChannelMessage{
@@ -722,6 +771,13 @@ func (c *MeshCoreClient) parseChannelMessage(data []byte) {
 
 	if c.onChannelMessage != nil {
 		c.onChannelMessage(msg)
+	}
+
+	// отправляем в канал входящих сообщений
+	select {
+	case c.incomingCh <- msg:
+	default:
+		c.logger.Warn("Incoming message channel full, dropping message")
 	}
 }
 
@@ -789,7 +845,7 @@ func (c *MeshCoreClient) handleFrame(data []byte) {
 	case respCodeCustomVars:
 		c.parseCustomVars(data)
 	case respCodeOk:
-		// OK – можно использовать для синхронизации
+		c.parseOk(data)
 	case respCodeErr:
 		c.logger.Error("Received error response", "data", fmt.Sprintf("%x", data))
 	case pushCodeAdvert:
@@ -883,7 +939,7 @@ func (c *MeshCoreClient) parseSelfInfo(data []byte) {
 	c.mu.Lock()
 	c.selfInfo = info
 	c.mu.Unlock()
-	c.logger.Info("SelfInfo updated", "name", info.Name, "public_key", fmt.Sprintf("%x", info.PublicKey))
+	c.logger.Debug("SelfInfo updated", "name", info.Name, "public_key", fmt.Sprintf("%x", info.PublicKey))
 	if c.onSelfInfo != nil {
 		c.onSelfInfo(info)
 	}
@@ -1062,8 +1118,13 @@ func (c *MeshCoreClient) parseAdvert(data []byte) {
 	// Здесь можно разобрать пакет и уведомить коллбэк, если нужно
 }
 
+func (c *MeshCoreClient) parseOk(data []byte) {
+	c.logger.Debug("Received parseOk OK")
+	c.notifySent() // для канальных сообщений OK означает принятие команды
+}
+
 func (c *MeshCoreClient) parseLogRxData(data []byte) {
-	c.logger.Info("Log RX data received", "data", fmt.Sprintf("%x", data))
+	c.logger.Debug("Log RX data received", "data", fmt.Sprintf("%x", data))
 	// Можно игнорировать или использовать для отладки
 }
 
@@ -1187,6 +1248,10 @@ func (c *MeshCoreClient) RequestChannels(maxChannels int) error {
 // maxRetries: максимальное число повторных попыток (0 - одна попытка без повторов)
 // timeout: таймаут ожидания подтверждения после каждой отправки
 func (c *MeshCoreClient) SendMessageWithRetry(contact *Contact, text string, waitForDelivery bool, maxRetries int, timeout time.Duration) error {
+	defer time.Sleep(150 * time.Microsecond) // частая отправка приводит к пропаже сообщений
+
+	c.logger.Debug("Sending private message with retry:", fmt.Sprintf("%x", contact.PublicKey), contact.Name, text, waitForDelivery)
+
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		timestamp := uint32(time.Now().Unix())
 		_, err := c.sendTextMessage(contact.PublicKey, text, byte(attempt), timestamp)
@@ -1239,8 +1304,66 @@ func (c *MeshCoreClient) SendMessage(contact *Contact, text string) error {
 	return err
 }
 
+// SendChannelMessageWithRetry отправляет сообщение в канал с повторными попытками.
+// waitForDelivery: true – ждать pushCodeSendConfirmed (доставка), false – ждать respCodeSent (отправка в эфир)
+// maxRetries: максимальное число повторных попыток (0 – одна попытка без повторов)
+// timeout: таймаут ожидания подтверждения после каждой отправки
+func (c *MeshCoreClient) SendChannelMessageWithRetry(channel *Channel, text string, waitForDelivery bool, maxRetries int, timeout time.Duration) error {
+	defer time.Sleep(150 * time.Microsecond) // частая отправка приводит к пропаже сообщений
+
+	c.logger.Debug("Sending channel message with retry:", fmt.Sprintf("%v", channel.Index), channel.Name, text, waitForDelivery)
+
+	if waitForDelivery {
+		c.logger.Warn("Wait for delivery is unavailable for channels, will be override to False")
+		waitForDelivery = false
+	}
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		// Отправляем сообщение (без генерации ID, так как протокол его не возвращает)
+		if err := c.sendChannelTextMessage(byte(channel.Index), text); err != nil {
+			if attempt == maxRetries {
+				return fmt.Errorf("send failed after %d attempts: %w", maxRetries+1, err)
+			}
+			time.Sleep(timeout)
+			continue
+		}
+
+		// Создаём канал для ожидания нужного подтверждения
+		confirmCh := make(chan struct{})
+		c.confirmMu.Lock()
+		if waitForDelivery {
+			c.deliveredConfirmCh = confirmCh
+		} else {
+			c.sentConfirmCh = confirmCh
+		}
+		c.confirmMu.Unlock()
+
+		// Ожидаем подтверждение или таймаут
+		select {
+		case <-confirmCh:
+			return nil
+		case <-time.After(timeout):
+			c.confirmMu.Lock()
+			if waitForDelivery {
+				if c.deliveredConfirmCh == confirmCh {
+					c.deliveredConfirmCh = nil
+				}
+			} else {
+				if c.sentConfirmCh == confirmCh {
+					c.sentConfirmCh = nil
+				}
+			}
+			c.confirmMu.Unlock()
+			if attempt == maxRetries {
+				return fmt.Errorf("no %s confirmation after %d attempts",
+					map[bool]string{true: "delivery", false: "sent"}[waitForDelivery], maxRetries+1)
+			}
+		}
+	}
+	return nil
+}
+
 func (c *MeshCoreClient) SendChannelMessage(channel *Channel, text string) error {
-	return c.sendChannelTextMessage(byte(channel.Index), text)
+	return c.sendChannelTextMessage(byte(channel.Index), text) //todo: обратную совместимость
 }
 
 func (c *MeshCoreClient) SetContactPath(contact *Contact, path []byte, pathLen int) error {
@@ -1311,6 +1434,11 @@ func (c *MeshCoreClient) GetAllChannelMessages() []*ChannelMessage {
 		all = append(all, msgs...)
 	}
 	return all
+}
+
+// для чтения входящих сообщений
+func (c *MeshCoreClient) IncomingMessages() <-chan interface{} {
+	return c.incomingCh
 }
 
 // ============================================================================
