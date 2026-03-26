@@ -476,31 +476,32 @@ func (c *MeshCoreClient) frameHandler() {
 
 // parseContactMessageV3 разбирает сообщение V3 от контакта (код 0x10)
 func (c *MeshCoreClient) parseContactMessageV3(data []byte) {
-	// формат: [code][snr][res][res][prefix(6)][path_len(1)][txt_type(1)][timestamp(4)][text\0]
-	const minLen = 1 + 3 + 6 + 1 + 1 + 4 + 1 // 17
+	// формат: [code][snr][res][res][prefix(6)][path_len][txt_type][timestamp(4)][path(path_len)][text\0]
+	const minLen = 1 + 3 + 6 + 1 + 1 + 4 // 16
 	if len(data) < minLen {
 		c.logger.Warn("parseContactMessageV3: data too short", "len", len(data))
 		return
 	}
-	// Пропускаем code и 3 служебных байта
-	prefix := data[4:10] // 6 байт префикса
+	prefix := data[4:10]
 	pathLen := int(data[10])
-	_ = pathLen // не используется в V3
-	txtType := data[11]
-	_ = txtType // может пригодиться в будущем
+	_ = data[11] // txtType
 	timestampRaw := binary.LittleEndian.Uint32(data[12:16])
 
-	// Текст начинается с 16-го байта, ищется нуль-терминатор
-	textStart := 16
-	textEnd := bytes.IndexByte(data[textStart:], 0)
+	textStart := 16 + pathLen
+	if textStart >= len(data) {
+		c.logger.Warn("parseContactMessageV3: text start beyond data", "textStart", textStart, "len", len(data))
+		return
+	}
+	textBytes := data[textStart:]
+	nullIdx := bytes.IndexByte(textBytes, 0)
 	var text string
-	if textEnd >= 0 {
-		text = string(data[textStart : textStart+textEnd])
+	if nullIdx >= 0 {
+		text = string(textBytes[:nullIdx])
 	} else {
-		text = string(data[textStart:])
+		text = string(textBytes)
 	}
 
-	// Поиск контакта по первым 6 байтам публичного ключа
+	// Поиск контакта по префиксу
 	var fullKey []byte
 	var senderName string
 	c.mu.RLock()
@@ -538,7 +539,6 @@ func (c *MeshCoreClient) parseContactMessageV3(data []byte) {
 		c.onMessage(msg)
 	}
 
-	// отправляем в канал входящих сообщений
 	select {
 	case c.incomingCh <- msg:
 	default:
@@ -548,31 +548,34 @@ func (c *MeshCoreClient) parseContactMessageV3(data []byte) {
 
 // parseChannelMessageV3 разбирает сообщение V3 в канале (код 0x11)
 func (c *MeshCoreClient) parseChannelMessageV3(data []byte) {
-	// формат: [code][snr][res][res][channel][prefix(6)][path_len(1)][txt_type(1)][timestamp(4)][text\0]
-	const minLen = 1 + 3 + 1 + 6 + 1 + 1 + 4 + 1 // 18
+	// формат: [code][snr][res][res][channel][prefix(6)][path_len][txt_type][timestamp(4)][path(path_len)][text\0]
+	const minLen = 1 + 3 + 1 + 6 + 1 + 1 + 4 // 17
 	if len(data) < minLen {
 		c.logger.Warn("parseChannelMessageV3: data too short", "len", len(data))
 		return
 	}
-	// Пропускаем code и 3 служебных байта
-	channelIndex := int(data[4]) // канал
-	prefix := data[5:11]         // 6 байт префикса
-	pathLen := int(data[11])
-	_ = pathLen // не используется в V3
-	txtType := data[12]
-	_ = txtType
+	channelIndex := int(data[4])
+	prefix := data[5:11]
+	pathLen := int(data[11]) // длина пути
+	_ = data[12]             // txtType (пока не используется)
 	timestampRaw := binary.LittleEndian.Uint32(data[13:17])
 
-	textStart := 17
-	textEnd := bytes.IndexByte(data[textStart:], 0)
+	// Пропускаем путь, если он есть
+	textStart := 17 + pathLen
+	if textStart >= len(data) {
+		c.logger.Warn("parseChannelMessageV3: text start beyond data", "textStart", textStart, "len", len(data))
+		return
+	}
+	textBytes := data[textStart:]
+	nullIdx := bytes.IndexByte(textBytes, 0)
 	var text string
-	if textEnd >= 0 {
-		text = string(data[textStart : textStart+textEnd])
+	if nullIdx >= 0 {
+		text = string(textBytes[:nullIdx])
 	} else {
-		text = string(data[textStart:])
+		text = string(textBytes)
 	}
 
-	// Поиск имени отправителя по префиксу
+	// Поиск имени отправителя
 	senderName := ""
 	c.mu.RLock()
 	for _, contact := range c.contacts {
@@ -584,10 +587,10 @@ func (c *MeshCoreClient) parseChannelMessageV3(data []byte) {
 	c.mu.RUnlock()
 
 	if senderName == "" {
-		// Извлекаем имя из текста: ищем ": " в начале
+		// Извлекаем имя из текста: ищем ": "
 		if idx := strings.Index(text, ": "); idx > 0 {
 			senderName = text[:idx]
-			text = text[idx+2:] // удаляем "Имя: " из текста
+			text = text[idx+2:]
 			c.logger.Debug("Extracted sender name from text", "name", senderName, "cleanText", text)
 		} else {
 			senderName = fmt.Sprintf("?%x", prefix)
