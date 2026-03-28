@@ -377,8 +377,20 @@ func (b *MQTTBridge) connectToAnalyzer(region, brokerURL string) {
 		return
 	}
 
+	// Client ID must be unique per device; use region + first 8 chars of public key.
+	// Using a fixed ID like "mc-us" would cause the broker to kick the previous
+	// connection every time any other device using this software connects.
+	clientID := region
+	if b.analyzerUsername != "" {
+		// analyzerUsername is "v1_{PUBKEY}" — take 8 chars of pubkey for uniqueness
+		parts := strings.SplitN(b.analyzerUsername, "_", 2)
+		if len(parts) == 2 && len(parts[1]) >= 8 {
+			clientID = fmt.Sprintf("%s-%s", region, strings.ToLower(parts[1][:8]))
+		}
+	}
+
 	var newClient mqtt.Client
-	newClient, err := b.createMQTTClient(region, brokerURL,
+	newClient, err := b.createMQTTClient(clientID, brokerURL,
 		b.analyzerUsername, password,
 		true, gtsRootR4Cert, "", "", true) // Always use TLS for analyzer; paho reconnect OK for WS
 
@@ -629,6 +641,38 @@ func (b *MQTTBridge) QueuePacket(rawData []byte, isTX bool, snr, rssi float64) {
 	b.logger.Debug("Packet queued", "hash", hash, "queue_len", len(b.queue))
 }
 
+// QueueChannelPacket queues a raw RF packet that has been correlated with a
+// decoded BLE channel message frame. The decoded fields (channel name, sender
+// name, message text) are embedded in the published JSON so the web UI can
+// display them without needing to parse or decrypt the raw bytes.
+func (b *MQTTBridge) QueueChannelPacket(rawData []byte, snr, rssi float64, channelIndex int, channelName, senderName, text, channelKeyHex string) {
+	b.queueMu.Lock()
+	defer b.queueMu.Unlock()
+
+	if len(b.queue) >= maxQueuedPackets {
+		b.queue = b.queue[1:]
+		b.logger.Warn("Packet queue full, dropping oldest")
+	}
+
+	hash := fmt.Sprintf("%x", hashData(rawData))
+	packet := QueuedPacket{
+		RawData:          rawData,
+		Timestamp:        time.Now(),
+		IsTX:             false,
+		SNR:              snr,
+		RSSI:             rssi,
+		Hash:             hash,
+		IsChannelMessage: true,
+		ChannelIndex:     channelIndex,
+		ChannelName:      channelName,
+		SenderName:       senderName,
+		Text:             text,
+		ChannelKey:       channelKeyHex,
+	}
+	b.queue = append(b.queue, packet)
+	b.logger.Debug("Channel packet queued", "channel", channelIndex, "sender", senderName, "queue_len", len(b.queue))
+}
+
 // hashData computes a simple hash of data for deduplication
 func hashData(data []byte) uint64 {
 	var hash uint64 = 5381
@@ -687,13 +731,24 @@ func (b *MQTTBridge) publishPacket(packet *QueuedPacket) {
 		Time:       packet.Timestamp.UTC().Format("15:04:05"),
 		Date:       packet.Timestamp.UTC().Format("02/01/2006"),
 		Len:        fmt.Sprintf("%d", len(packet.RawData)),
-		PacketType: fmt.Sprintf("%d", getPacketType(packet.RawData)),
+		PacketType: fmt.Sprintf("%d", getPayloadType(packet.RawData)),
 		Route:      getRouteType(packet.RawData),
-		PayloadLen: fmt.Sprintf("%d", len(packet.RawData)-16), // Approximate
+		PayloadLen: fmt.Sprintf("%d", getPayloadLen(packet.RawData)),
 		Raw:        hex.EncodeToString(packet.RawData),
 		SNR:        fmt.Sprintf("%.1f", packet.SNR),
 		RSSI:       fmt.Sprintf("%.1f", packet.RSSI),
 		Hash:       packet.Hash,
+	}
+
+	// Attach decoded channel message fields when available so the web UI can
+	// display channel name, sender, and message text without parsing raw bytes.
+	if packet.IsChannelMessage {
+		idx := packet.ChannelIndex
+		mqttPacket.ChannelIndex = &idx
+		mqttPacket.ChannelName = packet.ChannelName
+		mqttPacket.SenderName = packet.SenderName
+		mqttPacket.Text = packet.Text
+		mqttPacket.ChannelKey = packet.ChannelKey
 	}
 
 	// Build topics
@@ -755,21 +810,35 @@ func (b *MQTTBridge) publishRawPacket(packet *QueuedPacket, originID, origin, ia
 	b.publishToAnalyzers(topic, jsonData)
 }
 
-// publishToAnalyzers publishes data to Let's Mesh Analyzer servers
+// publishToAnalyzers publishes data to Let's Mesh Analyzer servers.
+// Uses IsConnected() as the primary truth source (same pattern as publishStatus)
+// to avoid silent drops when the connected atomic flag lags behind paho state.
+// WaitTimeout prevents blocking forever when connection drops mid-publish
+// (paho autoReconnect would otherwise keep the token pending across reconnects).
 func (b *MQTTBridge) publishToAnalyzers(topic string, data []byte) {
-	if b.analyzerUSConnected.Load() && b.analyzerUSClient != nil {
+	const analyzerPublishTimeout = 15 * time.Second
+
+	if b.analyzerUSClient != nil && b.analyzerUSClient.IsConnected() {
+		if !b.analyzerUSConnected.Load() {
+			b.analyzerUSConnected.Store(true)
+		}
 		token := b.analyzerUSClient.Publish(topic, 1, false, data)
-		token.Wait()
-		if token.Error() != nil {
-			b.logger.Error("Failed to publish to US analyzer", "error", token.Error())
+		if !token.WaitTimeout(analyzerPublishTimeout) {
+			b.logger.Warn("Publish to US analyzer timed out", "topic", topic)
+		} else if token.Error() != nil {
+			b.logger.Error("Failed to publish to US analyzer", "error", token.Error(), "topic", topic)
 		}
 	}
 
-	if b.analyzerEUConnected.Load() && b.analyzerEUClient != nil {
+	if b.analyzerEUClient != nil && b.analyzerEUClient.IsConnected() {
+		if !b.analyzerEUConnected.Load() {
+			b.analyzerEUConnected.Store(true)
+		}
 		token := b.analyzerEUClient.Publish(topic, 1, false, data)
-		token.Wait()
-		if token.Error() != nil {
-			b.logger.Error("Failed to publish to EU analyzer", "error", token.Error())
+		if !token.WaitTimeout(analyzerPublishTimeout) {
+			b.logger.Warn("Publish to EU analyzer timed out", "topic", topic)
+		} else if token.Error() != nil {
+			b.logger.Error("Failed to publish to EU analyzer", "error", token.Error(), "topic", topic)
 		}
 	}
 }
@@ -782,31 +851,136 @@ func directionStr(isTX bool) string {
 	return "rx"
 }
 
-// getPacketType extracts packet type from raw data
-func getPacketType(data []byte) int {
-	if len(data) < 4 {
+// MeshCore packet header byte layout (from Packet.h):
+//
+//	bits [1:0] = route type  (PH_ROUTE_MASK = 0x03)
+//	bits [5:2] = payload type (PH_TYPE_MASK = 0x0F, shifted by PH_TYPE_SHIFT = 2)
+//	bits [7:6] = payload version
+//
+// Route type constants:
+//
+//	0x00 ROUTE_TYPE_TRANSPORT_FLOOD
+//	0x01 ROUTE_TYPE_FLOOD
+//	0x02 ROUTE_TYPE_DIRECT
+//	0x03 ROUTE_TYPE_TRANSPORT_DIRECT
+//
+// Payload type constants (relevant subset):
+//
+//	0x02 PAYLOAD_TYPE_TXT_MSG   – plain text DM
+//	0x04 PAYLOAD_TYPE_ADVERT    – node advertisement
+//	0x05 PAYLOAD_TYPE_GRP_TXT   – group/channel text message
+
+// getPayloadType extracts the payload type from the header byte.
+func getPayloadType(data []byte) int {
+	if len(data) == 0 {
 		return 0
 	}
-	// Byte 3 typically contains the packet type
-	return int(data[3] & 0x0F)
+	return int((data[0] >> 2) & 0x0F)
 }
 
-// getRouteType determines route type from packet header
+// getRouteType returns a single-character route label from the header byte.
 func getRouteType(data []byte) string {
 	if len(data) == 0 {
 		return "U"
 	}
-	// First nibble indicates route type: F=Flood, D=Direct, T=Transport
-	switch data[0] >> 4 {
-	case 0xF:
-		return "F"
-	case 0xD:
-		return "D"
-	case 0xA:
-		return "T"
+	switch data[0] & 0x03 {
+	case 0x01:
+		return "F" // ROUTE_TYPE_FLOOD
+	case 0x02:
+		return "D" // ROUTE_TYPE_DIRECT
+	case 0x00, 0x03:
+		return "T" // ROUTE_TYPE_TRANSPORT_FLOOD / ROUTE_TYPE_TRANSPORT_DIRECT
 	default:
 		return "U"
 	}
+}
+
+// getPayloadLen returns the payload byte count from the raw packet.
+//
+// Wire format (from Packet.cpp writeTo()):
+//   [header(1)] [transport_codes(4) — only for TRANSPORT routes] [path_len(1)] [path...] [payload...]
+//
+// path_len byte encoding is identical for ALL route types (from Packet.h):
+//   hash_count = path_len & 0x3F   (bits 0-5)
+//   hash_size  = (path_len >> 6) + 1  (bits 6-7 → 1/2/3 bytes per hop; 4 is reserved/invalid)
+//   path bytes = hash_count * hash_size
+func getPayloadLen(data []byte) int {
+	if len(data) < 2 {
+		return 0
+	}
+	routeType := data[0] & 0x03
+	hasTransportCodes := routeType == 0x00 || routeType == 0x03 // TRANSPORT_FLOOD or TRANSPORT_DIRECT
+
+	// header(1) + optional transport_codes(4) + path_len(1)
+	headerLen := 2
+	if hasTransportCodes {
+		headerLen = 6
+	}
+	if len(data) < headerLen {
+		return 0
+	}
+
+	pathLenByte := data[headerLen-1]
+	hashCount := int(pathLenByte & 0x3F)
+	hashSize := int((pathLenByte>>6)&0x03) + 1 // 1, 2, or 3 bytes per hop
+	pathBytes := hashCount * hashSize
+
+	offset := headerLen + pathBytes
+	if offset >= len(data) {
+		return 0
+	}
+	return len(data) - offset
+}
+
+// ============================================================================
+// Generic Publish Helper
+// ============================================================================
+
+// publishToAllBrokers publishes data to all connected MQTT brokers.
+// retained: true for persistent data (status), false for transient data (packets).
+func (b *MQTTBridge) publishToAllBrokers(topic string, data []byte, retained bool) {
+	// Log the intent
+	b.logger.Debug("publishToAllBrokers",
+		"topic", topic,
+		"data_len", len(data),
+		"retained", retained,
+		"custom_connected_flag", b.customConnected.Load(),
+		"custom_client_nil", b.customClient == nil,
+		"any_connected", b.isAnyConnected())
+
+	// Publish to custom broker
+	if b.customClient != nil && b.customClient.IsConnected() {
+		// Ensure atomic flag reflects actual connection state
+		if !b.customConnected.Load() {
+			b.logger.Debug("publishToAllBrokers: flag out-of-sync, updating")
+			b.customConnected.Store(true)
+		}
+		token := b.customClient.Publish(topic, 1, retained, data)
+		b.logger.Debug("publishToAllBrokers: custom broker publish started",
+			"topic", topic,
+			"qos", 1,
+			"retained", retained,
+			"timeout", "15s")
+		if !token.WaitTimeout(15 * time.Second) {
+			b.logger.Error("publishToAllBrokers: custom broker publish timed out (no PUBACK)",
+				"topic", topic)
+			b.resetCustomConnection()
+		} else if token.Error() != nil {
+			b.logger.Error("publishToAllBrokers: custom broker publish failed",
+				"topic", topic,
+				"error", token.Error())
+			b.resetCustomConnection()
+		} else {
+			b.logger.Info("Published to custom broker", "topic", topic)
+		}
+	} else {
+		b.logger.Warn("publishToAllBrokers: custom broker not ready, message dropped",
+			"topic", topic,
+			"custom_client_nil", b.customClient == nil)
+	}
+
+	// Publish to analyzer servers
+	b.publishToAnalyzers(topic, data)
 }
 
 // ============================================================================
@@ -976,10 +1150,11 @@ func (b *MQTTBridge) publishStatus() {
 				"json_size", len(jsonData))
 		}
 	} else {
+		customConnected := b.customClient != nil && b.customClient.IsConnected()
 		b.logger.Warn("PUBLISH_STATUS: Cannot publish - custom broker not connected",
 			"custom_connected_flag", b.customConnected.Load(),
 			"custom_client_nil", b.customClient == nil,
-			"custom_client_connected", func() bool { return b.customClient != nil && b.customClient.IsConnected() }())
+			"custom_client_connected", customConnected)
 	}
 
 	// Publish to analyzer servers (retained).

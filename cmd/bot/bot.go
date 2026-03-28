@@ -43,12 +43,19 @@ func main() {
 		IATA:           "KVX",
 		StatusEnabled:  true,
 		PacketsEnabled: true,
+		TxEnabled:      true,
 		StatusInterval: 30000,
 		AnalyzerEU:     true,
-		OwnerEmail:     "no@mail.me",
+		AnalyzerUS:     true,
+		OwnerEmail:     "stempit@gmail.com",
 		// Ed25519 private key (64 hex chars) - REQUIRED for Let's Mesh Analyzer JWT signing
 		// Replace with your actual device private key
-		DevicePrivKey: "c88339c95e245316303d9ca77f7c0d296affe1f74a974ec10c6cf5649ba444427373a5297fdf8e961cf4db3a6e4c871b56bcc1e65333da83721116973bc7ddb3",
+		DevicePrivKey:      "c88339c95e245316303d9ca77f7c0d296affe1f74a974ec10c6cf5649ba444427373a5297fdf8e961cf4db3a6e4c871b56bcc1e65333da83721116973bc7ddb3",
+		AdvertsEnabled:     true, // Enable advertisement/contact messages
+		MessagesEnabled:    true, // Enable direct/private messages
+		ChannelMsgsEnabled: true, // Enable channel/group messages
+		DeliveryEnabled:    true, // Enable delivery receipts
+		PathUpdatesEnabled: true, // Enable path update notifications
 	})
 	// =================================
 	// Обработка входящих сообщений
@@ -155,6 +162,41 @@ func main() {
 	}
 
 	done := make(chan struct{}) // Канал для сигнала о завершении (например, при нажатии Ctrl+C)
+
+	time.Sleep(10 * time.Second)
+	channels := client.GetChannels()
+	if ch, ok := channels[3]; ok && !ch.IsEmpty {
+		err := client.SendChannelMessageWithRetry(ch, "ping", false, 3, 5*time.Second)
+		if err != nil {
+			fmt.Printf("Ошибка: %v\n", err)
+		} else {
+			fmt.Println("Сообщение отправлено в канал и подтверждено")
+		}
+	} else {
+		fmt.Println("Channel not found or empty")
+	}
+
+	contacts := client.GetContacts()
+
+	for _, v := range contacts {
+		if v.Name == "Короед" {
+			// отправка с ретраями до подтверждения отправки
+			// err := client.SendMessageWithRetry(v, "Пинг А", false, 5, 5*time.Second)
+			// if err != nil {
+			// 	fmt.Printf("Ошибка: %v\n", err)
+			// } else {
+			// 	fmt.Println("Сообщение отправлено и подтверждено")
+			// }
+
+			// отправка с ретраями до подтверждения доставки
+			err = client.SendMessageWithRetry(v, "ping", true, 5, 5*time.Second)
+			if err != nil {
+				fmt.Printf("Ошибка: %v\n", err)
+			} else {
+				fmt.Println("Сообщение отправлено и доставлено")
+			}
+		}
+	}
 
 	// Периодически запрашиваем статистику для обновления MQTT
 	go func() {
