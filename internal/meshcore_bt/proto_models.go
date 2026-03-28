@@ -54,11 +54,33 @@ type ChannelMessage struct {
 	MessageID    string
 }
 
+// CompanionRadioStats holds all radio statistics from the device.
+// Received via CMD_GET_STATS command with STATS_TYPE_CORE, STATS_TYPE_RADIO, STATS_TYPE_PACKETS.
 type CompanionRadioStats struct {
-	TxAirSecs     uint32
-	RxAirSecs     uint32
-	NoiseFloorDbm int8
-	LastSnrDb     float32
+	// Core stats (STATS_TYPE_CORE)
+	BatteryMv  uint16 // Battery voltage in millivolts
+	UptimeSecs uint32 // Device uptime in seconds
+	Errors     uint16 // Error flags bitmask
+	QueueLen   uint8  // Outbound packet queue length
+
+	// Radio stats (STATS_TYPE_RADIO)
+	TxAirSecs     uint32  // Cumulative transmit airtime in seconds
+	RxAirSecs     uint32  // Cumulative receive airtime in seconds
+	NoiseFloorDbm int8    // Radio noise floor in dBm
+	LastRssi      int8    // Last received signal strength in dBm
+	LastSnrDb     float32 // Last SNR in dB (divided by 4.0)
+
+	// Packet stats (STATS_TYPE_PACKETS)
+	PacketsRecv       uint32 // Total packets received
+	PacketsSent       uint32 // Total packets sent
+	PacketsFloodTx    uint32 // Packets sent via flood routing
+	PacketsDirectTx   uint32 // Packets sent via direct routing
+	PacketsFloodRx    uint32 // Packets received via flood routing
+	PacketsDirectRx   uint32 // Packets received via direct routing
+	PacketsRecvErrors uint32 // Receive/CRC errors (RadioLib)
+
+	// Timestamps when stats were received
+	LastUpdate time.Time
 }
 
 type SelfInfo struct {

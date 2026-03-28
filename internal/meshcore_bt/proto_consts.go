@@ -119,3 +119,10 @@ const (
 	appProtocolVersion = 3
 	contactFrameSize   = 148 // Размер фрейма контакта
 )
+
+// Stats types for CMD_GET_STATS
+const (
+	STATS_TYPE_CORE    = 0
+	STATS_TYPE_RADIO   = 1
+	STATS_TYPE_PACKETS = 2
+)

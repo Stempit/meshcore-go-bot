@@ -30,6 +30,7 @@ type MeshCoreClient struct {
 	channels    map[int]*Channel
 	messages    map[string][]*Message // ключ – hex(senderKey)
 	channelMsgs map[int][]*ChannelMessage
+	stats       *CompanionRadioStats // накопленная статистика (все типы)
 
 	// Каналы для обработки
 	notifyCh chan []byte
@@ -1205,35 +1206,92 @@ func (c *MeshCoreClient) parseBatteryAndStorage(data []byte) {
 	}
 }
 
-// parseStats разбирает RESP_CODE_STATS (0x18).
+// parseStats разбирает RESP_CODE_STATS (0x18) для всех типов статистики.
 //
-// Формат для STATS_TYPE_RADIO (из MyMesh.cpp, CMD_GET_STATS, stats_type==1):
+// Форматы (из MeshCore/docs/stats_binary_frames.md):
 //
-//	[code(1)][stats_type(1)][noise_floor(2, int16)][last_rssi(1, int8)]
-//	[last_snr(1, int8 x4)][tx_air_secs(4)][rx_air_secs(4)]
+//	STATS_TYPE_CORE (0):    [code(1)][type(1)][battery_mv(2)][uptime_secs(4)][errors(2)][queue_len(1)] = 11 bytes
+//	STATS_TYPE_RADIO (1):   [code(1)][type(1)][noise_floor(2)][last_rssi(1)][last_snr(1)][tx_air_secs(4)][rx_air_secs(4)] = 14 bytes
+//	STATS_TYPE_PACKETS (2): [code(1)][type(1)][recv(4)][sent(4)][flood_tx(4)][direct_tx(4)][flood_rx(4)][direct_rx(4)] = 26-30 bytes
 func (c *MeshCoreClient) parseStats(data []byte) {
 	if len(data) < 2 {
 		c.logger.Warn("Stats too short", "len", len(data))
 		return
 	}
-	statsType := data[1]
-	stats := &CompanionRadioStats{}
 
+	// Get or create stats object (accumulate all stats types)
+	c.mu.Lock()
+	if c.stats == nil {
+		c.stats = &CompanionRadioStats{}
+	}
+	stats := c.stats
+	stats.LastUpdate = time.Now()
+	c.mu.Unlock()
+
+	statsType := data[1]
 	switch statsType {
-	case 1: // STATS_TYPE_RADIO
-		// [noise_floor(2)][last_rssi(1)][last_snr(1)][tx_air_secs(4)][rx_air_secs(4)]
+	case STATS_TYPE_CORE: // 0 - Core stats
+		// [battery_mv(2)][uptime_secs(4)][errors(2)][queue_len(1)] = 9 bytes after header
+		if len(data) < 11 {
+			c.logger.Warn("Stats CORE too short", "len", len(data))
+			return
+		}
+		stats.BatteryMv = binary.LittleEndian.Uint16(data[2:4])
+		stats.UptimeSecs = binary.LittleEndian.Uint32(data[4:8])
+		stats.Errors = binary.LittleEndian.Uint16(data[8:10])
+		stats.QueueLen = data[10]
+		c.logger.Debug("Stats CORE parsed",
+			"battery_mv", stats.BatteryMv,
+			"uptime_secs", stats.UptimeSecs,
+			"errors", stats.Errors,
+			"queue_len", stats.QueueLen)
+
+	case STATS_TYPE_RADIO: // 1 - Radio stats
+		// [noise_floor(2)][last_rssi(1)][last_snr(1)][tx_air_secs(4)][rx_air_secs(4)] = 12 bytes after header
 		if len(data) < 14 {
 			c.logger.Warn("Stats RADIO too short", "len", len(data))
 			return
 		}
 		noiseFloor := int16(binary.LittleEndian.Uint16(data[2:4]))
-		stats.NoiseFloorDbm = int8(noiseFloor) // сохраняем как int8 (усечение)
-		// data[4] = last_rssi (не используется в модели)
+		stats.NoiseFloorDbm = int8(noiseFloor)
+		stats.LastRssi = int8(data[4])
 		stats.LastSnrDb = float32(int8(data[5])) / 4.0
 		stats.TxAirSecs = binary.LittleEndian.Uint32(data[6:10])
 		stats.RxAirSecs = binary.LittleEndian.Uint32(data[10:14])
+		c.logger.Debug("Stats RADIO parsed",
+			"noise_floor", stats.NoiseFloorDbm,
+			"last_rssi", stats.LastRssi,
+			"last_snr", stats.LastSnrDb,
+			"tx_air_secs", stats.TxAirSecs,
+			"rx_air_secs", stats.RxAirSecs)
+
+	case STATS_TYPE_PACKETS: // 2 - Packet stats
+		// [recv(4)][sent(4)][flood_tx(4)][direct_tx(4)][flood_rx(4)][direct_rx(4)][recv_errors(4)] = 26-30 bytes after header
+		if len(data) < 28 {
+			c.logger.Warn("Stats PACKETS too short", "len", len(data))
+			return
+		}
+		stats.PacketsRecv = binary.LittleEndian.Uint32(data[2:6])
+		stats.PacketsSent = binary.LittleEndian.Uint32(data[6:10])
+		stats.PacketsFloodTx = binary.LittleEndian.Uint32(data[10:14])
+		stats.PacketsDirectTx = binary.LittleEndian.Uint32(data[14:18])
+		stats.PacketsFloodRx = binary.LittleEndian.Uint32(data[18:22])
+		stats.PacketsDirectRx = binary.LittleEndian.Uint32(data[22:26])
+		// recv_errors present only in 30-byte frame
+		if len(data) >= 30 {
+			stats.PacketsRecvErrors = binary.LittleEndian.Uint32(data[26:30])
+		}
+		c.logger.Debug("Stats PACKETS parsed",
+			"recv", stats.PacketsRecv,
+			"sent", stats.PacketsSent,
+			"flood_tx", stats.PacketsFloodTx,
+			"direct_tx", stats.PacketsDirectTx,
+			"flood_rx", stats.PacketsFloodRx,
+			"direct_rx", stats.PacketsDirectRx,
+			"recv_errors", stats.PacketsRecvErrors)
+
 	default:
-		c.logger.Debug("Stats: unsupported stats_type, skipping", "type", statsType)
+		c.logger.Warn("Stats: unknown stats_type", "type", statsType)
 		return
 	}
 
@@ -1471,8 +1529,90 @@ func (c *MeshCoreClient) Reboot() error {
 	return c.sendReboot()
 }
 
+// RequestStats requests all stats types from the device (Core, Radio, Packets).
+// Stats are accumulated and returned via the OnStats callback.
+func (c *MeshCoreClient) RequestAllStats() error {
+	if err := c.sendGetStats(STATS_TYPE_CORE); err != nil {
+		return err
+	}
+	time.Sleep(100 * time.Millisecond)
+	if err := c.sendGetStats(STATS_TYPE_RADIO); err != nil {
+		return err
+	}
+	time.Sleep(100 * time.Millisecond)
+	return c.sendGetStats(STATS_TYPE_PACKETS)
+}
+
+// RequestStats requests radio stats (legacy method).
 func (c *MeshCoreClient) RequestStats() error {
-	return c.sendGetStats(1) // STATS_TYPE_RADIO
+	return c.sendGetStats(STATS_TYPE_RADIO)
+}
+
+// GetStats returns the current accumulated stats.
+// Returns nil if no stats have been received yet.
+func (c *MeshCoreClient) GetStats() *CompanionRadioStats {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.stats
+}
+
+// FormatStats returns a human-readable string of all stats.
+func (c *MeshCoreClient) FormatStats() string {
+	stats := c.GetStats()
+	if stats == nil {
+		return "Stats: no data"
+	}
+
+	var b strings.Builder
+
+	// Header
+	b.WriteString("┌─ Radio Stats ─────────────────────────────\n")
+
+	// Core stats
+	b.WriteString(fmt.Sprintf("│ Battery:    %d mV (%.2f V)\n", stats.BatteryMv, float64(stats.BatteryMv)/1000.0))
+	b.WriteString(fmt.Sprintf("│ Uptime:     %s\n", formatDuration(stats.UptimeSecs)))
+	b.WriteString(fmt.Sprintf("│ Queue:      %d packets\n", stats.QueueLen))
+	if stats.Errors > 0 {
+		b.WriteString(fmt.Sprintf("│ Errors:     0x%04X\n", stats.Errors))
+	}
+
+	// Radio stats
+	b.WriteString(fmt.Sprintf("│ Noise:      %d dBm\n", stats.NoiseFloorDbm))
+	b.WriteString(fmt.Sprintf("│ RSSI:       %d dBm\n", stats.LastRssi))
+	b.WriteString(fmt.Sprintf("│ SNR:        %.1f dB\n", stats.LastSnrDb))
+	b.WriteString(fmt.Sprintf("│ TX Airtime: %s\n", formatDuration(stats.TxAirSecs)))
+	b.WriteString(fmt.Sprintf("│ RX Airtime: %s\n", formatDuration(stats.RxAirSecs)))
+
+	// Packet stats
+	b.WriteString("├─ Packets ──────────────────────────────────\n")
+	b.WriteString(fmt.Sprintf("│ Recv:       %d (flood: %d, direct: %d)\n", stats.PacketsRecv, stats.PacketsFloodRx, stats.PacketsDirectRx))
+	b.WriteString(fmt.Sprintf("│ Sent:       %d (flood: %d, direct: %d)\n", stats.PacketsSent, stats.PacketsFloodTx, stats.PacketsDirectTx))
+	if stats.PacketsRecvErrors > 0 {
+		b.WriteString(fmt.Sprintf("│ RX Errors:  %d\n", stats.PacketsRecvErrors))
+	}
+
+	// Footer
+	if !stats.LastUpdate.IsZero() {
+		b.WriteString(fmt.Sprintf("└─ Updated: %s", stats.LastUpdate.Format("15:04:05")))
+	} else {
+		b.WriteString("└─")
+	}
+
+	return b.String()
+}
+
+// formatDuration converts seconds to human-readable duration string.
+func formatDuration(secs uint32) string {
+	if secs < 60 {
+		return fmt.Sprintf("%ds", secs)
+	}
+	if secs < 3600 {
+		return fmt.Sprintf("%dm %ds", secs/60, secs%60)
+	}
+	if secs < 86400 {
+		return fmt.Sprintf("%dh %dm %ds", secs/3600, (secs%3600)/60, secs%60)
+	}
+	return fmt.Sprintf("%dd %dh %dm", secs/86400, (secs%86400)/3600, (secs%3600)/60)
 }
 
 func (c *MeshCoreClient) RequestBattery() error {
