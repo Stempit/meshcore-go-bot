@@ -214,5 +214,11 @@ func main() {
 		}
 	}()
 
+	if err := client.SendSelfAdvert(true); err != nil {
+		fmt.Printf("Failed to send self advert: %v\n", err)
+	} else {
+		fmt.Println("Self advert sent (flood)")
+	}
+
 	<-done
 }

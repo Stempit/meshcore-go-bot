@@ -1305,6 +1305,26 @@ func (c *MeshCoreClient) parseAdvert(data []byte) {
 		}
 	}
 
+	c.mu.RLock()
+	mqttBridge := c.mqtt
+	c.mu.RUnlock()
+
+	if mqttBridge != nil {
+		// Correlate with the oldest pending 0x88 raw frame (arrives before 0x80).
+		var rawData []byte
+		var snr, rssi float64
+		for i := 0; i < len(c.pendingRaw); i++ {
+			p := c.pendingRaw[i]
+			if time.Since(p.arrivedAt) <= pendingRawTTL {
+				rawData = p.rawData
+				snr = p.snr
+				rssi = p.rssi
+				c.pendingRaw = append(c.pendingRaw[:i], c.pendingRaw[i+1:]...)
+				break
+			}
+		}
+		mqttBridge.QueuePacket(rawData, false, snr, rssi)
+	}
 }
 
 func (c *MeshCoreClient) parseOk(data []byte) {
@@ -1700,6 +1720,14 @@ func (c *MeshCoreClient) SetNodeName(name string) error {
 
 func (c *MeshCoreClient) SetNodeLocation(lat, lon float64) error {
 	return c.sendSetAdvertLatLon(lat, lon)
+}
+
+func (c *MeshCoreClient) SendSelfAdvert(flood bool) error {
+	floodByte := byte(0)
+	if flood {
+		floodByte = 1
+	}
+	return c.write([]byte{cmdSendSelfAdvert, floodByte})
 }
 
 func (c *MeshCoreClient) Reboot() error {
