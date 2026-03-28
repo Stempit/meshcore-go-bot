@@ -645,7 +645,7 @@ func (b *MQTTBridge) QueuePacket(rawData []byte, isTX bool, snr, rssi float64) {
 // decoded BLE channel message frame. The decoded fields (channel name, sender
 // name, message text) are embedded in the published JSON so the web UI can
 // display them without needing to parse or decrypt the raw bytes.
-func (b *MQTTBridge) QueueChannelPacket(rawData []byte, snr, rssi float64, channelIndex int, channelName, senderName, text, channelKeyHex string) {
+func (b *MQTTBridge) QueueChannelPacket(rawData []byte, isTX bool, snr, rssi float64, channelIndex int, channelName, senderName, text, channelKeyHex string) {
 	b.queueMu.Lock()
 	defer b.queueMu.Unlock()
 
@@ -658,7 +658,7 @@ func (b *MQTTBridge) QueueChannelPacket(rawData []byte, snr, rssi float64, chann
 	packet := QueuedPacket{
 		RawData:          rawData,
 		Timestamp:        time.Now(),
-		IsTX:             false,
+		IsTX:             isTX,
 		SNR:              snr,
 		RSSI:             rssi,
 		Hash:             hash,
@@ -670,7 +670,7 @@ func (b *MQTTBridge) QueueChannelPacket(rawData []byte, snr, rssi float64, chann
 		ChannelKey:       channelKeyHex,
 	}
 	b.queue = append(b.queue, packet)
-	b.logger.Debug("Channel packet queued", "channel", channelIndex, "sender", senderName, "queue_len", len(b.queue))
+	b.logger.Debug("Channel packet queued", "channel", channelIndex, "sender", senderName, "isTX", isTX, "queue_len", len(b.queue))
 }
 
 // hashData computes a simple hash of data for deduplication

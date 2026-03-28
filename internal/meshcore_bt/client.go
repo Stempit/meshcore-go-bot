@@ -2,6 +2,9 @@ package meshcore_bt
 
 import (
 	"bytes"
+	"crypto/aes"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
@@ -690,7 +693,7 @@ func (c *MeshCoreClient) parseChannelMessageV3(data []byte) {
 	}
 
 	if mqttBridge != nil {
-		mqttBridge.QueueChannelPacket(rawData, snr, rssi, channelIndex, channelName, senderName, text, channelKeyHex)
+		mqttBridge.QueueChannelPacket(rawData, false, snr, rssi, channelIndex, channelName, senderName, text, channelKeyHex)
 	}
 
 	// отправляем в канал входящих сообщений
@@ -876,7 +879,7 @@ func (c *MeshCoreClient) parseChannelMessage(data []byte) {
 	}
 
 	if mqttBridge != nil {
-		mqttBridge.QueueChannelPacket(rawData, snr, rssi, channelIndex, channelName, senderName, text, channelKeyHex)
+		mqttBridge.QueueChannelPacket(rawData, false, snr, rssi, channelIndex, channelName, senderName, text, channelKeyHex)
 	}
 
 	// отправляем в канал входящих сообщений
@@ -1327,6 +1330,93 @@ func (c *MeshCoreClient) parseAdvert(data []byte) {
 	}
 }
 
+// buildGRPTXTPacket constructs a valid MeshCore GRP_TXT RF packet from plaintext
+// fields. This lets us publish outgoing channel messages to MQTT as TX packets so
+// the analyzer server can decode and display them like any other received packet.
+//
+// Encryption: AES-128-ECB with the 16-byte channel PSK.
+// MAC:        HMAC-SHA256(psk‖zeros16, ciphertext)[:2].
+// Wire:       [header=0x15][path_len=0x00][channel_hash(1)][mac(2)][ciphertext…]
+func buildGRPTXTPacket(psk []byte, senderName, text string) []byte {
+	if len(psk) < 16 {
+		return nil
+	}
+	key := psk[:16]
+
+	// Plaintext: timestamp(4 LE) + flags(1) + "sender: text"
+	ts := uint32(time.Now().Unix())
+	msg := senderName + ": " + text
+	plain := make([]byte, 5+len(msg))
+	binary.LittleEndian.PutUint32(plain[0:4], ts)
+	plain[4] = 0x00
+	copy(plain[5:], msg)
+
+	// Pad to AES block boundary
+	if pad := aes.BlockSize - (len(plain) % aes.BlockSize); pad != aes.BlockSize {
+		plain = append(plain, make([]byte, pad)...)
+	}
+
+	// AES-128-ECB encrypt (block by block, no IV)
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil
+	}
+	ct := make([]byte, len(plain))
+	for i := 0; i < len(plain); i += aes.BlockSize {
+		block.Encrypt(ct[i:i+aes.BlockSize], plain[i:i+aes.BlockSize])
+	}
+
+	// HMAC-SHA256 MAC: secret = key(16) + zeros(16)
+	secret := make([]byte, 32)
+	copy(secret, key)
+	h := hmac.New(sha256.New, secret)
+	h.Write(ct)
+	mac := h.Sum(nil)[:2]
+
+	// Channel hash = SHA256(PSK)[0]
+	hashSum := sha256.Sum256(key)
+
+	// Wire: [0x15 header][0x00 path_len][channel_hash][mac(2)][ciphertext…]
+	// header = ROUTE_TYPE_FLOOD(0x01) | PAYLOAD_TYPE_GRP_TXT(0x05)<<2 = 0x15
+	pkt := make([]byte, 0, 3+len(mac)+len(ct))
+	pkt = append(pkt, 0x15, 0x00, hashSum[0])
+	pkt = append(pkt, mac...)
+	pkt = append(pkt, ct...)
+	return pkt
+}
+
+// publishTXChannelPacket builds a synthetic outgoing GRP_TXT RF packet and
+// queues it for MQTT publishing as a TX packet. This makes our outgoing channel
+// messages visible on analyzer servers exactly like packets from any other device.
+func (c *MeshCoreClient) publishTXChannelPacket(channel *Channel, text string) {
+	c.mu.RLock()
+	mqttBridge := c.mqtt
+	selfInfo := c.selfInfo
+	c.mu.RUnlock()
+
+	if mqttBridge == nil || selfInfo == nil {
+		return
+	}
+	if len(channel.PSK) == 0 {
+		return
+	}
+
+	senderName := selfInfo.Name
+	rawPkt := buildGRPTXTPacket(channel.PSK, senderName, text)
+	if rawPkt == nil {
+		c.logger.Warn("publishTXChannelPacket: failed to build packet")
+		return
+	}
+
+	channelName := fmt.Sprintf("ch%d", channel.Index)
+	if channel.Name != "" {
+		channelName = channel.Name
+	}
+	channelKeyHex := hex.EncodeToString(channel.PSK[:16])
+
+	mqttBridge.QueueChannelPacket(rawPkt, true, 0, 0, channel.Index, channelName, senderName, text, channelKeyHex)
+}
+
 func (c *MeshCoreClient) parseOk(data []byte) {
 	c.logger.Debug("Received OK")
 	c.notifySent() // для канальных сообщений OK означает принятие команды
@@ -1674,6 +1764,7 @@ func (c *MeshCoreClient) SendChannelMessageWithRetry(channel *Channel, text stri
 
 		select {
 		case <-confirmCh:
+			c.publishTXChannelPacket(channel, text)
 			return nil
 		case <-time.After(timeout):
 			c.confirmMu.Lock()
