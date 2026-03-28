@@ -469,7 +469,7 @@ func (b *MQTTBridge) createMQTTClient(clientID, brokerURL, username, password st
 
 // handleConnect handles successful MQTT connection
 func (b *MQTTBridge) handleConnect(brokerID string) {
-	b.logger.Info("MQTT connected", "broker", brokerID)
+	b.logger.Debug("MQTT connected in handle", "broker", brokerID)
 
 	var connected *atomic.Bool
 	switch brokerID {
@@ -816,19 +816,36 @@ func getRouteType(data []byte) string {
 // publishStatusIfNeeded publishes status message if interval has passed
 func (b *MQTTBridge) publishStatusIfNeeded() {
 	if !b.config.StatusEnabled {
+		b.logger.Debug("Status publish skipped: StatusEnabled is false")
 		return
 	}
 
 	// Check if any broker is connected
 	if !b.isAnyConnected() {
+		b.logger.Debug("Status publish skipped: no broker connected",
+			"custom", b.customConnected.Load(),
+			"analyzer_us", b.analyzerUSConnected.Load(),
+			"analyzer_eu", b.analyzerEUConnected.Load())
 		return
 	}
 
 	now := time.Now()
-	if !b.lastStatusPublish.IsZero() && now.Sub(b.lastStatusPublish) < b.statusInterval {
+	elapsed := time.Duration(0)
+	if !b.lastStatusPublish.IsZero() {
+		elapsed = now.Sub(b.lastStatusPublish)
+	}
+
+	if !b.lastStatusPublish.IsZero() && elapsed < b.statusInterval {
+		b.logger.Debug("Status publish skipped: interval not reached",
+			"elapsed", elapsed, "interval", b.statusInterval)
 		return
 	}
 
+	b.logger.Info("Status publish triggered",
+		"last_publish", b.lastStatusPublish,
+		"elapsed", elapsed,
+		"interval", b.statusInterval,
+		"custom_connected", b.customConnected.Load())
 	b.publishStatus()
 }
 
@@ -839,11 +856,37 @@ func (b *MQTTBridge) publishStatus() {
 	b.mu.RLock()
 	selfInfo := b.selfInfo
 	stats := b.stats
+	config := b.config
 	b.mu.RUnlock()
 
 	if selfInfo == nil {
 		b.logger.Warn("Cannot publish status: no self info")
 		return
+	}
+
+	b.logger.Debug("PUBLISH_STATUS: Starting status publish",
+		"status_enabled", config.StatusEnabled,
+		"custom_connected", b.customConnected.Load(),
+		"analyzer_us_connected", b.analyzerUSConnected.Load(),
+		"analyzer_eu_connected", b.analyzerEUConnected.Load(),
+		"self_info_nil", selfInfo == nil,
+		"stats_nil", stats == nil)
+
+	// Log stats details if available
+	if stats != nil {
+		b.logger.Debug("PUBLISH_STATUS: Stats data",
+			"uptime_secs", stats.UptimeSecs,
+			"packets_recv", stats.PacketsRecv,
+			"packets_sent", stats.PacketsSent,
+			"tx_air_secs", stats.TxAirSecs,
+			"rx_air_secs", stats.RxAirSecs,
+			"last_rssi", stats.LastRssi,
+			"last_snr", stats.LastSnrDb,
+			"battery_mv", stats.BatteryMv,
+			"queue_len", stats.QueueLen,
+			"errors", stats.Errors)
+	} else {
+		b.logger.Warn("PUBLISH_STATUS: No stats available")
 	}
 
 	originID := hex.EncodeToString(selfInfo.PublicKey)
@@ -895,25 +938,48 @@ func (b *MQTTBridge) publishStatus() {
 		return
 	}
 
+	b.logger.Debug("PUBLISH_STATUS: Publishing to custom broker",
+		"topic", topic,
+		"json_size", len(jsonData),
+		"json_preview", string(jsonData[:min(len(jsonData), 200)]),
+		"qos", 1,
+		"retained", true,
+		"custom_connected_flag", b.customConnected.Load(),
+		"custom_client_nil", b.customClient == nil)
+
 	// Publish to custom broker (retained).
 	// Guard with paho's own IsConnected() to catch stale customConnected flags,
 	// then use WaitTimeout so a dead connection never blocks the goroutine forever.
-	if b.customConnected.Load() && b.customClient != nil {
-		if !b.customClient.IsConnected() {
-			b.logger.Warn("Custom broker reports not connected despite flag, resetting")
+	if b.customClient != nil && b.customClient.IsConnected() {
+		if !b.customConnected.Load() {
+			b.logger.Warn("PUBLISH_STATUS: paho connected but flag false, updating flag")
+			b.customConnected.Store(true)
+		}
+
+		b.logger.Debug("PUBLISH_STATUS: Calling paho Publish")
+		token := b.customClient.Publish(topic, 1, true, jsonData)
+
+		b.logger.Debug("PUBLISH_STATUS: Waiting for publish token")
+		if !token.WaitTimeout(15 * time.Second) {
+			b.logger.Error("PUBLISH_STATUS: Publish to custom broker timed out (no PUBACK)",
+				"topic", topic,
+				"token_waited", true)
+			b.resetCustomConnection()
+		} else if token.Error() != nil {
+			b.logger.Error("PUBLISH_STATUS: Failed to publish status to custom broker",
+				"error", token.Error(),
+				"topic", topic)
 			b.resetCustomConnection()
 		} else {
-			token := b.customClient.Publish(topic, 1, true, jsonData)
-			if !token.WaitTimeout(15 * time.Second) {
-				b.logger.Warn("Publish to custom broker timed out (no PUBACK), resetting connection")
-				b.resetCustomConnection()
-			} else if token.Error() != nil {
-				b.logger.Error("Failed to publish status to custom broker", "error", token.Error())
-				b.resetCustomConnection()
-			} else {
-				b.logger.Info("Status published", "broker", "custom", "topic", topic)
-			}
+			b.logger.Debug("PUBLISH_STATUS: Successfully published to custom broker",
+				"topic", topic,
+				"json_size", len(jsonData))
 		}
+	} else {
+		b.logger.Warn("PUBLISH_STATUS: Cannot publish - custom broker not connected",
+			"custom_connected_flag", b.customConnected.Load(),
+			"custom_client_nil", b.customClient == nil,
+			"custom_client_connected", func() bool { return b.customClient != nil && b.customClient.IsConnected() }())
 	}
 
 	// Publish to analyzer servers (retained).

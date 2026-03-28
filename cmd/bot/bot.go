@@ -155,5 +155,22 @@ func main() {
 	}
 
 	done := make(chan struct{}) // Канал для сигнала о завершении (например, при нажатии Ctrl+C)
+
+	// Периодически запрашиваем статистику для обновления MQTT
+	go func() {
+		ticker := time.NewTicker(30 * time.Second) // Запрашиваем каждые 30 секунд
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := client.RequestAllStats(); err != nil {
+					fmt.Printf("Failed to request periodic stats: %v\n", err)
+				}
+			case <-done:
+				return
+			}
+		}
+	}()
+
 	<-done
 }
