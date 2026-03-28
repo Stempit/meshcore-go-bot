@@ -34,6 +34,22 @@ func main() {
 	client := meshcore.CreateClient()
 	defer client.Disconnect()
 
+	client.SetMQTTConfig(&meshcore.MQTTConfig{
+		Server:         "meshcoretel.ru",
+		Port:           1883,
+		Username:       "meshcore",
+		Password:       "meshcore",
+		Origin:         "MeshCore-7C44431A",
+		IATA:           "KVX",
+		StatusEnabled:  true,
+		PacketsEnabled: true,
+		StatusInterval: 30000,
+		AnalyzerEU:     true,
+		OwnerEmail:     "no@mail.me",
+		// Ed25519 private key (64 hex chars) - REQUIRED for Let's Mesh Analyzer JWT signing
+		// Replace with your actual device private key
+		DevicePrivKey: "c88339c95e245316303d9ca77f7c0d296affe1f74a974ec10c6cf5649ba444427373a5297fdf8e961cf4db3a6e4c871b56bcc1e65333da83721116973bc7ddb3",
+	})
 	// =================================
 	// Обработка входящих сообщений
 	// =================================
