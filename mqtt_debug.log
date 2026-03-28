@@ -1,0 +1,51 @@
+time=2026-03-28T17:15:34.021+03:00 level=INFO msg="Bluetooth enabled"
+time=2026-03-28T17:15:34.062+03:00 level=INFO msg="Found device" name=MeshCore-7C44431A address=0d0be1dc-1127-486b-061c-6d951e643a1c
+time=2026-03-28T17:15:34.405+03:00 level=INFO msg="Connected to device" address=0d0be1dc-1127-486b-061c-6d951e643a1c
+time=2026-03-28T17:15:34.466+03:00 level=INFO msg="Found MeshCore service"
+time=2026-03-28T17:15:34.466+03:00 level=INFO msg="Found TX characteristic"
+time=2026-03-28T17:15:34.466+03:00 level=INFO msg="Found RX characteristic"
+time=2026-03-28T17:15:34.466+03:00 level=INFO msg="Enabling notifications on TX characteristic..."
+time=2026-03-28T17:15:34.466+03:00 level=INFO msg="Notifications enabled"
+time=2026-03-28T17:15:34.990+03:00 level=INFO msg="Self info received" name=7C44431A pubkey=7c44431a153eb9bfdce427431c8a6bbd9d69368f79b8f3ec7c56bf21c83a36f0
+time=2026-03-28T17:15:35.217+03:00 level=INFO msg="Connected to device, waiting for data..."
+time=2026-03-28T17:15:35.217+03:00 level=INFO msg="Device info" firmware_version=10
+time=2026-03-28T17:15:35.217+03:00 level=INFO msg="Device details" max_contacts=350 max_channels=40 ble_pin=0 firmware_build=20-Mar-2026 model="Heltec V3" version=v1.14.1-467959c
+time=2026-03-28T17:15:35.217+03:00 level=INFO msg="Additional device info" client_repeat_enabled=false path_hash_mode=0
+time=2026-03-28T17:15:37.218+03:00 level=INFO msg="Waiting for self info..."
+time=2026-03-28T17:15:37.218+03:00 level=INFO msg="Self info ready, requesting channels..."
+time=2026-03-28T17:15:37.218+03:00 level=INFO msg="Requesting channels (count=8)"
+time=2026-03-28T17:15:37.272+03:00 level=INFO msg=Channel index=0 name=Public
+time=2026-03-28T17:15:37.333+03:00 level=INFO msg=Channel index=1 name=#hashtag
+time=2026-03-28T17:15:37.393+03:00 level=INFO msg="Channel empty" index=2
+time=2026-03-28T17:15:37.452+03:00 level=INFO msg="Channel empty" index=3
+time=2026-03-28T17:15:37.483+03:00 level=INFO msg="Channel empty" index=4
+time=2026-03-28T17:15:37.541+03:00 level=INFO msg="Channel empty" index=5
+time=2026-03-28T17:15:37.602+03:00 level=INFO msg="Channel empty" index=6
+time=2026-03-28T17:15:37.661+03:00 level=INFO msg="Channel empty" index=7
+time=2026-03-28T17:15:42.453+03:00 level=INFO msg="Waiting for channels completed"
+time=2026-03-28T17:15:44.453+03:00 level=INFO msg="Requesting contacts (since=0)"
+time=2026-03-28T17:15:47.486+03:00 level=INFO msg="Client started"
+
+Waiting for messages... Press Ctrl+C to exit.
+time=2026-03-28T17:15:47.486+03:00 level=INFO msg="Starting MQTT connection manager"
+time=2026-03-28T17:15:49.487+03:00 level=INFO msg="Connecting to custom MQTT broker" server=meshcoretel.ru port=1883
+time=2026-03-28T17:15:49.611+03:00 level=INFO msg="Connecting to Let's Mesh Analyzer" region=eu url=wss://mqtt-eu-v1.letsmesh.net:443/mqtt
+time=2026-03-28T17:15:49.611+03:00 level=INFO msg="MQTT connected" broker=custom
+time=2026-03-28T17:15:49.614+03:00 level=INFO msg="Auth token created" public_key=7C44431A153EB9BFDCE427431C8A6BBD9D69368F79B8F3EC7C56BF21C83A36F0 audience=mqtt-eu-v1.letsmesh.net expires=2026-03-29T17:15:49+03:00
+time=2026-03-28T17:15:49.614+03:00 level=INFO msg="Auth token generated" region=eu expires=2026-03-29T17:15:49.614+03:00 username=v1_7C44431A153EB9BFDCE427431C8A6BBD9D69368F79B8F3EC7C56BF21C83A36F0
+┌─ Radio Stats ─────────────────────────────
+│ Battery:    4244 mV (4.24 V)
+│ Uptime:     18h 40m 7s
+│ Queue:      0 packets
+│ Noise:      -118 dBm
+│ RSSI:       -127 dBm
+│ SNR:        -14.2 dB
+│ TX Airtime: 14s
+│ RX Airtime: 2m 8s
+├─ Packets ──────────────────────────────────
+│ Recv:       158 (flood: 155, direct: 3)
+│ Sent:       16 (flood: 12, direct: 4)
+│ RX Errors:  16
+└─ Updated: 17:15:49
+time=2026-03-28T17:15:50.350+03:00 level=INFO msg="MQTT connected" broker=eu
+time=2026-03-28T17:15:50.481+03:00 level=INFO msg="Status published"

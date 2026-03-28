@@ -841,7 +841,7 @@ func (b *MQTTBridge) publishStatusIfNeeded() {
 		return
 	}
 
-	b.logger.Info("Status publish triggered",
+	b.logger.Debug("Status publish triggered",
 		"last_publish", b.lastStatusPublish,
 		"elapsed", elapsed,
 		"interval", b.statusInterval,
@@ -986,10 +986,12 @@ func (b *MQTTBridge) publishStatus() {
 	b.publishStatusToAnalyzers(topic, jsonData)
 
 	b.lastStatusPublish = time.Now()
-	b.logger.Info("Status published", "topic", topic,
+	b.logger.Debug("Status published", "topic", topic,
 		"lat", mqttStatus.Lat, "lon", mqttStatus.Lon,
 		"tx_power", mqttStatus.TxPower,
 		"has_stats", mqttStatus.Stats != nil)
+
+	b.logger.Info("Status published")
 }
 
 // buildRadioString constructs the radio-config string from SelfInfo.
@@ -1064,6 +1066,7 @@ func (b *MQTTBridge) publishStatusToAnalyzers(topic string, data []byte) {
 		if token.Error() != nil {
 			b.logger.Error("Failed to publish status to US analyzer", "error", token.Error())
 		}
+		b.logger.Debug("Status published", "broker", "US analyzer")
 	}
 
 	if b.analyzerEUConnected.Load() && b.analyzerEUClient != nil {
@@ -1072,7 +1075,7 @@ func (b *MQTTBridge) publishStatusToAnalyzers(topic string, data []byte) {
 		if token.Error() != nil {
 			b.logger.Error("Failed to publish status to EU analyzer", "error", token.Error())
 		}
-		b.logger.Info("Status published", "broker", "analyzer")
+		b.logger.Debug("Status published", "broker", "EU analyzer")
 
 	}
 }
