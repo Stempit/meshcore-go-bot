@@ -124,7 +124,20 @@ func main() {
 	}()
 
 	// Блокируемся, пока не получим сигнал завершения
-	fmt.Println("Waiting for messages... Press Ctrl+C to exit.")
+	fmt.Println("\nWaiting for messages... Press Ctrl+C to exit.")
+
+	// =================================
+	// Запрашиваем и показываем статистику
+	// =================================
+	time.Sleep(2 * time.Second)
+	if err := client.RequestAllStats(); err != nil {
+		fmt.Printf("Failed to request stats: %v\n", err)
+	} else {
+		// Ждём, пока придут все stats
+		time.Sleep(500 * time.Millisecond)
+		fmt.Println(client.FormatStats())
+	}
+
 	done := make(chan struct{}) // Канал для сигнала о завершении (например, при нажатии Ctrl+C)
 	<-done
 }
