@@ -2,25 +2,27 @@ package commands
 
 import "strings"
 
-func GenerateReply(messageText string) (reply string) {
-	var err error
+// GenerateReplies routes incoming text to the appropriate command handler and returns
+// the messages to send back. Returns nil, nil when no command matches.
+func GenerateReplies(text, channelName string) ([]string, error) {
+	lower := strings.ToLower(text)
 
 	switch {
-	// llm
-	case strings.HasPrefix(strings.ToLower(messageText), ".llm"):
-		reply, err = ProcessLLMMessage(messageText)
+	case strings.HasPrefix(lower, ".last"):
+		return ProcessLastCommand(text, channelName)
+
+	case strings.HasPrefix(lower, ".llm"):
+		reply, err := ProcessLLMMessage(text)
 		if err != nil {
-			reply = "хз"
+			return []string{"хз"}, nil
 		}
-		return
-	//ping
-	case strings.ToLower(messageText) == "ping",
-		strings.ToLower(messageText) == "пинг",
-		strings.ToLower(messageText) == ".ping":
-		reply, _ = ProcessPingMessage(messageText)
-		return reply
-	// no command
+		return []string{reply}, nil
+
+	case lower == "ping", lower == "пинг", lower == ".ping":
+		reply, _ := ProcessPingMessage(text)
+		return []string{reply}, nil
+
 	default:
-		return ""
+		return nil, nil
 	}
 }

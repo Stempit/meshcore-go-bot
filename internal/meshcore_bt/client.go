@@ -2,15 +2,35 @@ package meshcore_bt
 
 import (
 	"bytes"
+	"crypto/aes"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
 	"time"
 
+	"meshbot/internal/historylog"
+	"meshbot/internal/mqttbridge"
+
 	"tinygo.org/x/bluetooth"
 )
+
+// pendingRawPacket holds a raw RF packet from a 0x88 BLE frame while waiting
+// to be correlated with the corresponding decoded 0x11 channel message frame.
+type pendingRawPacket struct {
+	rawData   []byte
+	snr       float64
+	rssi      float64
+	arrivedAt time.Time
+}
+
+// pendingRawTTL is how long a raw packet waits for a matching decoded frame
+// before being published as-is (without decoded channel fields).
+const pendingRawTTL = 2 * time.Second
 
 // ============================================================================
 // Основной клиент
@@ -31,6 +51,18 @@ type MeshCoreClient struct {
 	messages    map[string][]*Message // ключ – hex(senderKey)
 	channelMsgs map[int][]*ChannelMessage
 	stats       *CompanionRadioStats // накопленная статистика (все типы)
+
+	// MQTT bridge
+	mqtt *mqttbridge.MQTTBridge
+
+	// Contact lookup function for MQTT message sender names
+	contactLookupFunc func(pubKey []byte) string
+
+	// pendingRaw holds raw RF packets from 0x88 frames waiting to be correlated
+	// with a decoded 0x11 channel message frame. Both frames arrive sequentially
+	// on the same BLE notification stream, so no mutex is needed — only the BLE
+	// goroutine reads and writes this slice.
+	pendingRaw []pendingRawPacket
 
 	// Каналы для обработки
 	notifyCh chan []byte
@@ -57,7 +89,8 @@ type MeshCoreClient struct {
 	wg         sync.WaitGroup
 
 	// Логгер
-	logger *slog.Logger
+	logger  *slog.Logger
+	histLog *historylog.Logger
 }
 
 func NewMeshCoreClient(adapter *bluetooth.Adapter) *MeshCoreClient {
@@ -77,6 +110,12 @@ func NewMeshCoreClient(adapter *bluetooth.Adapter) *MeshCoreClient {
 // SetLogger позволяет установить собственный логгер.
 func (c *MeshCoreClient) SetLogger(logger *slog.Logger) {
 	c.logger = logger
+}
+
+// SetHistoryLogger attaches a history logger that records every incoming and
+// outgoing message to per-conversation files.
+func (c *MeshCoreClient) SetHistoryLogger(h *historylog.Logger) {
+	c.histLog = h
 }
 
 // ============================================================================
@@ -305,6 +344,7 @@ func (c *MeshCoreClient) sendTextMessage(recipient []byte, text string, attempt 
 	if err := c.write(buf.Bytes()); err != nil {
 		return messageID, err
 	}
+	c.OnPacketSent(buf.Bytes())
 	return messageID, nil
 }
 
@@ -338,7 +378,11 @@ func (c *MeshCoreClient) sendChannelTextMessage(channelIndex byte, text string) 
 	_ = binary.Write(buf, binary.LittleEndian, timestamp)
 	buf.WriteString(text)
 	buf.WriteByte(0)
-	return c.write(buf.Bytes())
+	if err := c.write(buf.Bytes()); err != nil {
+		return err
+	}
+	c.OnPacketSent(buf.Bytes())
+	return nil
 }
 
 func (c *MeshCoreClient) sendSetDeviceTime(timestamp uint32) error {
@@ -549,6 +593,12 @@ func (c *MeshCoreClient) parseContactMessageV3(data []byte) {
 
 	c.logger.Info("Received contact message V3", "sender", senderName, "key", key, "text", text)
 
+	if c.histLog != nil {
+		if err := c.histLog.LogDMIncoming(senderName, text, msg.Timestamp); err != nil {
+			c.logger.Error("historylog: failed to log incoming DM", "error", err)
+		}
+	}
+
 	if c.onMessage != nil {
 		c.onMessage(msg)
 	}
@@ -624,6 +674,48 @@ func (c *MeshCoreClient) parseChannelMessageV3(data []byte) {
 
 	if c.onChannelMessage != nil {
 		c.onChannelMessage(msg)
+	}
+
+	// Publish to MQTT packets topic with decoded fields.
+	// Correlate with the most recent pending 0x88 raw frame (same radio packet).
+	c.mu.RLock()
+	ch := c.channels[channelIndex]
+	mqttBridge := c.mqtt
+	c.mu.RUnlock()
+
+	channelName := fmt.Sprintf("ch%d", channelIndex)
+	var channelKeyHex string
+	if ch != nil && ch.Name != "" {
+		channelName = ch.Name
+	}
+	if ch != nil && len(ch.PSK) > 0 {
+		channelKeyHex = hex.EncodeToString(ch.PSK)
+	}
+
+	if c.histLog != nil {
+		if err := c.histLog.LogChannelIncoming(channelName, senderName, text, msg.Timestamp); err != nil {
+			c.logger.Error("historylog: failed to log incoming channel message", "error", err)
+		}
+	}
+
+	snr := float64(int8(data[1])) / 4.0
+	rssi := 0.0 // V3 frame does not carry RSSI; use pending raw value if found
+
+	// Find the oldest pending raw packet (0x88 arrives before 0x11, so oldest first).
+	var rawData []byte
+	for i := 0; i < len(c.pendingRaw); i++ {
+		p := c.pendingRaw[i]
+		if time.Since(p.arrivedAt) <= pendingRawTTL {
+			rawData = p.rawData
+			rssi = p.rssi
+			// Remove the matched entry so it is not published again.
+			c.pendingRaw = append(c.pendingRaw[:i], c.pendingRaw[i+1:]...)
+			break
+		}
+	}
+
+	if mqttBridge != nil {
+		mqttBridge.QueueChannelPacket(rawData, false, snr, rssi, channelIndex, channelName, senderName, text, channelKeyHex)
 	}
 
 	// отправляем в канал входящих сообщений
@@ -777,6 +869,39 @@ func (c *MeshCoreClient) parseChannelMessage(data []byte) {
 
 	if c.onChannelMessage != nil {
 		c.onChannelMessage(msg)
+	}
+
+	// Publish to MQTT packets topic with decoded fields.
+	c.mu.RLock()
+	ch := c.channels[channelIndex]
+	mqttBridge := c.mqtt
+	c.mu.RUnlock()
+
+	channelName := fmt.Sprintf("ch%d", channelIndex)
+	var channelKeyHex string
+	if ch != nil && ch.Name != "" {
+		channelName = ch.Name
+	}
+	if ch != nil && len(ch.PSK) > 0 {
+		channelKeyHex = hex.EncodeToString(ch.PSK)
+	}
+
+	// Correlate with the oldest pending 0x88 raw frame (arrives before decoded frame).
+	var rawData []byte
+	var snr, rssi float64
+	for i := 0; i < len(c.pendingRaw); i++ {
+		p := c.pendingRaw[i]
+		if time.Since(p.arrivedAt) <= pendingRawTTL {
+			rawData = p.rawData
+			snr = p.snr
+			rssi = p.rssi
+			c.pendingRaw = append(c.pendingRaw[:i], c.pendingRaw[i+1:]...)
+			break
+		}
+	}
+
+	if mqttBridge != nil {
+		mqttBridge.QueueChannelPacket(rawData, false, snr, rssi, channelIndex, channelName, senderName, text, channelKeyHex)
 	}
 
 	// отправляем в канал входящих сообщений
@@ -958,7 +1083,7 @@ func (c *MeshCoreClient) parseSelfInfo(data []byte) {
 
 // parseDeviceInfo разбирает RESP_CODE_DEVICE_INFO (0x0D).
 //
-// Формат (из MyMesh.cpp, CMD_DEVICE_QEURY):
+// Формат (из MyMesh.cpp, CMD_DEVICE_QUERY):
 //
 //	[code(1)][fw_ver(1)][max_contacts_raw(1)][max_channels(1)][ble_pin(4)]
 //	[fw_build(12)][model(40)][version(20)][client_repeat(1, v9+)][path_hash_mode(1, v10+)]
@@ -1057,6 +1182,7 @@ func (c *MeshCoreClient) parseContact(data []byte) {
 	if c.onContact != nil {
 		c.onContact(contact)
 	}
+
 }
 
 func (c *MeshCoreClient) parseContactV3(data []byte) {
@@ -1172,9 +1298,145 @@ func (c *MeshCoreClient) parsePathUpdated(data []byte) {
 }
 
 func (c *MeshCoreClient) parseAdvert(data []byte) {
-	// Пока просто логируем
 	c.logger.Info("Advert received", "data", fmt.Sprintf("%x", data))
-	// Здесь можно разобрать пакет и уведомить коллбэк, если нужно
+
+	// Frame format: [code(1)][pub_key(32)]  — total 33 bytes.
+	// The firmware pushes PUSH_CODE_ADVERT (0x80) with the full 32-byte
+	// public key of the node whose advert was just received over-the-air.
+	// SNR/RSSI are not included in this push frame.
+	if len(data) < 1+pubKeySize {
+		c.logger.Warn("parseAdvert: frame too short", "len", len(data), "need", 1+pubKeySize)
+		return
+	}
+
+	pubKey := make([]byte, pubKeySize)
+	copy(pubKey, data[1:1+pubKeySize])
+
+	// Look up the full contact from the contacts cache so that we can
+	// include name, type, GPS and path-length in the MQTT advert message.
+	c.mu.RLock()
+	contact := c.contacts[pubKeyHex(pubKey)]
+	c.mu.RUnlock()
+
+	if contact == nil {
+		// Contact not yet in cache (advert arrived before CMD_GET_CONTACTS
+		// response or auto-add is disabled).  Build a minimal stub so MQTT
+		// at least gets the public key.
+		c.logger.Warn("parseAdvert: contact not in cache, using stub",
+			"pub_key", fmt.Sprintf("%x", pubKey))
+		contact = &Contact{
+			PublicKey: pubKey,
+			LastSeen:  time.Now(),
+		}
+	}
+
+	c.mu.RLock()
+	mqttBridge := c.mqtt
+	c.mu.RUnlock()
+
+	if mqttBridge != nil {
+		// Correlate with the oldest pending 0x88 raw frame (arrives before 0x80).
+		var rawData []byte
+		var snr, rssi float64
+		for i := 0; i < len(c.pendingRaw); i++ {
+			p := c.pendingRaw[i]
+			if time.Since(p.arrivedAt) <= pendingRawTTL {
+				rawData = p.rawData
+				snr = p.snr
+				rssi = p.rssi
+				c.pendingRaw = append(c.pendingRaw[:i], c.pendingRaw[i+1:]...)
+				break
+			}
+		}
+		mqttBridge.QueuePacket(rawData, false, snr, rssi)
+	}
+}
+
+// buildGRPTXTPacket constructs a valid MeshCore GRP_TXT RF packet from plaintext
+// fields. This lets us publish outgoing channel messages to MQTT as TX packets so
+// the analyzer server can decode and display them like any other received packet.
+//
+// Encryption: AES-128-ECB with the 16-byte channel PSK.
+// MAC:        HMAC-SHA256(psk‖zeros16, ciphertext)[:2].
+// Wire:       [header=0x15][path_len=0x00][channel_hash(1)][mac(2)][ciphertext…]
+func buildGRPTXTPacket(psk []byte, senderName, text string) []byte {
+	if len(psk) < 16 {
+		return nil
+	}
+	key := psk[:16]
+
+	// Plaintext: timestamp(4 LE) + flags(1) + "sender: text"
+	ts := uint32(time.Now().Unix())
+	msg := senderName + ": " + text
+	plain := make([]byte, 5+len(msg))
+	binary.LittleEndian.PutUint32(plain[0:4], ts)
+	plain[4] = 0x00
+	copy(plain[5:], msg)
+
+	// Pad to AES block boundary
+	if pad := aes.BlockSize - (len(plain) % aes.BlockSize); pad != aes.BlockSize {
+		plain = append(plain, make([]byte, pad)...)
+	}
+
+	// AES-128-ECB encrypt (block by block, no IV)
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil
+	}
+	ct := make([]byte, len(plain))
+	for i := 0; i < len(plain); i += aes.BlockSize {
+		block.Encrypt(ct[i:i+aes.BlockSize], plain[i:i+aes.BlockSize])
+	}
+
+	// HMAC-SHA256 MAC: secret = key(16) + zeros(16)
+	secret := make([]byte, 32)
+	copy(secret, key)
+	h := hmac.New(sha256.New, secret)
+	h.Write(ct)
+	mac := h.Sum(nil)[:2]
+
+	// Channel hash = SHA256(PSK)[0]
+	hashSum := sha256.Sum256(key)
+
+	// Wire: [0x15 header][0x00 path_len][channel_hash][mac(2)][ciphertext…]
+	// header = ROUTE_TYPE_FLOOD(0x01) | PAYLOAD_TYPE_GRP_TXT(0x05)<<2 = 0x15
+	pkt := make([]byte, 0, 3+len(mac)+len(ct))
+	pkt = append(pkt, 0x15, 0x00, hashSum[0])
+	pkt = append(pkt, mac...)
+	pkt = append(pkt, ct...)
+	return pkt
+}
+
+// publishTXChannelPacket builds a synthetic outgoing GRP_TXT RF packet and
+// queues it for MQTT publishing as a TX packet. This makes our outgoing channel
+// messages visible on analyzer servers exactly like packets from any other device.
+func (c *MeshCoreClient) publishTXChannelPacket(channel *Channel, text string) {
+	c.mu.RLock()
+	mqttBridge := c.mqtt
+	selfInfo := c.selfInfo
+	c.mu.RUnlock()
+
+	if mqttBridge == nil || selfInfo == nil {
+		return
+	}
+	if len(channel.PSK) == 0 {
+		return
+	}
+
+	senderName := selfInfo.Name
+	rawPkt := buildGRPTXTPacket(channel.PSK, senderName, text)
+	if rawPkt == nil {
+		c.logger.Warn("publishTXChannelPacket: failed to build packet")
+		return
+	}
+
+	channelName := fmt.Sprintf("ch%d", channel.Index)
+	if channel.Name != "" {
+		channelName = channel.Name
+	}
+	channelKeyHex := hex.EncodeToString(channel.PSK[:16])
+
+	mqttBridge.QueueChannelPacket(rawPkt, true, 0, 0, channel.Index, channelName, senderName, text, channelKeyHex)
 }
 
 func (c *MeshCoreClient) parseOk(data []byte) {
@@ -1183,8 +1445,55 @@ func (c *MeshCoreClient) parseOk(data []byte) {
 }
 
 func (c *MeshCoreClient) parseLogRxData(data []byte) {
-	c.logger.Debug("Log RX data received", "data", fmt.Sprintf("%x", data))
-	// Можно игнорировать или использовать для отладки
+	// Frame: [0x88][SNR*4 as int8][RSSI as int8][raw RF bytes...]
+	if len(data) < 4 {
+		c.logger.Debug("Log RX data too short", "len", len(data))
+		return
+	}
+	snr := float64(int8(data[1])) / 4.0
+	rssi := float64(int8(data[2]))
+	rawData := make([]byte, len(data)-3)
+	copy(rawData, data[3:])
+
+	c.logger.Debug("Log RX data", "snr", snr, "rssi", rssi, "raw_len", len(rawData))
+
+	// Flush any stale pending raw packets that never got a matching 0x11 frame.
+	c.flushStalePendingRaw()
+
+	// Store in pending; parseChannelMessageV3 will correlate and publish.
+	c.pendingRaw = append(c.pendingRaw, pendingRawPacket{
+		rawData:   rawData,
+		snr:       snr,
+		rssi:      rssi,
+		arrivedAt: time.Now(),
+	})
+	if len(c.pendingRaw) > 8 {
+		c.pendingRaw = c.pendingRaw[len(c.pendingRaw)-8:]
+	}
+}
+
+// flushStalePendingRaw publishes any raw packets that have waited longer than
+// pendingRawTTL without a matching decoded channel message frame.
+func (c *MeshCoreClient) flushStalePendingRaw() {
+	if len(c.pendingRaw) == 0 {
+		return
+	}
+	c.mu.RLock()
+	mqttBridge := c.mqtt
+	c.mu.RUnlock()
+
+	now := time.Now()
+	remaining := c.pendingRaw[:0]
+	for _, p := range c.pendingRaw {
+		if now.Sub(p.arrivedAt) > pendingRawTTL {
+			if mqttBridge != nil {
+				mqttBridge.QueuePacket(p.rawData, false, p.snr, p.rssi)
+			}
+		} else {
+			remaining = append(remaining, p)
+		}
+	}
+	c.pendingRaw = remaining
 }
 
 // parseBatteryAndStorage разбирает RESP_CODE_BATT_AND_STORAGE (0x0C).
@@ -1415,6 +1724,11 @@ func (c *MeshCoreClient) SendMessageWithRetry(contact *Contact, text string, wai
 
 		select {
 		case <-confirmCh:
+			if c.histLog != nil {
+				if err := c.histLog.LogDMOutgoing(contact.Name, text, time.Now()); err != nil {
+					c.logger.Error("historylog: failed to log outgoing DM", "error", err)
+				}
+			}
 			return nil
 		case <-time.After(timeout):
 			c.confirmMu.Lock()
@@ -1477,6 +1791,12 @@ func (c *MeshCoreClient) SendChannelMessageWithRetry(channel *Channel, text stri
 
 		select {
 		case <-confirmCh:
+			c.publishTXChannelPacket(channel, text)
+			if c.histLog != nil {
+				if err := c.histLog.LogChannelOutgoing(channel.Name, text, time.Now()); err != nil {
+					c.logger.Error("historylog: failed to log outgoing channel message", "error", err)
+				}
+			}
 			return nil
 		case <-time.After(timeout):
 			c.confirmMu.Lock()
@@ -1523,6 +1843,14 @@ func (c *MeshCoreClient) SetNodeName(name string) error {
 
 func (c *MeshCoreClient) SetNodeLocation(lat, lon float64) error {
 	return c.sendSetAdvertLatLon(lat, lon)
+}
+
+func (c *MeshCoreClient) SendSelfAdvert(flood bool) error {
+	floodByte := byte(0)
+	if flood {
+		floodByte = 1
+	}
+	return c.write([]byte{cmdSendSelfAdvert, floodByte})
 }
 
 func (c *MeshCoreClient) Reboot() error {
@@ -1689,4 +2017,209 @@ func (c *MeshCoreClient) OnBattery(f func(millivolts int, usedKb, totalKb int)) 
 }
 func (c *MeshCoreClient) OnError(f func(error)) {
 	c.onError = f
+}
+
+// ============================================================================
+// MQTT Integration
+// ============================================================================
+
+// MQTTBridge returns the MQTT bridge instance (nil if not configured).
+func (c *MeshCoreClient) MQTTBridge() *mqttbridge.MQTTBridge {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.mqtt
+}
+
+// SetContactLookupFunc sets a function to lookup contact names by public key.
+// This is used by the MQTT bridge to provide meaningful sender names in messages.
+func (c *MeshCoreClient) SetContactLookupFunc(f func(pubKey []byte) string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.contactLookupFunc = f
+}
+
+// toDeviceInfo converts SelfInfo to mqttbridge.DeviceInfo.
+func toDeviceInfo(info *SelfInfo) *mqttbridge.DeviceInfo {
+	if info == nil {
+		return nil
+	}
+	return &mqttbridge.DeviceInfo{
+		PublicKey: info.PublicKey,
+		Name:      info.Name,
+		TxPower:   info.TxPower,
+		Latitude:  info.Latitude,
+		Longitude: info.Longitude,
+		FreqHz:    info.FreqHz,
+		BwHz:      info.BwHz,
+		Sf:        info.Sf,
+		Cr:        info.Cr,
+	}
+}
+
+// toDeviceStats converts CompanionRadioStats to mqttbridge.DeviceStats.
+func toDeviceStats(stats *CompanionRadioStats) *mqttbridge.DeviceStats {
+	if stats == nil {
+		return nil
+	}
+	return &mqttbridge.DeviceStats{
+		BatteryMv:         stats.BatteryMv,
+		UptimeSecs:        stats.UptimeSecs,
+		Errors:            stats.Errors,
+		QueueLen:          stats.QueueLen,
+		TxAirSecs:         stats.TxAirSecs,
+		RxAirSecs:         stats.RxAirSecs,
+		NoiseFloorDbm:     stats.NoiseFloorDbm,
+		LastRssi:          stats.LastRssi,
+		LastSnrDb:         stats.LastSnrDb,
+		PacketsRecv:       stats.PacketsRecv,
+		PacketsSent:       stats.PacketsSent,
+		PacketsFloodTx:    stats.PacketsFloodTx,
+		PacketsDirectTx:   stats.PacketsDirectTx,
+		PacketsFloodRx:    stats.PacketsFloodRx,
+		PacketsDirectRx:   stats.PacketsDirectRx,
+		PacketsRecvErrors: stats.PacketsRecvErrors,
+	}
+}
+
+// SetMQTTConfig configures and starts the MQTT bridge.
+// Returns the MQTTBridge instance or nil if configuration is invalid.
+func (c *MeshCoreClient) SetMQTTConfig(config *mqttbridge.MQTTConfig) (*mqttbridge.MQTTBridge, error) {
+	if config == nil {
+		return nil, fmt.Errorf("mqtt config is required")
+	}
+
+	// CRITICAL: Stop existing MQTT bridge before creating new one
+	// This prevents connection conflicts and stale state issues
+	c.StopMQTT()
+
+	// Create MQTT bridge
+	bridge := mqttbridge.NewMQTTBridge(config)
+	bridge.SetLogger(c.logger)
+
+	// Set initial device info if available
+	c.mu.RLock()
+	if c.selfInfo != nil {
+		bridge.SetDeviceInfo(toDeviceInfo(c.selfInfo))
+	}
+	c.mu.RUnlock()
+
+	// Set MQTT callbacks to forward events
+	bridge.SetCallbacks(mqttbridge.MQTTCallbacks{
+		OnConnected: func(broker string) {
+			c.logger.Info("MQTT connected", "broker", broker)
+		},
+		OnDisconnected: func(broker string) {
+			c.logger.Info("MQTT disconnected", "broker", broker)
+		},
+		OnStatus: func(status *mqttbridge.MQTTStatus) {
+			c.logger.Debug("MQTT status received", "status", status.Status)
+		},
+		OnPacket: func(packet *mqttbridge.MQTTPacket) {
+			c.logger.Debug("MQTT packet received", "direction", packet.Direction)
+		},
+		OnRaw: func(raw *mqttbridge.MQTTRaw) {
+			c.logger.Debug("MQTT raw received")
+		},
+	})
+
+	// Start the bridge
+	if err := bridge.Start(); err != nil {
+		return nil, fmt.Errorf("failed to start MQTT bridge: %w", err)
+	}
+
+	// Update client reference
+	c.mu.Lock()
+	c.mqtt = bridge
+	c.mu.Unlock()
+
+	// When self info is received, update MQTT device info
+	originalOnSelfInfo := c.onSelfInfo
+	c.onSelfInfo = func(info *SelfInfo) {
+		bridge.SetDeviceInfo(toDeviceInfo(info))
+		if originalOnSelfInfo != nil {
+			originalOnSelfInfo(info)
+		}
+	}
+
+	// When stats are received, update MQTT device stats
+	originalOnStats := c.onStats
+	c.onStats = func(stats *CompanionRadioStats) {
+		bridge.SetDeviceStats(toDeviceStats(stats))
+		if originalOnStats != nil {
+			originalOnStats(stats)
+		}
+	}
+
+	return bridge, nil
+}
+
+// StopMQTT stops the MQTT bridge and cleans up.
+func (c *MeshCoreClient) StopMQTT() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.mqtt != nil {
+		c.mqtt.Stop()
+		c.mqtt = nil
+	}
+}
+
+// MQTTStatus returns a formatted string describing MQTT connection state.
+func (c *MeshCoreClient) MQTTStatus() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.mqtt == nil {
+		return "mqtt: not configured"
+	}
+	return c.mqtt.FormatStatusReply()
+}
+
+// OnPacketReceived is called by the frame handler when a mesh packet is received.
+// This forwards packets to MQTT for publishing if enabled.
+func (c *MeshCoreClient) OnPacketReceived(rawData []byte, snr, rssi float64) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.mqtt != nil {
+		c.mqtt.OnPacketReceived(rawData, snr, rssi)
+	}
+}
+
+// OnPacketSent is called when a mesh packet is transmitted.
+// This forwards packets to MQTT for publishing if enabled.
+func (c *MeshCoreClient) OnPacketSent(rawData []byte) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.mqtt != nil {
+		c.mqtt.OnPacketSent(rawData)
+	}
+}
+
+// MQTTConfig returns the current MQTT configuration.
+func (c *MeshCoreClient) MQTTConfig() *mqttbridge.MQTTConfig {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.mqtt == nil {
+		return nil
+	}
+	return c.mqtt.GetConfig()
+}
+
+// UpdateMQTTConfig updates the MQTT configuration at runtime.
+func (c *MeshCoreClient) UpdateMQTTConfig(config *mqttbridge.MQTTConfig) error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.mqtt == nil {
+		return fmt.Errorf("mqtt not configured")
+	}
+	c.mqtt.SetConfig(config)
+	return nil
+}
+
+// GetMQTTConnectionState returns the connection state of all MQTT brokers.
+func (c *MeshCoreClient) GetMQTTConnectionState() []mqttbridge.BrokerInfo {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.mqtt == nil {
+		return nil
+	}
+	return c.mqtt.GetConnectionState()
 }

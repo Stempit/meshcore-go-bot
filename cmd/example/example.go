@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sync"
 	"time"
 
 	meshcore "meshbot/internal/meshcore_bt"
@@ -65,6 +66,46 @@ func main() {
 			}
 		} else {
 			fmt.Println("Channel not found or empty")
+		}
+	}
+
+	if false {
+		// =================================
+		// Чтение сохранённых сообщений с устройства
+		// =================================
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+
+		client.OnNoMoreMessages(func() {
+			wg.Done()
+		})
+
+		// Запускаем горутину для приёма сообщений до сигнала NoMoreMessages
+		go func() {
+			for msg := range client.IncomingMessages() {
+				switch m := msg.(type) {
+				case *meshcore.Message:
+					fmt.Printf("Сохранённое личное сообщение от %x: %s\n", m.SenderKey[:6], m.Text)
+				case *meshcore.ChannelMessage:
+					fmt.Printf("Сохранённое канальное сообщение в канале %d от %s: %s\n", m.ChannelIndex, m.SenderName, m.Text)
+				}
+			}
+		}()
+
+		// Запрашиваем первое сообщение; устройство само пришлёт остальные по цепочке
+		if err := client.SyncNextMessage(); err != nil {
+			fmt.Printf("Ошибка синхронизации: %v\n", err)
+		} else {
+			wg.Wait() // ждём, пока устройство пришлёт respCodeNoMoreMessages
+		}
+
+		// Теперь все сообщения накоплены в клиенте
+		for _, m := range client.GetAllMessages() {
+			fmt.Printf("Личное: от %x: %s\n", m.SenderKey[:6], m.Text)
+		}
+		for _, m := range client.GetAllChannelMessages() {
+			fmt.Printf("Канал %d от %s: %s\n", m.ChannelIndex, m.SenderName, m.Text)
 		}
 	}
 
@@ -138,6 +179,15 @@ func main() {
 				}
 			}
 		}()
+
+		// отправка адверта
+		if false {
+			if err := client.SendSelfAdvert(true); err != nil {
+				fmt.Printf("Failed to send self advert: %v\n", err)
+			} else {
+				fmt.Println("Self advert sent (flood)")
+			}
+		}
 
 		// Блокируемся, пока не получим сигнал завершения
 		fmt.Println("Waiting for messages... Press Ctrl+C to exit.")
