@@ -367,6 +367,22 @@ func (b *MQTTBridge) connectToAnalyzer(region, brokerURL string) {
 		return
 	}
 
+	// Disconnect and discard any existing client before creating a new one.
+	// This prevents two clients with the same ID competing on the broker,
+	// which would trigger an infinite kick-reconnect loop (same fix as custom broker).
+	switch region {
+	case "us":
+		if b.analyzerUSClient != nil {
+			b.analyzerUSClient.Disconnect(250)
+			b.analyzerUSClient = nil
+		}
+	case "eu":
+		if b.analyzerEUClient != nil {
+			b.analyzerEUClient.Disconnect(250)
+			b.analyzerEUClient = nil
+		}
+	}
+
 	b.logger.Info("Connecting to Let's Mesh Analyzer", "region", region, "url", brokerURL)
 
 	// For analyzer servers, use JWT token as password
@@ -399,6 +415,10 @@ func (b *MQTTBridge) connectToAnalyzer(region, brokerURL string) {
 		b.scheduleReconnect(region)
 		return
 	}
+
+	// Record the connection attempt time so connectionManager does not immediately
+	// spin up another client on the next 5-second tick before OnConnect fires.
+	b.lastReconnect[region] = time.Now()
 
 	switch region {
 	case "us":
@@ -497,7 +517,7 @@ func (b *MQTTBridge) handleConnect(brokerID string) {
 
 	connected.Store(true)
 	b.reconnectAttempts[brokerID] = 0
-	b.reconnectDelay[brokerID] = 5 * time.Second
+	b.reconnectDelay[brokerID] = 15 * time.Second
 
 	if b.onConnected != nil {
 		b.onConnected(brokerID)
@@ -898,12 +918,14 @@ func getRouteType(data []byte) string {
 // getPayloadLen returns the payload byte count from the raw packet.
 //
 // Wire format (from Packet.cpp writeTo()):
-//   [header(1)] [transport_codes(4) — only for TRANSPORT routes] [path_len(1)] [path...] [payload...]
+//
+//	[header(1)] [transport_codes(4) — only for TRANSPORT routes] [path_len(1)] [path...] [payload...]
 //
 // path_len byte encoding is identical for ALL route types (from Packet.h):
-//   hash_count = path_len & 0x3F   (bits 0-5)
-//   hash_size  = (path_len >> 6) + 1  (bits 6-7 → 1/2/3 bytes per hop; 4 is reserved/invalid)
-//   path bytes = hash_count * hash_size
+//
+//	hash_count = path_len & 0x3F   (bits 0-5)
+//	hash_size  = (path_len >> 6) + 1  (bits 6-7 → 1/2/3 bytes per hop; 4 is reserved/invalid)
+//	path bytes = hash_count * hash_size
 func getPayloadLen(data []byte) int {
 	if len(data) < 2 {
 		return 0
@@ -1099,7 +1121,7 @@ func (b *MQTTBridge) publishStatus() {
 		mqttStatus.Stats = buildMQTTStats(stats)
 	}
 
-	// Build topic and serialise.
+	// Build topic and serialize.
 	iata := b.config.IATA
 	if iata == "" {
 		iata = "XXX"
@@ -1187,7 +1209,7 @@ func buildRadioString(info *SelfInfo) string {
 
 // buildMQTTStats maps all fields from CompanionRadioStats → MQTTStats.
 //
-// Airtime utilisation is derived as:
+// Airtime utilization is derived as:
 //
 //	(TxAirSecs + RxAirSecs) / UptimeSecs × 100   [rounded to 2 decimal places]
 //
@@ -1223,7 +1245,7 @@ func buildMQTTStats(stats *CompanionRadioStats) *MQTTStats {
 		RecvErrors:      int(stats.PacketsRecvErrors),
 	}
 
-	// Airtime utilisation percentage — only meaningful once the device has been
+	// Airtime utilization percentage — only meaningful once the device has been
 	// up for at least one second and has logged some air time.
 	if stats.UptimeSecs > 0 {
 		airSecs := float64(stats.TxAirSecs + stats.RxAirSecs)
