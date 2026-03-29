@@ -43,6 +43,40 @@ func main() {
 
 	mqttCfg := config.Get().MQTT
 	client.SetMQTTConfig(&mqttCfg)
+
+	// =================================
+	// Синхронизация сохранённых сообщений
+	// =================================
+
+	syncDone := make(chan struct{})
+	client.OnNoMoreMessages(func() {
+		fmt.Println("=== Сохранённые сообщения ===")
+		for _, m := range client.GetAllMessages() {
+			fmt.Printf("[Stored] Личное от %x: %s\n", m.SenderKey[:6], m.Text)
+		}
+		for _, m := range client.GetAllChannelMessages() {
+			fmt.Printf("[Stored] Канал %d от %s: %s\n", m.ChannelIndex, m.SenderName, m.Text)
+		}
+		fmt.Println("=== Конец сохранённых сообщений ===")
+		close(syncDone)
+	})
+
+	if err := client.SyncNextMessage(); err != nil {
+		fmt.Printf("Failed to sync stored messages: %v\n", err)
+		close(syncDone)
+	}
+	<-syncDone
+
+	// Сбрасываем буфер канала — там могут быть сохранённые сообщения
+	for {
+		select {
+		case <-client.IncomingMessages():
+		default:
+			goto startProcessing
+		}
+	}
+startProcessing:
+
 	// =================================
 	// Обработка входящих сообщений
 	// =================================
