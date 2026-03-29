@@ -180,6 +180,7 @@ func main() {
 			}
 		}()
 
+		// отправка адверта
 		if false {
 			if err := client.SendSelfAdvert(true); err != nil {
 				fmt.Printf("Failed to send self advert: %v\n", err)
@@ -187,6 +188,7 @@ func main() {
 				fmt.Println("Self advert sent (flood)")
 			}
 		}
+
 		// Блокируемся, пока не получим сигнал завершения
 		fmt.Println("Waiting for messages... Press Ctrl+C to exit.")
 		done := make(chan struct{}) // Канал для сигнала о завершении (например, при нажатии Ctrl+C)
