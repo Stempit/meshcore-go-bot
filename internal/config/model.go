@@ -1,6 +1,9 @@
 package config
 
+import "meshbot/internal/mqttbridge"
+
 type Config struct {
+	MQTT mqttbridge.MQTTConfig `yaml:"MQTT"`
 	LLM struct {
 		Enabled           bool    `yaml:"enabled"`
 		Type              string  `yaml:"type"`

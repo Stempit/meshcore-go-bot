@@ -1,4 +1,30 @@
 ---
+MQTT:
+  # common mqtt config
+  origin: <devicename>    # yours device name
+  iata: KVX               # region by iata
+  status_enabled: true    # send status updates
+  packets_enabled: true   # send incoming packets
+  tx_enabled: true        # send outgoing packets
+  status_interval: 50000  # ms
+  adverts_enabled: true
+  messages_enabled: true
+  channel_msgs_enabled: true
+  delivery_enabled: true
+  path_updates_enabled: true
+
+  # old mqtt server (tcp)
+  server: meshcoretel.ru
+  port: 1883
+  username: meshcore
+  password: meshcore
+  
+  # new mqtt servers by let's mesh (websocket)
+  analyzer_eu: true  # send to EU analyzer  
+  analyzer_us: true  # send to US analyzer
+  owner_email: your@email.here
+  device_private_key: "SECRET"  # 128 symbols device private key for JWT
+
 LLM:
   enabled: true
   # type: ollama

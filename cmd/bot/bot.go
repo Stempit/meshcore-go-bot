@@ -11,7 +11,6 @@ import (
 	"meshbot/internal/config"
 	"meshbot/internal/historylog"
 	meshcore "meshbot/internal/meshcore_bt"
-	"meshbot/internal/mqttbridge"
 )
 
 func main() {
@@ -42,29 +41,8 @@ func main() {
 
 	client.SetHistoryLogger(histlog)
 
-	client.SetMQTTConfig(&mqttbridge.MQTTConfig{
-		Server:         "meshcoretel.ru",
-		Port:           1883,
-		Username:       "meshcore",
-		Password:       "meshcore",
-		Origin:         "MeshCore-7C44431A",
-		IATA:           "KVX",
-		StatusEnabled:  true,
-		PacketsEnabled: true,
-		TxEnabled:      true,
-		StatusInterval: 30000,
-		AnalyzerEU:     true,
-		AnalyzerUS:     true,
-		OwnerEmail:     "stempit@gmail.com",
-		// Ed25519 private key (64 hex chars) - REQUIRED for Let's Mesh Analyzer JWT signing
-		// Replace with your actual device private key
-		DevicePrivKey:      "c88339c95e245316303d9ca77f7c0d296affe1f74a974ec10c6cf5649ba444427373a5297fdf8e961cf4db3a6e4c871b56bcc1e65333da83721116973bc7ddb3",
-		AdvertsEnabled:     true, // Enable advertisement/contact messages
-		MessagesEnabled:    true, // Enable direct/private messages
-		ChannelMsgsEnabled: true, // Enable channel/group messages
-		DeliveryEnabled:    true, // Enable delivery receipts
-		PathUpdatesEnabled: true, // Enable path update notifications
-	})
+	mqttCfg := config.Get().MQTT
+	client.SetMQTTConfig(&mqttCfg)
 	// =================================
 	// Обработка входящих сообщений
 	// =================================
