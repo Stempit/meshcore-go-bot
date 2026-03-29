@@ -11,6 +11,7 @@ import (
 	"meshbot/internal/config"
 	"meshbot/internal/historylog"
 	meshcore "meshbot/internal/meshcore_bt"
+	"meshbot/internal/mqttbridge"
 )
 
 func main() {
@@ -41,7 +42,7 @@ func main() {
 
 	client.SetHistoryLogger(histlog)
 
-	client.SetMQTTConfig(&meshcore.MQTTConfig{
+	client.SetMQTTConfig(&mqttbridge.MQTTConfig{
 		Server:         "meshcoretel.ru",
 		Port:           1883,
 		Username:       "meshcore",

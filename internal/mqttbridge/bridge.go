@@ -1,4 +1,4 @@
-package meshcore_bt
+package mqttbridge
 
 import (
 	"bytes"
@@ -78,7 +78,7 @@ odI2D4SseesQ6bDrarZ7C30ddLibZatoKiws3UL9xnELz4ct92vID24FfVbiI1hY
 +SW6FoVHkNeWIP0GCbaM4C6uVdF5dTUsMVs/ZbzNnIdCp5Gxmx5ejvEau8otR/Cs
 kGN+hr/W5GvT1tMBjgWKZ1i4//emhA1JG1BbPzoLJQvyEotc03lXjTaCzv8mEbep
 8RqZ7a2CPsgRbuvTPBwcOMBBmuFeU88+FSBX6+7iP0il8b4Z0QFqIwwMHfs/L6K1
-vepuoxtGzi4CZ68zJpiq1UvSqTbFJjtbD4seiMHl
+vKAIiFDg0A4HnVWX+mYAMMLo1VKQaFfYwcfMFjPrPB37y0PBjBsHqWQ=
 -----END CERTIFICATE-----`
 
 // ============================================================================
@@ -87,10 +87,10 @@ vepuoxtGzi4CZ68zJpiq1UvSqTbFJjtbD4seiMHl
 
 // MQTTBridge handles MQTT connectivity for MeshCore
 type MQTTBridge struct {
-	config   *MQTTConfig
-	logger   *slog.Logger
-	selfInfo *SelfInfo
-	stats    *CompanionRadioStats
+	config     *MQTTConfig
+	logger     *slog.Logger
+	deviceInfo *DeviceInfo
+	stats      *DeviceStats
 
 	// MQTT clients
 	customClient     mqtt.Client
@@ -165,11 +165,11 @@ func (b *MQTTBridge) SetLogger(logger *slog.Logger) {
 	b.logger = logger
 }
 
-// SetSelfInfo sets device info for MQTT topics
-func (b *MQTTBridge) SetSelfInfo(info *SelfInfo) {
+// SetDeviceInfo sets device info for MQTT topics
+func (b *MQTTBridge) SetDeviceInfo(info *DeviceInfo) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.selfInfo = info
+	b.deviceInfo = info
 
 	// Generate analyzer username (format: v1_{UPPERCASE_PUBLIC_KEY})
 	// CRITICAL: Broker expects uppercase hex, not lowercase!
@@ -179,8 +179,8 @@ func (b *MQTTBridge) SetSelfInfo(info *SelfInfo) {
 	}
 }
 
-// SetStats sets radio statistics for status messages
-func (b *MQTTBridge) SetStats(stats *CompanionRadioStats) {
+// SetDeviceStats sets radio statistics for status messages
+func (b *MQTTBridge) SetDeviceStats(stats *DeviceStats) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.stats = stats
@@ -193,15 +193,6 @@ func (b *MQTTBridge) SetCallbacks(callbacks MQTTCallbacks) {
 	b.onRaw = callbacks.OnRaw
 	b.onConnected = callbacks.OnConnected
 	b.onDisconnected = callbacks.OnDisconnected
-}
-
-// MQTTCallbacks holds callback functions for MQTT events
-type MQTTCallbacks struct {
-	OnStatus       func(*MQTTStatus)
-	OnPacket       func(*MQTTPacket)
-	OnRaw          func(*MQTTRaw)
-	OnConnected    func(string) // broker name
-	OnDisconnected func(string) // broker name
 }
 
 // Start begins the MQTT connection process
@@ -727,18 +718,18 @@ func (b *MQTTBridge) processQueue() {
 // publishPacket publishes a single packet to all connected brokers
 func (b *MQTTBridge) publishPacket(packet *QueuedPacket) {
 	b.mu.RLock()
-	selfInfo := b.selfInfo
+	deviceInfo := b.deviceInfo
 	b.mu.RUnlock()
 
-	if selfInfo == nil {
-		b.logger.Warn("Cannot publish packet: no self info")
+	if deviceInfo == nil {
+		b.logger.Warn("Cannot publish packet: no device info")
 		return
 	}
 
-	originID := hex.EncodeToString(selfInfo.PublicKey)
+	originID := hex.EncodeToString(deviceInfo.PublicKey)
 	origin := b.config.Origin
 	if origin == "" {
-		origin = selfInfo.Name
+		origin = deviceInfo.Name
 	}
 
 	// Build packet message
@@ -1050,13 +1041,13 @@ func (b *MQTTBridge) publishStatusIfNeeded() {
 // the latest state immediately.
 func (b *MQTTBridge) publishStatus() {
 	b.mu.RLock()
-	selfInfo := b.selfInfo
+	deviceInfo := b.deviceInfo
 	stats := b.stats
 	config := b.config
 	b.mu.RUnlock()
 
-	if selfInfo == nil {
-		b.logger.Warn("Cannot publish status: no self info")
+	if deviceInfo == nil {
+		b.logger.Warn("Cannot publish status: no device info")
 		return
 	}
 
@@ -1065,7 +1056,7 @@ func (b *MQTTBridge) publishStatus() {
 		"custom_connected", b.customConnected.Load(),
 		"analyzer_us_connected", b.analyzerUSConnected.Load(),
 		"analyzer_eu_connected", b.analyzerEUConnected.Load(),
-		"self_info_nil", selfInfo == nil,
+		"device_info_nil", deviceInfo == nil,
 		"stats_nil", stats == nil)
 
 	// Log stats details if available
@@ -1085,10 +1076,10 @@ func (b *MQTTBridge) publishStatus() {
 		b.logger.Warn("PUBLISH_STATUS: No stats available")
 	}
 
-	originID := hex.EncodeToString(selfInfo.PublicKey)
+	originID := hex.EncodeToString(deviceInfo.PublicKey)
 	origin := b.config.Origin
 	if origin == "" {
-		origin = selfInfo.Name
+		origin = deviceInfo.Name
 	}
 
 	// Build status message with all available device parameters.
@@ -1099,21 +1090,21 @@ func (b *MQTTBridge) publishStatus() {
 		OriginID:        originID,
 		Model:           "MeshCore",
 		FirmwareVersion: "v1.0.0",
-		Radio:           buildRadioString(selfInfo),
+		Radio:           buildRadioString(deviceInfo),
 		ClientVersion:   "meshcore/v1.0.0",
 	}
 
 	// GPS coordinates — include only when the device has a valid fix.
 	// In MeshCore, (0,0) means "no GPS" (it is in the ocean and unreachable by LoRa).
-	if selfInfo.Latitude != 0 || selfInfo.Longitude != 0 {
-		mqttStatus.Lat = selfInfo.Latitude
-		mqttStatus.Lon = selfInfo.Longitude
+	if deviceInfo.Latitude != 0 || deviceInfo.Longitude != 0 {
+		mqttStatus.Lat = deviceInfo.Latitude
+		mqttStatus.Lon = deviceInfo.Longitude
 	}
 
 	// TX power — include when non-zero (0 dBm is an invalid TX power for any
 	// real LoRa device; the field is simply unset in that case).
-	if selfInfo.TxPower != 0 {
-		mqttStatus.TxPower = int(selfInfo.TxPower)
+	if deviceInfo.TxPower != 0 {
+		mqttStatus.TxPower = int(deviceInfo.TxPower)
 	}
 
 	// Comprehensive stats — all counters from the last CMD_GET_STATS response.
@@ -1191,14 +1182,14 @@ func (b *MQTTBridge) publishStatus() {
 	b.logger.Info("Status published")
 }
 
-// buildRadioString constructs the radio-config string from SelfInfo.
+// buildRadioString constructs the radio-config string from DeviceInfo.
 //
 // Format expected by Let's Mesh Analyzer: "{freq_khz},{bw_khz},{sf},{cr}"
 //   - freq_khz — carrier frequency in kHz  (e.g. 869525.000)
 //   - bw_khz   — channel bandwidth in kHz  (e.g. 62.5, 125.0, 250.0, 500.0)
 //   - sf        — LoRa spreading factor     (7–12)
 //   - cr        — LoRa coding rate          (5=4/5 … 8=4/8)
-func buildRadioString(info *SelfInfo) string {
+func buildRadioString(info *DeviceInfo) string {
 	if info == nil || info.FreqHz == 0 {
 		return ""
 	}
@@ -1207,7 +1198,7 @@ func buildRadioString(info *SelfInfo) string {
 	return fmt.Sprintf("%.3f,%.1f,%d,%d", freqKHz, bwKHz, info.Sf, info.Cr)
 }
 
-// buildMQTTStats maps all fields from CompanionRadioStats → MQTTStats.
+// buildMQTTStats maps all fields from DeviceStats → MQTTStats.
 //
 // Airtime utilization is derived as:
 //
@@ -1216,7 +1207,7 @@ func buildRadioString(info *SelfInfo) string {
 // Fields whose source value is naturally zero when not-yet-populated (e.g.
 // BatteryMv=0 means no battery telemetry) are left at their Go zero value and
 // therefore omitted from the JSON output by the `omitempty` tag.
-func buildMQTTStats(stats *CompanionRadioStats) *MQTTStats {
+func buildMQTTStats(stats *DeviceStats) *MQTTStats {
 	if stats == nil {
 		return nil
 	}
@@ -1309,7 +1300,7 @@ func (b *MQTTBridge) getAuthToken(region string) string {
 // renewAuthToken renews the JWT token for analyzer servers
 func (b *MQTTBridge) renewAuthToken(region string) {
 	b.mu.RLock()
-	selfInfo := b.selfInfo
+	deviceInfo := b.deviceInfo
 	ownerEmail := b.config.OwnerEmail
 	devicePrivKey := b.config.DevicePrivKey
 	b.mu.RUnlock()
@@ -1321,8 +1312,8 @@ func (b *MQTTBridge) renewAuthToken(region string) {
 		return
 	}
 
-	if selfInfo == nil || len(selfInfo.PublicKey) < 32 {
-		b.logger.Warn("Cannot renew auth token: no self info")
+	if deviceInfo == nil || len(deviceInfo.PublicKey) < 32 {
+		b.logger.Warn("Cannot renew auth token: no device info")
 		return
 	}
 
@@ -1341,7 +1332,7 @@ func (b *MQTTBridge) renewAuthToken(region string) {
 
 	// Generate JWT token with Ed25519 signing
 	expiresIn := 86400 // 24 hours
-	jwtToken, err := b.createSignedJWT(selfInfo.PublicKey, devicePrivKey, ownerEmail, serverName, expiresIn)
+	jwtToken, err := b.createSignedJWT(deviceInfo.PublicKey, devicePrivKey, ownerEmail, serverName, expiresIn)
 	if err != nil {
 		b.logger.Error("Failed to create signed JWT", "region", region, "error", err)
 		return
@@ -1509,18 +1500,18 @@ func (b *MQTTBridge) signWithOrlpKey(message, expandedPrivKey, pubKey []byte) ([
 // CreateAuthToken generates a JWT token for Let's Mesh Analyzer (public API).
 func (b *MQTTBridge) CreateAuthToken(serverName string, expiresInSeconds int) (string, error) {
 	b.mu.RLock()
-	selfInfo := b.selfInfo
+	deviceInfo := b.deviceInfo
 	privKey := b.config.DevicePrivKey
 	email := b.config.OwnerEmail
 	b.mu.RUnlock()
 
-	if selfInfo == nil || len(selfInfo.PublicKey) < 32 {
-		return "", fmt.Errorf("no self info available")
+	if deviceInfo == nil || len(deviceInfo.PublicKey) < 32 {
+		return "", fmt.Errorf("no device info available")
 	}
 	if privKey == "" {
 		return "", fmt.Errorf("DevicePrivKey not configured")
 	}
-	return b.createSignedJWT(selfInfo.PublicKey, privKey, email, serverName, expiresInSeconds)
+	return b.createSignedJWT(deviceInfo.PublicKey, privKey, email, serverName, expiresInSeconds)
 }
 
 // ============================================================================
