@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"log/slog"
 	"os"
 	"time"
@@ -20,7 +19,7 @@ func main() {
 	if err != nil {
 		// Обрабатываем ошибку: можно завершить приложение с подробным сообщением
 		slog.Error("Failed to load configuration", "error", err)
-		log.Fatal("Cannot start application: configuration error")
+		os.Exit(1)
 	}
 
 	// logging
@@ -39,31 +38,45 @@ func main() {
 	client := meshcore.CreateClient()
 	defer client.Disconnect()
 
+	// log history in client
 	client.SetHistoryLogger(histlog)
 
-	client.SetMQTTConfig(&meshcore.MQTTConfig{
-		Server:         "meshcoretel.ru",
-		Port:           1883,
-		Username:       "meshcore",
-		Password:       "meshcore",
-		Origin:         "MeshCore-7C44431A",
-		IATA:           "KVX",
-		StatusEnabled:  true,
-		PacketsEnabled: true,
-		TxEnabled:      true,
-		StatusInterval: 30000,
-		AnalyzerEU:     true,
-		AnalyzerUS:     true,
-		OwnerEmail:     "stempit@gmail.com",
-		// Ed25519 private key (64 hex chars) - REQUIRED for Let's Mesh Analyzer JWT signing
-		// Replace with your actual device private key
-		DevicePrivKey:      "c88339c95e245316303d9ca77f7c0d296affe1f74a974ec10c6cf5649ba444427373a5297fdf8e961cf4db3a6e4c871b56bcc1e65333da83721116973bc7ddb3",
-		AdvertsEnabled:     true, // Enable advertisement/contact messages
-		MessagesEnabled:    true, // Enable direct/private messages
-		ChannelMsgsEnabled: true, // Enable channel/group messages
-		DeliveryEnabled:    true, // Enable delivery receipts
-		PathUpdatesEnabled: true, // Enable path update notifications
+	// mqtt init
+	mqttCfg := config.Get().MQTT
+	client.SetMQTTConfig(&mqttCfg)
+	client.RequestAllStats()
+
+	// =================================
+	// Синхронизация сохранённых сообщений
+	// =================================
+
+	syncDone := make(chan struct{})
+	client.OnNoMoreMessages(func() {
+		for _, m := range client.GetAllMessages() {
+			slog.Info("[Stored] Личное", "sender", fmt.Sprintf("%x", m.SenderKey[:6]), "text", m.Text)
+		}
+		for _, m := range client.GetAllChannelMessages() {
+			slog.Info("[Stored] Канал", "channel", m.ChannelIndex, "sender", m.SenderName, "text", m.Text)
+		}
+		close(syncDone)
 	})
+
+	if err := client.SyncNextMessage(); err != nil {
+		slog.Error("Failed to sync stored messages", "error", err)
+		close(syncDone)
+	}
+	<-syncDone
+
+	// Сбрасываем буфер канала — там могут быть сохранённые сообщения
+	for {
+		select {
+		case <-client.IncomingMessages():
+		default:
+			goto startProcessing
+		}
+	}
+startProcessing:
+
 	// =================================
 	// Обработка входящих сообщений
 	// =================================
@@ -93,16 +106,16 @@ func main() {
 					}
 				}
 
-				fmt.Printf("Личное сообщение от %x: %s\n", m.SenderKey[:6], m.Text)
+				slog.Info("Личное сообщение", "sender", fmt.Sprintf("%x", m.SenderKey[:6]), "text", m.Text)
 
 				// собираем ответы
 				replies, cmdErr := commands.GenerateReplies(m.Text, "")
 				if cmdErr != nil {
-					fmt.Printf("Ошибка команды: %v\n", cmdErr)
+					slog.Error("Ошибка команды", "error", cmdErr)
 					continue
 				}
 				if len(replies) == 0 {
-					fmt.Printf("Не найден ответ\n")
+					slog.Info("Нет ответа для сообщения, пропускаем")
 					continue
 				}
 
@@ -118,31 +131,31 @@ func main() {
 						err = client.SendMessageWithRetry(contact, replyText, false, 5, 5*time.Second)
 					}
 					if err != nil {
-						fmt.Printf("Ошибка: %v\n", err)
+						slog.Error("Ошибка отправки", "error", err)
 					} else {
-						fmt.Println("Сообщение отправлено")
+						slog.Info("Сообщение отправлено")
 					}
 				}
 			case *meshcore.ChannelMessage: // сообщения в каналах
 
-				fmt.Printf("Канальное сообщение в канале %d от %s: %s\n", m.ChannelIndex, m.SenderName, m.Text)
+				slog.Info("Канальное сообщение", "channel", m.ChannelIndex, "sender", m.SenderName, "text", m.Text)
 
 				// находим канал по номеру
 				channels := client.GetChannels()
 				channel, ok := channels[m.ChannelIndex]
 				if !ok || channel.IsEmpty {
-					fmt.Printf("Канал %d не найден или пуст\n", m.ChannelIndex)
+					slog.Warn("Канал не найден или пуст", "channel", m.ChannelIndex)
 					continue
 				}
 
 				// собираем ответы
 				replies, cmdErr := commands.GenerateReplies(m.Text, channel.Name) //todo: может channelName выпилить, используется только для .last, можно принудительно указывать в запросе канал
 				if cmdErr != nil {
-					fmt.Printf("Ошибка команды: %v\n", cmdErr)
+					slog.Error("Ошибка команды", "error", cmdErr)
 					continue
 				}
 				if len(replies) == 0 {
-					fmt.Printf("Не найден ответ\n")
+					slog.Debug("Не найден ответ, пропускаем")
 					continue
 				}
 
@@ -157,9 +170,9 @@ func main() {
 					}
 					err := client.SendChannelMessageWithRetry(channel, text, false, 5, 5*time.Second)
 					if err != nil {
-						fmt.Printf("Ошибка отправки в канал: %v\n", err)
+						slog.Error("Ошибка отправки в канал", "error", err)
 					} else {
-						fmt.Println("Сообщение в канал отправлено")
+						slog.Info("Сообщение в канал отправлено")
 					}
 				}
 			}
@@ -167,20 +180,7 @@ func main() {
 	}()
 
 	// Блокируемся, пока не получим сигнал завершения
-	fmt.Println("\nWaiting for messages... Press Ctrl+C to exit.")
-
-	// =================================
-	// Запрашиваем и показываем статистику
-	// =================================
-	time.Sleep(2 * time.Second)
-	if err := client.RequestAllStats(); err != nil {
-		fmt.Printf("Failed to request stats: %v\n", err)
-	} else {
-		// Ждём, пока придут все stats
-		time.Sleep(500 * time.Millisecond)
-		fmt.Println(client.FormatStats())
-	}
-
+	slog.Info("Waiting for messages... Press Ctrl+C to exit.")
 	done := make(chan struct{}) // Канал для сигнала о завершении (например, при нажатии Ctrl+C)
 
 	time.Sleep(10 * time.Second)
@@ -188,12 +188,12 @@ func main() {
 	if ch, ok := channels[3]; ok && !ch.IsEmpty {
 		err := client.SendChannelMessageWithRetry(ch, "ping", false, 3, 5*time.Second)
 		if err != nil {
-			fmt.Printf("Ошибка: %v\n", err)
+			slog.Error("Ошибка отправки в канал", "error", err)
 		} else {
-			fmt.Println("Сообщение отправлено в канал и подтверждено")
+			slog.Info("Сообщение отправлено в канал и подтверждено")
 		}
 	} else {
-		fmt.Println("Channel not found or empty")
+		slog.Warn("Channel not found or empty")
 	}
 
 	contacts := client.GetContacts()
@@ -203,19 +203,31 @@ func main() {
 			// отправка с ретраями до подтверждения отправки
 			// err := client.SendMessageWithRetry(v, "Пинг А", false, 5, 5*time.Second)
 			// if err != nil {
-			// 	fmt.Printf("Ошибка: %v\n", err)
+			// 	slog.Error("Ошибка", "error", err)
 			// } else {
-			// 	fmt.Println("Сообщение отправлено и подтверждено")
+			// 	slog.Info("Сообщение отправлено")
 			// }
 
 			// отправка с ретраями до подтверждения доставки
 			err = client.SendMessageWithRetry(v, "ping", true, 5, 5*time.Second)
 			if err != nil {
-				fmt.Printf("Ошибка: %v\n", err)
+				slog.Error("Ошибка отправки", "error", err)
 			} else {
-				fmt.Println("Сообщение отправлено и доставлено")
+				slog.Info("Сообщение отправлено и доставлено")
 			}
 		}
+	}
+
+	// =================================
+	// Запрашиваем и показываем статистику
+	// =================================
+	time.Sleep(2 * time.Second)
+	if err := client.RequestAllStats(); err != nil {
+		slog.Error("Failed to request stats", "error", err)
+	} else {
+		// Ждём, пока придут все stats
+		time.Sleep(500 * time.Millisecond)
+		fmt.Println(client.FormatStats())
 	}
 
 	// Периодически запрашиваем статистику для обновления MQTT
@@ -226,7 +238,7 @@ func main() {
 			select {
 			case <-ticker.C:
 				if err := client.RequestAllStats(); err != nil {
-					fmt.Printf("Failed to request periodic stats: %v\n", err)
+					slog.Error("Failed to request periodic stats", "error", err)
 				}
 			case <-done:
 				return

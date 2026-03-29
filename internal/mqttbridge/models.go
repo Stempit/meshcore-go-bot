@@ -1,8 +1,52 @@
-package meshcore_bt
+package mqttbridge
 
 import (
 	"time"
 )
+
+// ============================================================================
+// Device Info (passed from meshcore client to bridge)
+// ============================================================================
+
+// DeviceInfo contains device information used by the MQTT bridge for publishing.
+// Populated from SelfInfo received from the MeshCore device.
+type DeviceInfo struct {
+	PublicKey []byte
+	Name      string
+	TxPower   int8
+	Latitude  float64
+	Longitude float64
+	FreqHz    uint32
+	BwHz      uint32
+	Sf        int
+	Cr        int
+}
+
+// DeviceStats contains device statistics used by the MQTT bridge for publishing.
+// Populated from CompanionRadioStats received from the MeshCore device.
+type DeviceStats struct {
+	// Core stats
+	BatteryMv  uint16
+	UptimeSecs uint32
+	Errors     uint16
+	QueueLen   uint8
+
+	// Radio stats
+	TxAirSecs     uint32
+	RxAirSecs     uint32
+	NoiseFloorDbm int8
+	LastRssi      int8
+	LastSnrDb     float32
+
+	// Packet stats
+	PacketsRecv       uint32
+	PacketsSent       uint32
+	PacketsFloodTx    uint32
+	PacketsDirectTx   uint32
+	PacketsFloodRx    uint32
+	PacketsDirectRx   uint32
+	PacketsRecvErrors uint32
+}
 
 // ============================================================================
 // MQTT Configuration Models
@@ -302,4 +346,13 @@ type BrokerInfo struct {
 	Name      string // "custom", "us", "eu"
 	Connected bool
 	URL       string
+}
+
+// MQTTCallbacks holds callback functions for MQTT events
+type MQTTCallbacks struct {
+	OnStatus       func(*MQTTStatus)
+	OnPacket       func(*MQTTPacket)
+	OnRaw          func(*MQTTRaw)
+	OnConnected    func(string) // broker name
+	OnDisconnected func(string) // broker name
 }
