@@ -13,6 +13,9 @@ import (
 	"sync"
 	"time"
 
+	"meshbot/internal/historylog"
+	"meshbot/internal/mqttbridge"
+
 	"tinygo.org/x/bluetooth"
 )
 
@@ -50,7 +53,7 @@ type MeshCoreClient struct {
 	stats       *CompanionRadioStats // накопленная статистика (все типы)
 
 	// MQTT bridge
-	mqtt *MQTTBridge
+	mqtt *mqttbridge.MQTTBridge
 
 	// Contact lookup function for MQTT message sender names
 	contactLookupFunc func(pubKey []byte) string
@@ -86,7 +89,8 @@ type MeshCoreClient struct {
 	wg         sync.WaitGroup
 
 	// Логгер
-	logger *slog.Logger
+	logger  *slog.Logger
+	histLog *historylog.Logger
 }
 
 func NewMeshCoreClient(adapter *bluetooth.Adapter) *MeshCoreClient {
@@ -106,6 +110,12 @@ func NewMeshCoreClient(adapter *bluetooth.Adapter) *MeshCoreClient {
 // SetLogger позволяет установить собственный логгер.
 func (c *MeshCoreClient) SetLogger(logger *slog.Logger) {
 	c.logger = logger
+}
+
+// SetHistoryLogger attaches a history logger that records every incoming and
+// outgoing message to per-conversation files.
+func (c *MeshCoreClient) SetHistoryLogger(h *historylog.Logger) {
+	c.histLog = h
 }
 
 // ============================================================================
@@ -583,6 +593,12 @@ func (c *MeshCoreClient) parseContactMessageV3(data []byte) {
 
 	c.logger.Info("Received contact message V3", "sender", senderName, "key", key, "text", text)
 
+	if c.histLog != nil {
+		if err := c.histLog.LogDMIncoming(senderName, text, msg.Timestamp); err != nil {
+			c.logger.Error("historylog: failed to log incoming DM", "error", err)
+		}
+	}
+
 	if c.onMessage != nil {
 		c.onMessage(msg)
 	}
@@ -674,6 +690,12 @@ func (c *MeshCoreClient) parseChannelMessageV3(data []byte) {
 	}
 	if ch != nil && len(ch.PSK) > 0 {
 		channelKeyHex = hex.EncodeToString(ch.PSK)
+	}
+
+	if c.histLog != nil {
+		if err := c.histLog.LogChannelIncoming(channelName, senderName, text, msg.Timestamp); err != nil {
+			c.logger.Error("historylog: failed to log incoming channel message", "error", err)
+		}
 	}
 
 	snr := float64(int8(data[1])) / 4.0
@@ -1061,7 +1083,7 @@ func (c *MeshCoreClient) parseSelfInfo(data []byte) {
 
 // parseDeviceInfo разбирает RESP_CODE_DEVICE_INFO (0x0D).
 //
-// Формат (из MyMesh.cpp, CMD_DEVICE_QEURY):
+// Формат (из MyMesh.cpp, CMD_DEVICE_QUERY):
 //
 //	[code(1)][fw_ver(1)][max_contacts_raw(1)][max_channels(1)][ble_pin(4)]
 //	[fw_build(12)][model(40)][version(20)][client_repeat(1, v9+)][path_hash_mode(1, v10+)]
@@ -1702,6 +1724,11 @@ func (c *MeshCoreClient) SendMessageWithRetry(contact *Contact, text string, wai
 
 		select {
 		case <-confirmCh:
+			if c.histLog != nil {
+				if err := c.histLog.LogDMOutgoing(contact.Name, text, time.Now()); err != nil {
+					c.logger.Error("historylog: failed to log outgoing DM", "error", err)
+				}
+			}
 			return nil
 		case <-time.After(timeout):
 			c.confirmMu.Lock()
@@ -1765,6 +1792,11 @@ func (c *MeshCoreClient) SendChannelMessageWithRetry(channel *Channel, text stri
 		select {
 		case <-confirmCh:
 			c.publishTXChannelPacket(channel, text)
+			if c.histLog != nil {
+				if err := c.histLog.LogChannelOutgoing(channel.Name, text, time.Now()); err != nil {
+					c.logger.Error("historylog: failed to log outgoing channel message", "error", err)
+				}
+			}
 			return nil
 		case <-time.After(timeout):
 			c.confirmMu.Lock()
@@ -1992,7 +2024,7 @@ func (c *MeshCoreClient) OnError(f func(error)) {
 // ============================================================================
 
 // MQTTBridge returns the MQTT bridge instance (nil if not configured).
-func (c *MeshCoreClient) MQTTBridge() *MQTTBridge {
+func (c *MeshCoreClient) MQTTBridge() *mqttbridge.MQTTBridge {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.mqtt
@@ -2006,9 +2038,52 @@ func (c *MeshCoreClient) SetContactLookupFunc(f func(pubKey []byte) string) {
 	c.contactLookupFunc = f
 }
 
+// toDeviceInfo converts SelfInfo to mqttbridge.DeviceInfo.
+func toDeviceInfo(info *SelfInfo) *mqttbridge.DeviceInfo {
+	if info == nil {
+		return nil
+	}
+	return &mqttbridge.DeviceInfo{
+		PublicKey: info.PublicKey,
+		Name:      info.Name,
+		TxPower:   info.TxPower,
+		Latitude:  info.Latitude,
+		Longitude: info.Longitude,
+		FreqHz:    info.FreqHz,
+		BwHz:      info.BwHz,
+		Sf:        info.Sf,
+		Cr:        info.Cr,
+	}
+}
+
+// toDeviceStats converts CompanionRadioStats to mqttbridge.DeviceStats.
+func toDeviceStats(stats *CompanionRadioStats) *mqttbridge.DeviceStats {
+	if stats == nil {
+		return nil
+	}
+	return &mqttbridge.DeviceStats{
+		BatteryMv:         stats.BatteryMv,
+		UptimeSecs:        stats.UptimeSecs,
+		Errors:            stats.Errors,
+		QueueLen:          stats.QueueLen,
+		TxAirSecs:         stats.TxAirSecs,
+		RxAirSecs:         stats.RxAirSecs,
+		NoiseFloorDbm:     stats.NoiseFloorDbm,
+		LastRssi:          stats.LastRssi,
+		LastSnrDb:         stats.LastSnrDb,
+		PacketsRecv:       stats.PacketsRecv,
+		PacketsSent:       stats.PacketsSent,
+		PacketsFloodTx:    stats.PacketsFloodTx,
+		PacketsDirectTx:   stats.PacketsDirectTx,
+		PacketsFloodRx:    stats.PacketsFloodRx,
+		PacketsDirectRx:   stats.PacketsDirectRx,
+		PacketsRecvErrors: stats.PacketsRecvErrors,
+	}
+}
+
 // SetMQTTConfig configures and starts the MQTT bridge.
 // Returns the MQTTBridge instance or nil if configuration is invalid.
-func (c *MeshCoreClient) SetMQTTConfig(config *MQTTConfig) (*MQTTBridge, error) {
+func (c *MeshCoreClient) SetMQTTConfig(config *mqttbridge.MQTTConfig) (*mqttbridge.MQTTBridge, error) {
 	if config == nil {
 		return nil, fmt.Errorf("mqtt config is required")
 	}
@@ -2018,31 +2093,31 @@ func (c *MeshCoreClient) SetMQTTConfig(config *MQTTConfig) (*MQTTBridge, error) 
 	c.StopMQTT()
 
 	// Create MQTT bridge
-	bridge := NewMQTTBridge(config)
+	bridge := mqttbridge.NewMQTTBridge(config)
 	bridge.SetLogger(c.logger)
 
-	// Set initial self info if available
+	// Set initial device info if available
 	c.mu.RLock()
 	if c.selfInfo != nil {
-		bridge.SetSelfInfo(c.selfInfo)
+		bridge.SetDeviceInfo(toDeviceInfo(c.selfInfo))
 	}
 	c.mu.RUnlock()
 
 	// Set MQTT callbacks to forward events
-	bridge.SetCallbacks(MQTTCallbacks{
+	bridge.SetCallbacks(mqttbridge.MQTTCallbacks{
 		OnConnected: func(broker string) {
 			c.logger.Info("MQTT connected", "broker", broker)
 		},
 		OnDisconnected: func(broker string) {
 			c.logger.Info("MQTT disconnected", "broker", broker)
 		},
-		OnStatus: func(status *MQTTStatus) {
+		OnStatus: func(status *mqttbridge.MQTTStatus) {
 			c.logger.Debug("MQTT status received", "status", status.Status)
 		},
-		OnPacket: func(packet *MQTTPacket) {
+		OnPacket: func(packet *mqttbridge.MQTTPacket) {
 			c.logger.Debug("MQTT packet received", "direction", packet.Direction)
 		},
-		OnRaw: func(raw *MQTTRaw) {
+		OnRaw: func(raw *mqttbridge.MQTTRaw) {
 			c.logger.Debug("MQTT raw received")
 		},
 	})
@@ -2057,19 +2132,19 @@ func (c *MeshCoreClient) SetMQTTConfig(config *MQTTConfig) (*MQTTBridge, error) 
 	c.mqtt = bridge
 	c.mu.Unlock()
 
-	// When self info is received, update MQTT
+	// When self info is received, update MQTT device info
 	originalOnSelfInfo := c.onSelfInfo
 	c.onSelfInfo = func(info *SelfInfo) {
-		bridge.SetSelfInfo(info)
+		bridge.SetDeviceInfo(toDeviceInfo(info))
 		if originalOnSelfInfo != nil {
 			originalOnSelfInfo(info)
 		}
 	}
 
-	// When stats are received, update MQTT
+	// When stats are received, update MQTT device stats
 	originalOnStats := c.onStats
 	c.onStats = func(stats *CompanionRadioStats) {
-		bridge.SetStats(stats)
+		bridge.SetDeviceStats(toDeviceStats(stats))
 		if originalOnStats != nil {
 			originalOnStats(stats)
 		}
@@ -2119,7 +2194,7 @@ func (c *MeshCoreClient) OnPacketSent(rawData []byte) {
 }
 
 // MQTTConfig returns the current MQTT configuration.
-func (c *MeshCoreClient) MQTTConfig() *MQTTConfig {
+func (c *MeshCoreClient) MQTTConfig() *mqttbridge.MQTTConfig {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.mqtt == nil {
@@ -2129,7 +2204,7 @@ func (c *MeshCoreClient) MQTTConfig() *MQTTConfig {
 }
 
 // UpdateMQTTConfig updates the MQTT configuration at runtime.
-func (c *MeshCoreClient) UpdateMQTTConfig(config *MQTTConfig) error {
+func (c *MeshCoreClient) UpdateMQTTConfig(config *mqttbridge.MQTTConfig) error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.mqtt == nil {
@@ -2140,7 +2215,7 @@ func (c *MeshCoreClient) UpdateMQTTConfig(config *MQTTConfig) error {
 }
 
 // GetMQTTConnectionState returns the connection state of all MQTT brokers.
-func (c *MeshCoreClient) GetMQTTConnectionState() []BrokerInfo {
+func (c *MeshCoreClient) GetMQTTConnectionState() []mqttbridge.BrokerInfo {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.mqtt == nil {
@@ -2148,9 +2223,3 @@ func (c *MeshCoreClient) GetMQTTConnectionState() []BrokerInfo {
 	}
 	return c.mqtt.GetConnectionState()
 }
-
-// ============================================================================
-// MQTT Forwarding Helpers
-// ============================================================================
-
-
