@@ -95,30 +95,32 @@ func main() {
 
 				fmt.Printf("Личное сообщение от %x: %s\n", m.SenderKey[:6], m.Text)
 
-				replyText := commands.GenerateReply(m.Text)
-
-				// если не отвечаем
-				if replyText == "" {
-					fmt.Printf("Не найден ответ")
+				// собираем ответы
+				replies, cmdErr := commands.GenerateReplies(m.Text, "")
+				if cmdErr != nil {
+					fmt.Printf("Ошибка команды: %v\n", cmdErr)
+					continue
+				}
+				if len(replies) == 0 {
+					fmt.Printf("Не найден ответ\n")
 					continue
 				}
 
-				// ответ с подтверждением
-				err = client.SendMessageWithRetry(contact, replyText, true, 5, 5*time.Second)
-				if err != nil {
-					fmt.Printf("Ошибка: %v\n", err)
-				} else {
-					fmt.Println("Сообщение отправлено и доставлено")
-				}
-
-				// если не смогли с подтверждением - доставляем абы как
-				if err != nil {
-					// ответ без подтверждения
-					err := client.SendMessageWithRetry(contact, replyText, false, 5, 5*time.Second)
+				// отправляем ответы; при нескольких делаем паузу между сообщениями
+				for i, replyText := range replies {
+					if i > 0 {
+						time.Sleep(5 * time.Second)
+					}
+					// пытаемся отправить с подтверждением
+					err = client.SendMessageWithRetry(contact, replyText, true, 5, 5*time.Second)
+					if err != nil {
+						// если не получилось - отправляем хотя бы без подтверждения
+						err = client.SendMessageWithRetry(contact, replyText, false, 5, 5*time.Second)
+					}
 					if err != nil {
 						fmt.Printf("Ошибка: %v\n", err)
 					} else {
-						fmt.Println("Сообщение отправлено и подтверждено")
+						fmt.Println("Сообщение отправлено")
 					}
 				}
 			case *meshcore.ChannelMessage: // сообщения в каналах
@@ -133,20 +135,32 @@ func main() {
 					continue
 				}
 
-				replyText := commands.GenerateReply(m.Text)
-
-				// если не отвечаем
-				if replyText == "" {
-					fmt.Printf("Не найден ответ")
+				// собираем ответы
+				replies, cmdErr := commands.GenerateReplies(m.Text, channel.Name) //todo: может channelName выпилить, используется только для .last, можно принудительно указывать в запросе канал
+				if cmdErr != nil {
+					fmt.Printf("Ошибка команды: %v\n", cmdErr)
+					continue
+				}
+				if len(replies) == 0 {
+					fmt.Printf("Не найден ответ\n")
 					continue
 				}
 
-				// отправляем ответ
-				err := client.SendChannelMessageWithRetry(channel, fmt.Sprintf("@[%s] %s", m.SenderName, replyText), false, 5, 5*time.Second)
-				if err != nil {
-					fmt.Printf("Ошибка: %v\n", err)
-				} else {
-					fmt.Println("Сообщение в канал отправлено")
+				// отправляем ответы; при нескольких делаем паузу между сообщениями
+				for i, replyText := range replies {
+					if i > 0 {
+						time.Sleep(5 * time.Second)
+					}
+					text := replyText
+					if len(replies) == 1 {
+						text = fmt.Sprintf("@[%s] %s", m.SenderName, replyText)
+					}
+					err := client.SendChannelMessageWithRetry(channel, text, false, 5, 5*time.Second)
+					if err != nil {
+						fmt.Printf("Ошибка отправки в канал: %v\n", err)
+					} else {
+						fmt.Println("Сообщение в канал отправлено")
+					}
 				}
 			}
 		}

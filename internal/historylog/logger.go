@@ -13,14 +13,65 @@
 package historylog
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 	"unicode"
 )
+
+// Entry is a single parsed history record.
+type Entry struct {
+	Time   time.Time
+	Sender string // sender name; "Me" for outgoing messages
+	Text   string
+}
+
+// lineRe matches a log line: << 2006-01-02 15:04:05 [Sender]: text
+var lineRe = regexp.MustCompile(`^([<>]{2}) (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \[([^\]]+)\]: (.*)$`)
+
+func parseLine(line string) (Entry, bool) {
+	m := lineRe.FindStringSubmatch(line)
+	if m == nil {
+		return Entry{}, false
+	}
+	t, err := time.ParseInLocation(timeLayout, m[2], time.Local)
+	if err != nil {
+		return Entry{}, false
+	}
+	return Entry{Time: t, Sender: m[3], Text: m[4]}, true
+}
+
+// ReadLastChannel returns the last n entries from the named channel log under baseDir.
+// Returns nil, nil if the log file does not exist yet.
+func ReadLastChannel(baseDir, channelName string, n int) ([]Entry, error) {
+	path := filepath.Join(baseDir, "channels", sanitize(channelName)+".txt")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("historylog: read %s: %w", path, err)
+	}
+
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+
+	var entries []Entry
+	for _, line := range lines {
+		if e, ok := parseLine(line); ok {
+			entries = append(entries, e)
+		}
+	}
+
+	if n > len(entries) {
+		n = len(entries)
+	}
+	return entries[len(entries)-n:], nil
+}
 
 const timeLayout = "2006-01-02 15:04:05"
 
