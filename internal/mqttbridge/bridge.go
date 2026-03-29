@@ -321,7 +321,7 @@ func (b *MQTTBridge) connectToCustomBroker() {
 	// broker. Paho auto-reconnect must be off to prevent it from internally
 	// queuing QoS-1 messages and "completing" their tokens without actual PUBACK
 	// from the broker, which caused silent publish failures on every 2nd+ update.
-	client, err := b.createMQTTClient("custom", brokerURL,
+	client, err := b.createMQTTClient("custom", "custom", brokerURL,
 		b.config.Username, b.config.Password,
 		b.config.UseTLS, "", "", "", false)
 
@@ -397,7 +397,7 @@ func (b *MQTTBridge) connectToAnalyzer(region, brokerURL string) {
 	}
 
 	var newClient mqtt.Client
-	newClient, err := b.createMQTTClient(clientID, brokerURL,
+	newClient, err := b.createMQTTClient(region, clientID, brokerURL,
 		b.analyzerUsername, password,
 		true, gtsRootR4Cert, "", "", true) // Always use TLS for analyzer; paho reconnect OK for WS
 
@@ -432,7 +432,9 @@ func (b *MQTTBridge) buildBrokerURL(host string, port int, useTLS bool) string {
 // autoReconnect controls whether paho handles reconnection internally.
 // For the custom TCP broker, pass false and let connectionManager own reconnects.
 // For WebSocket analyzer brokers, pass true (connections are more stable).
-func (b *MQTTBridge) createMQTTClient(clientID, brokerURL, username, password string,
+// brokerKey is the logical name used in callbacks ("custom", "us", "eu");
+// clientID is the unique MQTT protocol identifier sent to the broker.
+func (b *MQTTBridge) createMQTTClient(brokerKey, clientID, brokerURL, username, password string,
 	useTLS bool, caCert, clientCert, clientKey string, autoReconnect bool) (mqtt.Client, error) {
 
 	// Generate a clean client ID (alphanumeric, max 23 chars for MQTT spec)
@@ -474,10 +476,10 @@ func (b *MQTTBridge) createMQTTClient(clientID, brokerURL, username, password st
 
 	// Connection handlers
 	opts.OnConnect = func(c mqtt.Client) {
-		b.handleConnect(clientID)
+		b.handleConnect(brokerKey)
 	}
 	opts.OnConnectionLost = func(c mqtt.Client, err error) {
-		b.handleConnectionLost(clientID, err)
+		b.handleConnectionLost(brokerKey, err)
 	}
 
 	client := mqtt.NewClient(opts)
@@ -1248,23 +1250,28 @@ func buildMQTTStats(stats *DeviceStats) *MQTTStats {
 
 // publishStatusToAnalyzers publishes status to Let's Mesh Analyzer servers
 func (b *MQTTBridge) publishStatusToAnalyzers(topic string, data []byte) {
-	if b.analyzerUSConnected.Load() && b.analyzerUSClient != nil {
+	const analyzerPublishTimeout = 15 * time.Second
+
+	if b.analyzerUSClient != nil && b.analyzerUSClient.IsConnected() {
 		token := b.analyzerUSClient.Publish(topic, 1, true, data)
-		token.Wait()
-		if token.Error() != nil {
+		if !token.WaitTimeout(analyzerPublishTimeout) {
+			b.logger.Warn("Publish status to US analyzer timed out", "topic", topic)
+		} else if token.Error() != nil {
 			b.logger.Error("Failed to publish status to US analyzer", "error", token.Error())
+		} else {
+			b.logger.Debug("Status published", "broker", "US analyzer")
 		}
-		b.logger.Debug("Status published", "broker", "US analyzer")
 	}
 
-	if b.analyzerEUConnected.Load() && b.analyzerEUClient != nil {
+	if b.analyzerEUClient != nil && b.analyzerEUClient.IsConnected() {
 		token := b.analyzerEUClient.Publish(topic, 1, true, data)
-		token.Wait()
-		if token.Error() != nil {
+		if !token.WaitTimeout(analyzerPublishTimeout) {
+			b.logger.Warn("Publish status to EU analyzer timed out", "topic", topic)
+		} else if token.Error() != nil {
 			b.logger.Error("Failed to publish status to EU analyzer", "error", token.Error())
+		} else {
+			b.logger.Debug("Status published", "broker", "EU analyzer")
 		}
-		b.logger.Debug("Status published", "broker", "EU analyzer")
-
 	}
 }
 
