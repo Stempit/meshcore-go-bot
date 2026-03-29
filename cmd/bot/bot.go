@@ -9,6 +9,7 @@ import (
 
 	"meshbot/internal/commands"
 	"meshbot/internal/config"
+	"meshbot/internal/historylog"
 	meshcore "meshbot/internal/meshcore_bt"
 )
 
@@ -30,9 +31,15 @@ func main() {
 	logger := slog.New(handler)
 	slog.SetDefault(logger)
 
+	// history logger
+	histlog := historylog.New("log/history")
+	defer histlog.Close()
+
 	// meshcore client
 	client := meshcore.CreateClient()
 	defer client.Disconnect()
+
+	client.SetHistoryLogger(histlog)
 
 	client.SetMQTTConfig(&meshcore.MQTTConfig{
 		Server:         "meshcoretel.ru",
@@ -87,7 +94,6 @@ func main() {
 				}
 
 				fmt.Printf("Личное сообщение от %x: %s\n", m.SenderKey[:6], m.Text)
-				fmt.Printf("Отвечаем")
 
 				replyText := commands.GenerateReply(m.Text)
 
@@ -213,12 +219,6 @@ func main() {
 			}
 		}
 	}()
-
-	if err := client.SendSelfAdvert(true); err != nil {
-		fmt.Printf("Failed to send self advert: %v\n", err)
-	} else {
-		fmt.Println("Self advert sent (flood)")
-	}
 
 	<-done
 }

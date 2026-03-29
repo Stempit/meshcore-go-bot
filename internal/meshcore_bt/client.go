@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"meshbot/internal/historylog"
+
 	"tinygo.org/x/bluetooth"
 )
 
@@ -86,7 +88,8 @@ type MeshCoreClient struct {
 	wg         sync.WaitGroup
 
 	// Логгер
-	logger *slog.Logger
+	logger  *slog.Logger
+	histLog *historylog.Logger
 }
 
 func NewMeshCoreClient(adapter *bluetooth.Adapter) *MeshCoreClient {
@@ -106,6 +109,12 @@ func NewMeshCoreClient(adapter *bluetooth.Adapter) *MeshCoreClient {
 // SetLogger позволяет установить собственный логгер.
 func (c *MeshCoreClient) SetLogger(logger *slog.Logger) {
 	c.logger = logger
+}
+
+// SetHistoryLogger attaches a history logger that records every incoming and
+// outgoing message to per-conversation files.
+func (c *MeshCoreClient) SetHistoryLogger(h *historylog.Logger) {
+	c.histLog = h
 }
 
 // ============================================================================
@@ -583,6 +592,12 @@ func (c *MeshCoreClient) parseContactMessageV3(data []byte) {
 
 	c.logger.Info("Received contact message V3", "sender", senderName, "key", key, "text", text)
 
+	if c.histLog != nil {
+		if err := c.histLog.LogDMIncoming(senderName, text, msg.Timestamp); err != nil {
+			c.logger.Error("historylog: failed to log incoming DM", "error", err)
+		}
+	}
+
 	if c.onMessage != nil {
 		c.onMessage(msg)
 	}
@@ -674,6 +689,12 @@ func (c *MeshCoreClient) parseChannelMessageV3(data []byte) {
 	}
 	if ch != nil && len(ch.PSK) > 0 {
 		channelKeyHex = hex.EncodeToString(ch.PSK)
+	}
+
+	if c.histLog != nil {
+		if err := c.histLog.LogChannelIncoming(channelName, senderName, text, msg.Timestamp); err != nil {
+			c.logger.Error("historylog: failed to log incoming channel message", "error", err)
+		}
 	}
 
 	snr := float64(int8(data[1])) / 4.0
@@ -1061,7 +1082,7 @@ func (c *MeshCoreClient) parseSelfInfo(data []byte) {
 
 // parseDeviceInfo разбирает RESP_CODE_DEVICE_INFO (0x0D).
 //
-// Формат (из MyMesh.cpp, CMD_DEVICE_QEURY):
+// Формат (из MyMesh.cpp, CMD_DEVICE_QUERY):
 //
 //	[code(1)][fw_ver(1)][max_contacts_raw(1)][max_channels(1)][ble_pin(4)]
 //	[fw_build(12)][model(40)][version(20)][client_repeat(1, v9+)][path_hash_mode(1, v10+)]
@@ -1702,6 +1723,11 @@ func (c *MeshCoreClient) SendMessageWithRetry(contact *Contact, text string, wai
 
 		select {
 		case <-confirmCh:
+			if c.histLog != nil {
+				if err := c.histLog.LogDMOutgoing(contact.Name, text, time.Now()); err != nil {
+					c.logger.Error("historylog: failed to log outgoing DM", "error", err)
+				}
+			}
 			return nil
 		case <-time.After(timeout):
 			c.confirmMu.Lock()
@@ -1765,6 +1791,11 @@ func (c *MeshCoreClient) SendChannelMessageWithRetry(channel *Channel, text stri
 		select {
 		case <-confirmCh:
 			c.publishTXChannelPacket(channel, text)
+			if c.histLog != nil {
+				if err := c.histLog.LogChannelOutgoing(channel.Name, text, time.Now()); err != nil {
+					c.logger.Error("historylog: failed to log outgoing channel message", "error", err)
+				}
+			}
 			return nil
 		case <-time.After(timeout):
 			c.confirmMu.Lock()
@@ -2152,5 +2183,3 @@ func (c *MeshCoreClient) GetMQTTConnectionState() []BrokerInfo {
 // ============================================================================
 // MQTT Forwarding Helpers
 // ============================================================================
-
-
