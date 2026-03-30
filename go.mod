@@ -3,12 +3,13 @@ module meshbot
 go 1.26.1
 
 require (
+	filippo.io/edwards25519 v1.2.0
+	github.com/OvyFlash/telegram-bot-api v0.0.0-20260320094807-b5e5c4693899
 	github.com/eclipse/paho.mqtt.golang v1.4.3
 	tinygo.org/x/bluetooth v0.14.0
 )
 
 require (
-	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/gorilla/websocket v1.5.0 // indirect
 	golang.org/x/net v0.51.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect

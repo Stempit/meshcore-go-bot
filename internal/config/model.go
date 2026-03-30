@@ -1,9 +1,13 @@
 package config
 
-import "meshbot/internal/mqttbridge"
+import (
+	"meshbot/internal/mqttbridge"
+	"meshbot/internal/tgbridge"
+)
 
 type Config struct {
-	MQTT mqttbridge.MQTTConfig `yaml:"MQTT"`
+	MQTT      mqttbridge.MQTTConfig  `yaml:"MQTT"`
+	Telegram  tgbridge.TelegramConfig `yaml:"Telegram"`
 	LLM struct {
 		Enabled           bool    `yaml:"enabled"`
 		Type              string  `yaml:"type"`

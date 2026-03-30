@@ -38,3 +38,17 @@ LLM:
     Сделай текст еще короче. Результат - не более 130 символов, включая пробелы. Ответ - не более 10 слов. Одной строчкой. Без форматирования. Одно предложение, до первой точки. Нельзя возвращать тот же текст, обязательно сократи и измени текст. Формат SMS.
   shrink_temperature: 0.7
   shrink_max_reties: 5
+
+Telegram:
+  enabled: true
+  bot_token: "123456:ABC-DEF..."
+  sources:
+    - type: channel
+      chat_id: -1001234567890     # Telegram channel ID (negative)
+      mesh_channel_name: "#tg1"
+      shrink: true
+    - type: group_thread
+      chat_id: -1001234567890     # public group ID (negative) 1002741904113
+      thread_id: 2                # topic/thread ID (message_id of the topic root)
+      mesh_channel_name: "#tg2"
+      shrink: true

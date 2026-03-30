@@ -6,10 +6,13 @@ import (
 	"os"
 	"time"
 
+	"strings"
+
 	"meshbot/internal/commands"
 	"meshbot/internal/config"
 	"meshbot/internal/historylog"
 	meshcore "meshbot/internal/meshcore_bt"
+	"meshbot/internal/tgbridge"
 )
 
 func main() {
@@ -45,6 +48,54 @@ func main() {
 	mqttCfg := config.Get().MQTT
 	client.SetMQTTConfig(&mqttCfg)
 	client.RequestAllStats()
+
+	// =================================
+	// Пересылка сообщений из телеги
+	// =================================
+
+	if tgCfg := config.Get().Telegram; tgCfg.Enabled {
+		tgb, err := tgbridge.New(tgCfg, logger)
+		if err != nil {
+			slog.Error("Failed to start Telegram bridge", "error", err)
+		} else {
+			tgb.OnMessage(func(meshChannelName, senderName, text string, shrink bool) {
+				var tgChannel *meshcore.Channel
+				for _, ch := range client.GetChannels() {
+					if ch.Name == meshChannelName {
+						tgChannel = ch
+						break
+					}
+				}
+				if tgChannel == nil {
+					slog.Warn("Telegram bridge: meshcore channel not found", "name", meshChannelName)
+					return
+				}
+				prefix := fmt.Sprintf("[TG:%s] ", senderName)
+				var parts []string
+				if shrink {
+					shrunk, err := commands.ShrinkText(text)
+					if err != nil {
+						slog.Warn("Telegram bridge: shrink failed, splitting instead", "error", err)
+						parts = splitMeshMessage(prefix, text, 140)
+					} else {
+						parts = []string{prefix + shrunk}
+					}
+				} else {
+					parts = splitMeshMessage(prefix, text, 140)
+				}
+				for i, part := range parts {
+					if i > 0 {
+						time.Sleep(3 * time.Second)
+					}
+					if err := client.SendChannelMessageWithRetry(tgChannel, part, false, 3, 5*time.Second); err != nil {
+						slog.Error("Telegram bridge: failed to send to meshcore", "error", err)
+					}
+				}
+			})
+			go tgb.Start()
+			defer tgb.Stop()
+		}
+	}
 
 	// =================================
 	// Синхронизация сохранённых сообщений
@@ -209,12 +260,12 @@ startProcessing:
 			// }
 
 			// отправка с ретраями до подтверждения доставки
-			err = client.SendMessageWithRetry(v, "ping", true, 5, 5*time.Second)
-			if err != nil {
-				slog.Error("Ошибка отправки", "error", err)
-			} else {
-				slog.Info("Сообщение отправлено и доставлено")
-			}
+			// err = client.SendMessageWithRetry(v, "ping", true, 5, 5*time.Second)
+			// if err != nil {
+			// 	slog.Error("Ошибка отправки", "error", err)
+			// } else {
+			// 	slog.Info("Сообщение отправлено и доставлено")
+			// }
 		}
 	}
 
@@ -247,4 +298,32 @@ startProcessing:
 	}()
 
 	<-done
+}
+
+// splitMeshMessage splits text into parts that each fit within maxLen bytes when prefixed.
+// The prefix is applied to every part. Splits on word boundaries where possible.
+func splitMeshMessage(prefix, text string, maxLen int) []string {
+	budget := maxLen - len(prefix)
+	if budget <= 0 {
+		return []string{prefix}
+	}
+	if len(prefix)+len(text) <= maxLen {
+		return []string{prefix + text}
+	}
+
+	var parts []string
+	for len(text) > 0 {
+		if len(text) <= budget {
+			parts = append(parts, prefix+text)
+			break
+		}
+		// find last space within budget
+		cut := budget
+		if i := strings.LastIndex(text[:cut], " "); i > 0 {
+			cut = i
+		}
+		parts = append(parts, prefix+text[:cut])
+		text = strings.TrimLeft(text[cut:], " ")
+	}
+	return parts
 }
