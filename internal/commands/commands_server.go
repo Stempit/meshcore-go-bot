@@ -1,10 +1,12 @@
 package commands
 
-import "strings"
+import (
+	"strings"
+)
 
 // GenerateReplies routes incoming text to the appropriate command handler and returns
 // the messages to send back. Returns nil, nil when no command matches.
-func GenerateReplies(text, channelName string) ([]string, error) {
+func GenerateReplies(text, channelName string, pingMeta *PingMeta) ([]string, error) {
 	lower := strings.ToLower(text)
 
 	switch {
@@ -19,7 +21,11 @@ func GenerateReplies(text, channelName string) ([]string, error) {
 		return []string{reply}, nil
 
 	case lower == "ping", lower == "пинг", lower == ".ping":
-		reply, _ := ProcessPingMessage(text)
+		reply, _ := ProcessPingMessage()
+		return []string{reply}, nil
+
+	case lower == ".trace":
+		reply, _ := ProcessTraceMessage(pingMeta)
 		return []string{reply}, nil
 
 	default:

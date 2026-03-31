@@ -5,6 +5,19 @@ import (
 	"time"
 )
 
+// PingMeta holds path, timing, and location metadata from the incoming ping message.
+type PingMeta struct {
+	PathLength int    // hop count from message wire header (0xFF = direct delivery)
+	PathBytes  []byte // path node IDs from sender's contact (may be nil for channel messages)
+	Timestamp  time.Time
+	SenderLat  *float64     // sender GPS latitude (nil if unknown)
+	SenderLon  *float64     // sender GPS longitude (nil if unknown)
+	SelfLat    float64      // own GPS latitude (0 if unknown)
+	SelfLon    float64      // own GPS longitude (0 if unknown)
+	HopCoords  [][2]float64 // lat/lon for each intermediate hop; nil entry slot = unknown position
+	HopKnown   []bool       // true when HopCoords[i] is valid
+}
+
 func getRandomString() string {
 	strings := []string{
 		"Pong",
@@ -50,6 +63,6 @@ func getRandomString() string {
 	return strings[idx]
 }
 
-func ProcessPingMessage(text string) (response string, err error) {
+func ProcessPingMessage() (string, error) {
 	return getRandomString(), nil
 }

@@ -538,6 +538,7 @@ func (c *MeshCoreClient) parseContactMessageV3(data []byte) {
 	}
 	prefix := data[4:10]
 	// data[10] = path_len (метаданные, байты пути в companion-фрейме не передаются)
+	pathLen := int(data[10])
 	txtType := data[11]
 	timestampRaw := binary.LittleEndian.Uint32(data[12:16])
 
@@ -562,11 +563,13 @@ func (c *MeshCoreClient) parseContactMessageV3(data []byte) {
 	// Поиск контакта по префиксу
 	var fullKey []byte
 	var senderName string
+	var contactPath []byte
 	c.mu.RLock()
 	for _, contact := range c.contacts {
 		if len(contact.PublicKey) >= 6 && bytes.Equal(contact.PublicKey[:6], prefix) {
 			fullKey = contact.PublicKey
 			senderName = contact.Name
+			contactPath = contact.Path
 			break
 		}
 	}
@@ -583,6 +586,8 @@ func (c *MeshCoreClient) parseContactMessageV3(data []byte) {
 		Timestamp:  time.Unix(int64(timestampRaw), 0),
 		IsOutgoing: false,
 		Status:     "delivered",
+		PathLength: pathLen,
+		PathBytes:  contactPath,
 		MessageID:  fmt.Sprintf("%x-%d", prefix, timestampRaw),
 	}
 
@@ -627,6 +632,7 @@ func (c *MeshCoreClient) parseChannelMessageV3(data []byte) {
 	}
 	channelIndex := int(data[4])
 	// data[5] = path_len (метаданные, байты пути не передаются)
+	pathLen := int(data[5])
 	// data[6] = txt_type
 	timestampRaw := binary.LittleEndian.Uint32(data[7:11])
 
@@ -663,6 +669,7 @@ func (c *MeshCoreClient) parseChannelMessageV3(data []byte) {
 		Timestamp:    time.Unix(int64(timestampRaw), 0),
 		IsOutgoing:   false,
 		Status:       "delivered",
+		PathLength:   pathLen,
 		MessageID:    fmt.Sprintf("%d-%d", channelIndex, timestampRaw),
 	}
 
@@ -718,12 +725,57 @@ func (c *MeshCoreClient) parseChannelMessageV3(data []byte) {
 		mqttBridge.QueueChannelPacket(rawData, false, snr, rssi, channelIndex, channelName, senderName, text, channelKeyHex)
 	}
 
+	// Extract path bytes from raw RF packet so the bot can show repeater IDs.
+	if pathBytes, hopCount := extractPathFromRaw(rawData); len(pathBytes) > 0 {
+		msg.PathBytes = pathBytes
+		msg.PathLength = hopCount
+	}
+
 	// отправляем в канал входящих сообщений
 	select {
 	case c.incomingCh <- msg:
 	default:
 		c.logger.Warn("Incoming message channel full, dropping message")
 	}
+}
+
+// extractPathFromRaw parses the path bytes out of a raw RF packet.
+//
+// Wire format (from Packet.cpp writeTo()):
+//
+//	[header(1)] [transport_codes(4) — only for TRANSPORT routes] [path_len(1)] [path...] [payload...]
+//
+// path_len byte encoding (from Packet.h):
+//
+//	hash_count = path_len & 0x3F   (bits 0–5, number of hops)
+//	hash_size  = (path_len >> 6) + 1  (bits 6–7 → 1, 2, or 3 bytes per hop)
+//
+// Returns the raw path bytes and the hop count. Returns nil, 0 when data is
+// too short or contains no hops.
+func extractPathFromRaw(data []byte) (pathBytes []byte, hopCount int) {
+	if len(data) < 2 {
+		return nil, 0
+	}
+	routeType := data[0] & 0x03
+	hasTransportCodes := routeType == 0x00 || routeType == 0x03
+	headerLen := 2
+	if hasTransportCodes {
+		headerLen = 6
+	}
+	if len(data) < headerLen {
+		return nil, 0
+	}
+	pathLenByte := data[headerLen-1]
+	hashCount := int(pathLenByte & 0x3F)
+	hashSize := int((pathLenByte>>6)&0x03) + 1
+	if hashCount == 0 {
+		return nil, 0
+	}
+	end := headerLen + hashCount*hashSize
+	if end > len(data) {
+		return nil, 0
+	}
+	return data[headerLen:end], hashCount
 }
 
 // parseContactMessage разбирает сообщение от контакта (код 0x07).
@@ -743,6 +795,7 @@ func (c *MeshCoreClient) parseContactMessage(data []byte) {
 	}
 	prefix := data[1:7]
 	// data[7] = path_len (метаданные, без реальных байт пути)
+	pathLen := int(data[7])
 	txtType := data[8]
 	timestampRaw := binary.LittleEndian.Uint32(data[9:13])
 
@@ -765,10 +818,12 @@ func (c *MeshCoreClient) parseContactMessage(data []byte) {
 	}
 
 	var fullKey []byte
+	var contactPath []byte
 	c.mu.RLock()
 	for _, contact := range c.contacts {
 		if len(contact.PublicKey) >= 6 && bytes.Equal(contact.PublicKey[:6], prefix) {
 			fullKey = contact.PublicKey
+			contactPath = contact.Path
 			break
 		}
 	}
@@ -784,6 +839,8 @@ func (c *MeshCoreClient) parseContactMessage(data []byte) {
 		Timestamp:  time.Unix(int64(timestampRaw), 0),
 		IsOutgoing: false,
 		Status:     "delivered",
+		PathLength: pathLen,
+		PathBytes:  contactPath,
 		MessageID:  fmt.Sprintf("%x-%d", prefix, timestampRaw),
 	}
 
@@ -823,6 +880,7 @@ func (c *MeshCoreClient) parseChannelMessage(data []byte) {
 	}
 	channelIndex := int(data[1])
 	// data[2] = path_len (метаданные)
+	pathLen := int(data[2])
 	// data[3] = txt_type (для каналов всегда TXT_TYPE_PLAIN)
 	timestampRaw := binary.LittleEndian.Uint32(data[4:8])
 
@@ -858,6 +916,7 @@ func (c *MeshCoreClient) parseChannelMessage(data []byte) {
 		Timestamp:    time.Unix(int64(timestampRaw), 0),
 		IsOutgoing:   false,
 		Status:       "delivered",
+		PathLength:   pathLen,
 		MessageID:    fmt.Sprintf("%d-%d", channelIndex, timestampRaw),
 	}
 

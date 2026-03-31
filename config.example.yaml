@@ -52,3 +52,8 @@ Telegram:
       thread_id: 2                # topic/thread ID (message_id of the topic root)
       mesh_channel_name: "#tg2"
       shrink: true
+
+Trace:
+  use_config_coords: false  # использование предзаданных координат
+  lat: 0
+  lon: 0

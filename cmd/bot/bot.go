@@ -159,8 +159,29 @@ startProcessing:
 
 				slog.Info("Личное сообщение", "sender", fmt.Sprintf("%x", m.SenderKey[:6]), "text", m.Text)
 
+				// техническая информация для пингов
+				pingMeta := &commands.PingMeta{
+					PathLength: m.PathLength,
+					PathBytes:  m.PathBytes,
+					Timestamp:  m.Timestamp,
+					SenderLat:  contact.Latitude,
+					SenderLon:  contact.Longitude,
+				}
+				setSelfCoords(pingMeta, client)
+				if hops := m.PathLength; hops > 0 && len(m.PathBytes) > 0 {
+					var bph int
+					if len(m.PathBytes) == hops {
+						bph = 1
+					} else if len(m.PathBytes) == hops*2 {
+						bph = 2
+					}
+					if bph > 0 {
+						pingMeta.HopCoords, pingMeta.HopKnown = resolveHopCoords(m.PathBytes, hops, bph, client.GetContacts())
+					}
+				}
+
 				// собираем ответы
-				replies, cmdErr := commands.GenerateReplies(m.Text, "")
+				replies, cmdErr := commands.GenerateReplies(m.Text, "", pingMeta)
 				if cmdErr != nil {
 					slog.Error("Ошибка команды", "error", cmdErr)
 					continue
@@ -199,8 +220,34 @@ startProcessing:
 					continue
 				}
 
+				// техническая информация для пингов
+				pingMeta := &commands.PingMeta{
+					PathLength: m.PathLength,
+					PathBytes:  m.PathBytes,
+					Timestamp:  m.Timestamp,
+				}
+				for _, c := range client.GetContacts() {
+					if c.Name == m.SenderName {
+						pingMeta.SenderLat = c.Latitude
+						pingMeta.SenderLon = c.Longitude
+						break
+					}
+				}
+				setSelfCoords(pingMeta, client)
+				if hops := m.PathLength; hops > 0 && len(m.PathBytes) > 0 {
+					var bph int
+					if len(m.PathBytes) == hops {
+						bph = 1
+					} else if len(m.PathBytes) == hops*2 {
+						bph = 2
+					}
+					if bph > 0 {
+						pingMeta.HopCoords, pingMeta.HopKnown = resolveHopCoords(m.PathBytes, hops, bph, client.GetContacts())
+					}
+				}
+
 				// собираем ответы
-				replies, cmdErr := commands.GenerateReplies(m.Text, channel.Name) //todo: может channelName выпилить, используется только для .last, можно принудительно указывать в запросе канал
+				replies, cmdErr := commands.GenerateReplies(m.Text, channel.Name, pingMeta) //todo: может channelName выпилить, используется только для .last, можно принудительно указывать в запросе канал
 				if cmdErr != nil {
 					slog.Error("Ошибка команды", "error", cmdErr)
 					continue
@@ -300,6 +347,23 @@ startProcessing:
 	<-done
 }
 
+// setSelfCoords fills pingMeta.SelfLat/SelfLon from config (when use_config_coords is true)
+// or from the device's own SelfInfo. Config coords take priority when the flag is set.
+func setSelfCoords(pingMeta *commands.PingMeta, client interface {
+	GetSelfInfo() *meshcore.SelfInfo
+}) {
+	pingCfg := config.Get().Trace
+	if pingCfg.UseConfigCoords {
+		pingMeta.SelfLat = pingCfg.Lat
+		pingMeta.SelfLon = pingCfg.Lon
+		return
+	}
+	if self := client.GetSelfInfo(); self != nil {
+		pingMeta.SelfLat = self.Latitude
+		pingMeta.SelfLon = self.Longitude
+	}
+}
+
 // splitMeshMessage splits text into parts that each fit within maxLen bytes when prefixed.
 // The prefix is applied to every part. Splits on word boundaries where possible.
 func splitMeshMessage(prefix, text string, maxLen int) []string {
@@ -326,4 +390,36 @@ func splitMeshMessage(prefix, text string, maxLen int) []string {
 		text = strings.TrimLeft(text[cut:], " ")
 	}
 	return parts
+}
+
+// resolveHopCoords resolves GPS coordinates for each intermediate hop in pathBytes.
+// bytesPerHop is 1 or 2; each hop's bytes are matched against contact public key prefixes.
+func resolveHopCoords(pathBytes []byte, hopCount, bytesPerHop int, contacts map[string]*meshcore.Contact) (coords [][2]float64, known []bool) {
+	coords = make([][2]float64, hopCount)
+	known = make([]bool, hopCount)
+	for i := 0; i < hopCount; i++ {
+		chunk := pathBytes[i*bytesPerHop : (i+1)*bytesPerHop]
+		for _, c := range contacts {
+			if len(c.PublicKey) >= bytesPerHop && bytesEqual(c.PublicKey[:bytesPerHop], chunk) {
+				if c.Latitude != nil && c.Longitude != nil {
+					coords[i] = [2]float64{*c.Latitude, *c.Longitude}
+					known[i] = true
+				}
+				break
+			}
+		}
+	}
+	return
+}
+
+func bytesEqual(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
