@@ -50,6 +50,36 @@ func main() {
 	client.RequestAllStats()
 
 	// =================================
+	// Приветствие новых узлов
+	// =================================
+
+	knownKeys, err := commands.NewKnownKeys("log/known.txt")
+	if err != nil {
+		slog.Error("Failed to load known keys", "error", err)
+		os.Exit(1)
+	}
+	client.OnAdvert(func(contact *meshcore.Contact) {
+		alreadyKnown, err := knownKeys.CheckAndAdd(contact.PublicKey, contact.Name)
+		if err != nil {
+			slog.Error("Failed to update known keys", "error", err)
+			return
+		}
+		if alreadyKnown {
+			return
+		}
+		slog.Info("New node seen, sending greeting", "name", contact.Name, "type", contact.Type)
+		pubCh := client.GetChannels()[0]
+		if pubCh == nil || pubCh.IsEmpty {
+			slog.Warn("Public channel 0 not available, skipping greeting")
+			return
+		}
+		msg := commands.GreetMessage(contact.Name, contact.Type)
+		if err := client.SendChannelMessageWithRetry(pubCh, msg, false, 3, 5*time.Second); err != nil {
+			slog.Error("Failed to send greeting", "error", err)
+		}
+	})
+
+	// =================================
 	// Пересылка сообщений из телеги
 	// =================================
 

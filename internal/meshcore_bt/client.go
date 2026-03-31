@@ -78,6 +78,7 @@ type MeshCoreClient struct {
 	onBattery        func(millivolts int, usedKb, totalKb int)
 	onError          func(error)
 	onNoMoreMessages func()
+	onAdvert         func(*Contact)
 
 	// для ожидания подтверждения
 	sentConfirmCh      chan struct{} // для respCodeSent
@@ -1409,6 +1410,10 @@ func (c *MeshCoreClient) parseAdvert(data []byte) {
 		}
 		mqttBridge.QueuePacket(rawData, false, snr, rssi)
 	}
+
+	if c.onAdvert != nil {
+		c.onAdvert(contact)
+	}
 }
 
 // buildGRPTXTPacket constructs a valid MeshCore GRP_TXT RF packet from plaintext
@@ -2055,6 +2060,9 @@ func pubKeyHex(key []byte) string {
 
 func (c *MeshCoreClient) OnContact(f func(*Contact)) {
 	c.onContact = f
+}
+func (c *MeshCoreClient) OnAdvert(f func(*Contact)) {
+	c.onAdvert = f
 }
 func (c *MeshCoreClient) OnChannel(f func(*Channel)) {
 	c.onChannel = f
