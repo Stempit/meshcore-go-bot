@@ -52,3 +52,6 @@ Telegram:
       thread_id: 2                # topic/thread ID (message_id of the topic root)
       mesh_channel_name: "#tg2"
       shrink: true
+
+Ping:
+  tech_enabled: false  # true = пинги с технической информацией вместо хохм

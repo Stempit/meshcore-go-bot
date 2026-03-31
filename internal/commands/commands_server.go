@@ -1,10 +1,13 @@
 package commands
 
-import "strings"
+import (
+	"meshbot/internal/config"
+	"strings"
+)
 
 // GenerateReplies routes incoming text to the appropriate command handler and returns
 // the messages to send back. Returns nil, nil when no command matches.
-func GenerateReplies(text, channelName string) ([]string, error) {
+func GenerateReplies(text, channelName string, pingMeta *PingMeta) ([]string, error) {
 	lower := strings.ToLower(text)
 
 	switch {
@@ -19,7 +22,11 @@ func GenerateReplies(text, channelName string) ([]string, error) {
 		return []string{reply}, nil
 
 	case lower == "ping", lower == "пинг", lower == ".ping":
-		reply, _ := ProcessPingMessage(text)
+		techEnabled := false
+		if cfg := config.Get(); cfg != nil {
+			techEnabled = cfg.Ping.TechEnabled
+		}
+		reply, _ := ProcessPingMessage(pingMeta, techEnabled)
 		return []string{reply}, nil
 
 	default:

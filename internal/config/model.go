@@ -8,6 +8,9 @@ import (
 type Config struct {
 	MQTT      mqttbridge.MQTTConfig  `yaml:"MQTT"`
 	Telegram  tgbridge.TelegramConfig `yaml:"Telegram"`
+	Ping struct {
+		TechEnabled bool `yaml:"tech_enabled"`
+	} `yaml:"Ping"`
 	LLM struct {
 		Enabled           bool    `yaml:"enabled"`
 		Type              string  `yaml:"type"`
