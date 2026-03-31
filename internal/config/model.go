@@ -11,10 +11,21 @@ type TraceConfig struct {
 	Lon             float64 `yaml:"lon"`
 }
 
+type SecurityListConfig struct {
+	Whitelist []string `yaml:"whitelist"`
+	Blacklist []string `yaml:"blacklist"`
+}
+
+type SecurityConfig struct {
+	Channels SecurityListConfig `yaml:"channels"`
+	Direct   SecurityListConfig `yaml:"direct"`
+}
+
 type Config struct {
 	MQTT     mqttbridge.MQTTConfig   `yaml:"MQTT"`
 	Telegram tgbridge.TelegramConfig `yaml:"Telegram"`
 	Trace    TraceConfig             `yaml:"Trace"`
+	Security SecurityConfig          `yaml:"Security"`
 	LLM      struct {
 		Enabled           bool    `yaml:"enabled"`
 		Type              string  `yaml:"type"`

@@ -140,8 +140,15 @@ startProcessing:
 			switch m := msg.(type) {
 			case *meshcore.Message: // личные сообщения
 
+				// Фильтрация по whitelist/blacklist
+				senderKeyHex := fmt.Sprintf("%x", m.SenderKey)
+				if !config.Get().Security.Direct.IsAllowed(senderKeyHex) {
+					slog.Info("Direct message filtered by security policy", "sender", senderKeyHex[:12])
+					continue
+				}
+
 				// Находим контакт отправителя по ключу
-				senderKeyHex := fmt.Sprintf("%x", m.SenderKey[:6]) // можно использовать префикс
+				senderKeyHex = fmt.Sprintf("%x", m.SenderKey[:6]) // можно использовать префикс
 				var contact *meshcore.Contact
 				for _, c := range client.GetContacts() {
 					if fmt.Sprintf("%x", c.PublicKey[:6]) == senderKeyHex {
@@ -217,6 +224,12 @@ startProcessing:
 				channel, ok := channels[m.ChannelIndex]
 				if !ok || channel.IsEmpty {
 					slog.Warn("Канал не найден или пуст", "channel", m.ChannelIndex)
+					continue
+				}
+
+				// Фильтрация по whitelist/blacklist
+				if !config.Get().Security.Channels.IsAllowed(channel.Name) {
+					slog.Info("Channel message filtered by security policy", "channel", channel.Name)
 					continue
 				}
 
