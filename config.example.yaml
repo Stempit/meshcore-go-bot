@@ -57,3 +57,11 @@ Trace:
   use_config_coords: false  # использование предзаданных координат
   lat: 0
   lon: 0
+
+Security:
+  channels:
+    whitelist: []          # empty = allow all (unless blacklisted)
+    blacklist: ["OffLimits"]
+  direct:
+    whitelist: ["deadbeef1234..."]  # non-empty = only these keys
+    blacklist: []
