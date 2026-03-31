@@ -1,7 +1,6 @@
 package commands
 
 import (
-	"meshbot/internal/config"
 	"strings"
 )
 
@@ -22,11 +21,11 @@ func GenerateReplies(text, channelName string, pingMeta *PingMeta) ([]string, er
 		return []string{reply}, nil
 
 	case lower == "ping", lower == "пинг", lower == ".ping":
-		techEnabled := false
-		if cfg := config.Get(); cfg != nil {
-			techEnabled = cfg.Ping.TechEnabled
-		}
-		reply, _ := ProcessPingMessage(pingMeta, techEnabled)
+		reply, _ := ProcessPingMessage()
+		return []string{reply}, nil
+
+	case lower == ".trace":
+		reply, _ := ProcessTraceMessage(pingMeta)
 		return []string{reply}, nil
 
 	default:
