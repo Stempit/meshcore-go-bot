@@ -167,10 +167,7 @@ startProcessing:
 					SenderLat:  contact.Latitude,
 					SenderLon:  contact.Longitude,
 				}
-				if self := client.GetSelfInfo(); self != nil {
-					pingMeta.SelfLat = self.Latitude
-					pingMeta.SelfLon = self.Longitude
-				}
+				setSelfCoords(pingMeta, client)
 				if hops := m.PathLength; hops > 0 && len(m.PathBytes) > 0 {
 					var bph int
 					if len(m.PathBytes) == hops {
@@ -236,10 +233,7 @@ startProcessing:
 						break
 					}
 				}
-				if self := client.GetSelfInfo(); self != nil {
-					pingMeta.SelfLat = self.Latitude
-					pingMeta.SelfLon = self.Longitude
-				}
+				setSelfCoords(pingMeta, client)
 				if hops := m.PathLength; hops > 0 && len(m.PathBytes) > 0 {
 					var bph int
 					if len(m.PathBytes) == hops {
@@ -351,6 +345,23 @@ startProcessing:
 	}()
 
 	<-done
+}
+
+// setSelfCoords fills pingMeta.SelfLat/SelfLon from config (when use_config_coords is true)
+// or from the device's own SelfInfo. Config coords take priority when the flag is set.
+func setSelfCoords(pingMeta *commands.PingMeta, client interface {
+	GetSelfInfo() *meshcore.SelfInfo
+}) {
+	pingCfg := config.Get().Trace
+	if pingCfg.UseConfigCoords {
+		pingMeta.SelfLat = pingCfg.Lat
+		pingMeta.SelfLon = pingCfg.Lon
+		return
+	}
+	if self := client.GetSelfInfo(); self != nil {
+		pingMeta.SelfLat = self.Latitude
+		pingMeta.SelfLon = self.Longitude
+	}
 }
 
 // splitMeshMessage splits text into parts that each fit within maxLen bytes when prefixed.

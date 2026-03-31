@@ -53,5 +53,7 @@ Telegram:
       mesh_channel_name: "#tg2"
       shrink: true
 
-Ping:
-  tech_enabled: false  # true = пинги с технической информацией вместо хохм
+Trace:
+  use_config_coords: false  # использование предзаданных координат
+  lat: 0
+  lon: 0

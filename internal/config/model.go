@@ -5,9 +5,16 @@ import (
 	"meshbot/internal/tgbridge"
 )
 
+type TraceConfig struct {
+	UseConfigCoords bool    `yaml:"use_config_coords"`
+	Lat             float64 `yaml:"lat"`
+	Lon             float64 `yaml:"lon"`
+}
+
 type Config struct {
 	MQTT     mqttbridge.MQTTConfig   `yaml:"MQTT"`
 	Telegram tgbridge.TelegramConfig `yaml:"Telegram"`
+	Trace    TraceConfig             `yaml:"Trace"`
 	LLM      struct {
 		Enabled           bool    `yaml:"enabled"`
 		Type              string  `yaml:"type"`
