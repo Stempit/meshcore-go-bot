@@ -57,11 +57,28 @@ func formatTechPong(meta *PingMeta) string {
 	selfKnown := meta.SelfLat != 0 || meta.SelfLon != 0
 	senderKnown := meta.SenderLat != nil && meta.SenderLon != nil
 
-	if selfKnown && senderKnown {
-		directKm := haversineKm(meta.SelfLat, meta.SelfLon, *meta.SenderLat, *meta.SenderLon)
+	// If sender coordinates are unknown, fall back to the first repeater's coordinates.
+	// In that case we append "+" to the distance unit to signal it's a minimum estimate.
+	var endLat, endLon float64
+	approx := false
+	if senderKnown {
+		endLat, endLon = *meta.SenderLat, *meta.SenderLon
+	} else if len(meta.HopCoords) > 0 && len(meta.HopKnown) > 0 && meta.HopKnown[0] {
+		endLat, endLon = meta.HopCoords[0][0], meta.HopCoords[0][1]
+		approx = true
+	}
+
+	if selfKnown && (senderKnown || approx) {
+		directKm := haversineKm(meta.SelfLat, meta.SelfLon, endLat, endLon)
+		unit := "km"
+		unitM := "m"
+		if approx {
+			unit = "km+"
+			unitM = "m+"
+		}
 
 		// Try to compute total path distance if all intermediate hops have known positions.
-		allHopsKnown := len(meta.HopKnown) == len(meta.HopCoords) && len(meta.HopCoords) == meta.PathLength
+		allHopsKnown := senderKnown && len(meta.HopKnown) == len(meta.HopCoords) && len(meta.HopCoords) == meta.PathLength
 		if allHopsKnown {
 			for _, known := range meta.HopKnown {
 				if !known {
@@ -81,15 +98,15 @@ func formatTechPong(meta *PingMeta) string {
 			}
 			totalKm += haversineKm(prevLat, prevLon, *meta.SenderLat, *meta.SenderLon)
 			if directKm < 1 {
-				fmt.Fprintf(&sb, " %.0fm->%.0fm", directKm*1000, totalKm*1000)
+				fmt.Fprintf(&sb, " %.0f%s->%.0f%s", directKm*1000, unitM, totalKm*1000, unitM)
 			} else {
-				fmt.Fprintf(&sb, " %.1fkm->%.1fkm", directKm, totalKm)
+				fmt.Fprintf(&sb, " %.1f%s->%.1f%s", directKm, unit, totalKm, unit)
 			}
 		} else {
 			if directKm < 1 {
-				fmt.Fprintf(&sb, " %.0fm", directKm*1000)
+				fmt.Fprintf(&sb, " %.0f%s", directKm*1000, unitM)
 			} else {
-				fmt.Fprintf(&sb, " %.1fkm", directKm)
+				fmt.Fprintf(&sb, " %.1f%s", directKm, unit)
 			}
 		}
 	}
