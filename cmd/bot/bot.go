@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"strings"
+	"sync"
 
 	"meshbot/internal/commands"
 	"meshbot/internal/config"
@@ -58,6 +59,26 @@ func main() {
 		slog.Error("Failed to load known keys", "error", err)
 		os.Exit(1)
 	}
+
+	sendGreeting := func(contact *meshcore.Contact) {
+		slog.Info("New node seen, sending greeting", "name", contact.Name, "type", contact.Type)
+		pubCh := client.GetChannels()[0]
+		if pubCh == nil || pubCh.IsEmpty {
+			slog.Warn("Public channel 0 not available, skipping greeting")
+			return
+		}
+		msg := commands.GreetMessage(contact.Name, contact.PublicKey, contact.Type)
+		if err := client.SendChannelMessageWithRetry(pubCh, msg, false, 3, 5*time.Second); err != nil {
+			slog.Error("Failed to send greeting", "error", err)
+		}
+	}
+
+	// pendingGreets holds public-key hex strings of nodes whose advert arrived
+	// before their contact record was in the cache. They will be greeted once
+	// the full contact is received via OnContact.
+	pendingGreets := make(map[string]struct{})
+	var pendingMu sync.Mutex
+
 	client.OnAdvert(func(contact *meshcore.Contact) {
 		alreadyKnown, err := knownKeys.CheckAndAdd(contact.PublicKey, contact.Name)
 		if err != nil {
@@ -67,16 +88,45 @@ func main() {
 		if alreadyKnown {
 			return
 		}
-		slog.Info("New node seen, sending greeting", "name", contact.Name, "type", contact.Type)
-		pubCh := client.GetChannels()[0]
-		if pubCh == nil || pubCh.IsEmpty {
-			slog.Warn("Public channel 0 not available, skipping greeting")
+		if contact.Type == 0 && contact.Name == "" {
+			// Stub contact: type/name unknown yet. Request a contacts refresh and
+			// defer the greeting until the full record arrives via OnContact.
+			slog.Info("New node seen (stub), deferring greeting until contact info arrives",
+				"pub_key", fmt.Sprintf("%x", contact.PublicKey))
+			keyHex := fmt.Sprintf("%x", contact.PublicKey)
+			pendingMu.Lock()
+			pendingGreets[keyHex] = struct{}{}
+			pendingMu.Unlock()
+			if err := client.RequestContacts(0); err != nil {
+				slog.Error("Failed to request contacts after stub advert", "error", err)
+			}
 			return
 		}
-		msg := commands.GreetMessage(contact.Name, contact.Type)
-		if err := client.SendChannelMessageWithRetry(pubCh, msg, false, 3, 5*time.Second); err != nil {
-			slog.Error("Failed to send greeting", "error", err)
+		sendGreeting(contact)
+	})
+
+	client.OnContact(func(contact *meshcore.Contact) {
+		keyHex := fmt.Sprintf("%x", contact.PublicKey)
+		pendingMu.Lock()
+		_, isPending := pendingGreets[keyHex]
+		if isPending {
+			delete(pendingGreets, keyHex)
 		}
+		pendingMu.Unlock()
+		if !isPending {
+			return
+		}
+		// This contact arrived as a stub advert earlier; greet it now that we
+		// have its full record (name, type).
+		alreadyKnown, err := knownKeys.CheckAndAdd(contact.PublicKey, contact.Name)
+		if err != nil {
+			slog.Error("Failed to update known keys", "error", err)
+			return
+		}
+		if alreadyKnown {
+			return
+		}
+		sendGreeting(contact)
 	})
 
 	// =================================
@@ -380,6 +430,15 @@ startProcessing:
 			case <-ticker.C:
 				if err := client.RequestAllStats(); err != nil {
 					slog.Error("Failed to request periodic stats", "error", err)
+					if !client.IsConnected() {
+						slog.Warn("BLE connection lost, reconnecting...")
+						time.Sleep(5 * time.Second)
+						if err := client.Reconnect(); err != nil {
+							slog.Error("Reconnect failed", "error", err)
+						} else {
+							slog.Info("Reconnected to device")
+						}
+					}
 				}
 			case <-done:
 				return

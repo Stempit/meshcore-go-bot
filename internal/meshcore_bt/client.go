@@ -42,6 +42,7 @@ type MeshCoreClient struct {
 	rxChar    *bluetooth.DeviceCharacteristic
 	txChar    *bluetooth.DeviceCharacteristic
 	connected bool
+	address   bluetooth.Address
 	mu        sync.RWMutex
 
 	// Состояние
@@ -129,6 +130,7 @@ func (c *MeshCoreClient) Connect(address bluetooth.Address) error {
 		c.mu.Unlock()
 		return nil
 	}
+	c.address = address
 	// Закрываем старый doneCh, если он ещё не закрыт (например, после разрыва)
 	select {
 	case <-c.doneCh:
@@ -138,6 +140,16 @@ func (c *MeshCoreClient) Connect(address bluetooth.Address) error {
 	}
 	c.doneCh = make(chan struct{})
 	c.mu.Unlock()
+
+	// Drain any stale notifications buffered from the previous connection.
+drainLoop:
+	for {
+		select {
+		case <-c.notifyCh:
+		default:
+			break drainLoop
+		}
+	}
 
 	device, err := c.adapter.Connect(address, bluetooth.ConnectionParams{})
 	if err != nil {
@@ -493,15 +505,54 @@ func (c *MeshCoreClient) sendReboot() error {
 
 func (c *MeshCoreClient) write(data []byte) error {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
 	if !c.connected || c.rxChar == nil {
+		c.mu.RUnlock()
 		return fmt.Errorf("not connected")
 	}
 	_, err := c.rxChar.Write(data)
+	c.mu.RUnlock()
 	if err != nil {
 		c.logger.Error("Write to characteristic failed", "error", err)
+		c.markDisconnected()
 	}
 	return err
+}
+
+// markDisconnected transitions the client to a disconnected state after a
+// write failure. It is safe to call concurrently; subsequent calls are no-ops.
+func (c *MeshCoreClient) markDisconnected() {
+	c.mu.Lock()
+	if !c.connected {
+		c.mu.Unlock()
+		return
+	}
+	c.connected = false
+	select {
+	case <-c.doneCh:
+	default:
+		close(c.doneCh)
+	}
+	c.mu.Unlock()
+	c.wg.Wait() // wait for frameHandler to exit
+	if c.device != nil {
+		_ = c.device.Disconnect()
+	}
+	c.logger.Warn("BLE connection lost; reconnection required")
+}
+
+// IsConnected reports whether the client currently has an active BLE connection.
+func (c *MeshCoreClient) IsConnected() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.connected
+}
+
+// Reconnect re-establishes the BLE connection to the previously connected address.
+func (c *MeshCoreClient) Reconnect() error {
+	c.mu.RLock()
+	addr := c.address
+	c.mu.RUnlock()
+	return c.Connect(addr)
 }
 
 // ============================================================================

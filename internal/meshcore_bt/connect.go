@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"tinygo.org/x/bluetooth"
@@ -28,13 +29,14 @@ func CreateClient() *MeshCoreClient {
 
 	// Канал для синхронизации получения SelfInfo
 	selfInfoReceived := make(chan struct{})
+	var selfInfoOnce sync.Once
 
 	client.OnSelfInfo(func(info *SelfInfo) {
 		slog.Info("Self info received",
 			"name", info.Name,
 			"pubkey", fmt.Sprintf("%x", info.PublicKey),
 		)
-		close(selfInfoReceived)
+		selfInfoOnce.Do(func() { close(selfInfoReceived) })
 	})
 
 	client.OnChannel(func(ch *Channel) {

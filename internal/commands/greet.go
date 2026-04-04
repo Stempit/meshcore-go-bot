@@ -77,9 +77,16 @@ func (kk *KnownKeys) CheckAndAdd(pubKey []byte, name string) (alreadyKnown bool,
 }
 
 // GreetMessage returns the greeting text for a newly seen node.
+// If name is empty, the first 8 hex characters of pubKey are used as the display name.
 //
 //	contactType: 1 = chat/companion, 2 = repeater, 3 = room server, 4 = sensor
-func GreetMessage(name string, contactType int) string {
+func GreetMessage(name string, pubKey []byte, contactType int) string {
+	if name == "" {
+		name = hex.EncodeToString(pubKey)
+		if len(name) > 8 {
+			name = name[:8]
+		}
+	}
 	switch contactType {
 	case 2:
 		return fmt.Sprintf("Wow! New repeater found: @[%s]", name)
