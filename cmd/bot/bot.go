@@ -133,8 +133,9 @@ func main() {
 	// Пересылка сообщений из телеги
 	// =================================
 
+	var tgb *tgbridge.Bridge
 	if tgCfg := config.Get().Telegram; tgCfg.Enabled {
-		tgb, err := tgbridge.New(tgCfg, logger)
+		tgb, err = tgbridge.New(tgCfg, logger)
 		if err != nil {
 			slog.Error("Failed to start Telegram bridge", "error", err)
 		} else {
@@ -311,6 +312,11 @@ startProcessing:
 				if !config.Get().Security.Channels.IsAllowed(channel.Name) {
 					slog.Info("Channel message filtered by security policy", "channel", channel.Name)
 					continue
+				}
+
+				// Пересылка в Telegram
+				if tgb != nil {
+					tgb.Forward(channel.Name, m.SenderName, m.Text)
 				}
 
 				// техническая информация для пингов

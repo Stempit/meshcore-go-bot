@@ -42,16 +42,24 @@ LLM:
 Telegram:
   enabled: true
   bot_token: "123456:ABC-DEF..."
+  # sources: Telegram → MeshCore (forward Telegram messages into a mesh channel)
   sources:
     - type: channel
       chat_id: -1001234567890     # Telegram channel ID (negative)
       mesh_channel_name: "#tg1"
       shrink: true
     - type: group_thread
-      chat_id: -1001234567890     # public group ID (negative) 1002741904113
+      chat_id: -1001234567890     # public group ID (negative)
       thread_id: 2                # topic/thread ID (message_id of the topic root)
       mesh_channel_name: "#tg2"
       shrink: true
+  # targets: MeshCore → Telegram (forward mesh channel messages into Telegram)
+  targets:
+    - mesh_channel_name: "Public"   # meshcore channel name to listen on
+      chat_id: -1001234567890          # Telegram channel or group to post to
+    - mesh_channel_name: "Public"   # same mesh channel → different group thread
+      chat_id: -1009876543210
+      thread_id: 5                     # topic/thread ID (0 or omit = no thread)
 
 Trace:
   use_config_coords: false  # использование предзаданных координат

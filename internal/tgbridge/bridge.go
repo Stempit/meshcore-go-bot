@@ -14,6 +14,16 @@ type TelegramConfig struct {
 	Enabled  bool     `yaml:"enabled"`
 	BotToken string   `yaml:"bot_token"`
 	Sources  []Source `yaml:"sources"`
+	Targets  []Target `yaml:"targets"`
+}
+
+// Target describes a MeshCore channel whose messages are forwarded to Telegram.
+// type is implicit: if thread_id != 0 the message is sent to a topic inside a group;
+// otherwise it is sent to a plain channel or group (chat_id only).
+type Target struct {
+	MeshChannelName string `yaml:"mesh_channel_name"` // meshcore channel to listen on (e.g. "#tg")
+	ChatID          int64  `yaml:"chat_id"`           // Telegram chat/channel ID to post to
+	ThreadID        int    `yaml:"thread_id"`         // topic/thread ID (0 = no thread)
 }
 
 // Source describes a single Telegram source to monitor.
@@ -179,6 +189,28 @@ func (b *Bridge) logUpdate(update tgbotapi.Update) {
 		)
 	default:
 		b.logger.Debug("Telegram update: other", "update_id", update.UpdateID)
+	}
+}
+
+// Forward sends a MeshCore channel message to every Telegram target configured for that channel.
+// Call this from the incoming-message handler in bot.go for ChannelMessage events.
+func (b *Bridge) Forward(meshChannelName, senderName, text string) {
+	formatted := fmt.Sprintf("[%s] %s", senderName, text)
+	for _, t := range b.cfg.Targets {
+		if t.MeshChannelName != meshChannelName {
+			continue
+		}
+		mc := tgbotapi.NewMessage(t.ChatID, formatted)
+		if t.ThreadID != 0 {
+			mc.MessageThreadID = t.ThreadID
+		}
+		if _, err := b.bot.Send(mc); err != nil {
+			b.logger.Error("Telegram bridge: forward to Telegram failed",
+				"chat_id", t.ChatID, "mesh_channel", meshChannelName, "error", err)
+		} else {
+			b.logger.Info("Telegram bridge: forwarded to Telegram",
+				"chat_id", t.ChatID, "mesh_channel", meshChannelName, "sender", senderName)
+		}
 	}
 }
 
