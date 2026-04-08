@@ -61,6 +61,24 @@ Telegram:
       chat_id: -1009876543210
       thread_id: 5                     # topic/thread ID (0 or omit = no thread)
 
+RSS:
+  enabled: true
+  long_title: skip       # "skip" – drop titles >140 chars; "shrink" – compress via LLM
+  seen_file: log/rss_seen.txt   # omit to use this default path
+  feeds:
+    - url: https://habr.com/ru/rss/news/rated0/?fl=ru
+      channel: "#news-habr"
+      prefix: "[habr] "
+      interval: 5m
+    - url: https://www.ixbt.com/export/news.rss
+      channel: "#news-ixbt"
+      prefix: "[ixbt] "
+      interval: 5m
+    - url: https://rssexport.rbc.ru/rbcnews/news/30/full.rss
+      channel: "#news-rbc"
+      prefix: "[rbc] "
+      interval: 5m
+
 Trace:
   use_config_coords: false  # использование предзаданных координат
   lat: 0
