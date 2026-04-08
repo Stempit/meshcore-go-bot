@@ -13,6 +13,7 @@ import (
 	"meshbot/internal/config"
 	"meshbot/internal/historylog"
 	meshcore "meshbot/internal/meshcore_bt"
+	"meshbot/internal/rss"
 	"meshbot/internal/tgbridge"
 )
 
@@ -198,6 +199,47 @@ func main() {
 		close(syncDone)
 	}
 	<-syncDone
+
+	// =================================
+	// RSS poller
+	// =================================
+
+	if rssCfg := config.Get().RSS; rssCfg.Enabled {
+		var feeds []rss.Feed
+		for _, f := range rssCfg.Feeds {
+			dur, err := time.ParseDuration(f.Interval)
+			if err != nil {
+				slog.Error("RSS: invalid interval, skipping feed", "url", f.URL, "interval", f.Interval, "error", err)
+				continue
+			}
+			feeds = append(feeds, rss.Feed{
+				URL:      f.URL,
+				Channel:  f.Channel,
+				Prefix:   f.Prefix,
+				Interval: dur,
+			})
+		}
+		seenFile := rssCfg.SeenFile
+		if seenFile == "" {
+			seenFile = "log/rss_seen.txt"
+		}
+		poller := rss.New(
+			feeds,
+			rssCfg.LongTitle,
+			seenFile,
+			func(channelName, text string) error {
+				for _, ch := range client.GetChannels() {
+					if ch.Name == channelName {
+						return client.SendChannelMessageWithRetry(ch, text, false, 3, 5*time.Second)
+					}
+				}
+				slog.Warn("RSS: meshcore channel not found", "name", channelName)
+				return nil
+			},
+			commands.ShrinkText,
+		)
+		poller.Start()
+	}
 
 	// Сбрасываем буфер канала — там могут быть сохранённые сообщения
 	for {
