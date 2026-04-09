@@ -22,16 +22,15 @@ type SecurityConfig struct {
 }
 
 type RSSFeedConfig struct {
+	Name     string `yaml:"name"` // used as filename in log/news/<name>.txt
 	URL      string `yaml:"url"`
-	Channel  string `yaml:"channel"`
-	Prefix   string `yaml:"prefix"`   // e.g. "[habr] "
 	Interval string `yaml:"interval"` // e.g. "5m", "1h"
 }
 
 type RSSConfig struct {
 	Enabled   bool            `yaml:"enabled"`
 	LongTitle string          `yaml:"long_title"` // "skip" or "shrink"
-	SeenFile  string          `yaml:"seen_file"`  // defaults to "log/rss_seen.txt"
+	SeenDir   string          `yaml:"seen_dir"`   // defaults to "log/news"
 	Feeds     []RSSFeedConfig `yaml:"feeds"`
 }
 

@@ -10,6 +10,9 @@ func GenerateReplies(text, channelName string, pingMeta *PingMeta) ([]string, er
 	lower := strings.ToLower(text)
 
 	switch {
+	case strings.HasPrefix(lower, ".news"):
+		return ProcessNewsCommand(text)
+
 	case strings.HasPrefix(lower, ".last"):
 		return ProcessLastCommand(text, channelName)
 
