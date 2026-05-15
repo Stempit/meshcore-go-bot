@@ -63,8 +63,10 @@ func main() {
 			return
 		}
 		msg := commands.GreetMessage(contact.Name, contact.PublicKey, contact.Type)
-		if err := client.SendChannelMessageWithRetry(pubCh, msg, false, 3, 5*time.Second); err != nil {
-			slog.Error("Failed to send greeting", "error", err)
+		if err := client.SendChannelMessageWithRetry(pubCh, msg, true, 1, 15*time.Second); err != nil {
+			slog.Error("Failed to send greeting", "channel", pubCh.Name, "error", err)
+		} else {
+			slog.Info("Channel greeting sent", "channel", pubCh.Name)
 		}
 	}
 
@@ -153,7 +155,7 @@ func main() {
 					if i > 0 {
 						time.Sleep(3 * time.Second)
 					}
-					if err := client.SendChannelMessageWithRetry(tgChannel, part, false, 3, 5*time.Second); err != nil {
+					if err := client.SendChannelMessageWithRetry(tgChannel, part, false, 1, 15*time.Second); err != nil {
 						slog.Error("Telegram bridge: failed to send to meshcore", "error", err)
 					}
 				}
@@ -286,10 +288,10 @@ func processDM(m *meshcore.Message, client *meshcore.MeshCoreClient) {
 		if i > 0 {
 			time.Sleep(5 * time.Second)
 		}
-		err = client.SendMessageWithRetry(contact, reply, true, 5, 5*time.Second)
+		err = client.SendMessageWithRetry(contact, reply, true, 5, 10*time.Second)
 		if err != nil {
 			// Fall back to send-without-delivery-confirmation.
-			err = client.SendMessageWithRetry(contact, reply, false, 5, 5*time.Second)
+			err = client.SendMessageWithRetry(contact, reply, false, 5, 10*time.Second)
 		}
 		if err != nil {
 			slog.Error("Failed to send DM reply", "error", err)
@@ -349,7 +351,7 @@ func processChannelMessage(m *meshcore.ChannelMessage, client *meshcore.MeshCore
 		if len(replies) == 1 {
 			text = fmt.Sprintf("@[%s] %s", m.SenderName, reply)
 		}
-		if err := client.SendChannelMessageWithRetry(channel, text, false, 5, 5*time.Second); err != nil {
+		if err := client.SendChannelMessageWithRetry(channel, text, true, 1, 15*time.Second); err != nil {
 			slog.Error("Failed to send channel reply", "channel", channel.Name, "error", err)
 		} else {
 			slog.Info("Channel reply sent", "channel", channel.Name)
