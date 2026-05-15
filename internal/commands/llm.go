@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"fmt"
 	"log/slog"
 	"meshbot/internal/config"
 	"meshbot/internal/llm"
@@ -8,7 +9,7 @@ import (
 )
 
 func ProcessLLMMessage(text string) (response string, err error) {
-	text = strings.ReplaceAll(text, ".llm", "")
+	text = strings.TrimSpace(strings.TrimPrefix(text, ".llm"))
 
 	cfg := config.Get()
 
@@ -31,7 +32,8 @@ func ProcessLLMMessage(text string) (response string, err error) {
 // ShrinkText uses the LLM shrink prompt to compress text to under 130 characters.
 // Returns the original text unchanged if LLM is disabled or shrinking is not needed.
 func ShrinkText(text string) (string, error) {
-	if len(text) <= 130 {
+
+	if len(text) <= 120 {
 		return text, nil
 	}
 
@@ -45,6 +47,7 @@ func ShrinkText(text string) (string, error) {
 		err      error
 	)
 	for i := 1; i <= cfg.LLM.ShrinkMaxRetries; i++ {
+		fmt.Println("shrink")
 		switch cfg.LLM.Type {
 		case "openrouter":
 			response, err = llm.GetRemoteLLMResponse(cfg.LLM.Model, cfg.LLM.ShrinkPrompt, cfg.LLM.ShrinkTemperature, response)
@@ -56,9 +59,9 @@ func ShrinkText(text string) (string, error) {
 			return text, err
 		}
 		slog.Info("Shrink LLM response", "response", response, "length", len(response), "tries", i)
-		if len(response) <= 130 {
+		if len(response) <= 120 {
 			return response, nil
 		}
 	}
-	return response, nil
+	return "Не получился короткий ответ, сорян", nil
 }

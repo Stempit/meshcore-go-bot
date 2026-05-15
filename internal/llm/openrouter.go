@@ -2,14 +2,13 @@ package llm
 
 import (
 	"context"
-	"log"
+	"fmt"
 	"os"
 
 	"github.com/revrost/go-openrouter"
 )
 
-func GetRemoteLLMResponse(model string, systemPrompt string, temperature float64, request string) (response string, err error) {
-	// Set your API key and initialize the client
+func GetRemoteLLMResponse(model, systemPrompt string, temperature float64, request string) (string, error) {
 	client := openrouter.NewClient(os.Getenv("OPENROUTER_API_KEY"))
 
 	// Define and send the chat request
@@ -24,8 +23,10 @@ func GetRemoteLLMResponse(model string, systemPrompt string, temperature float64
 
 	resp, err := client.CreateChatCompletion(context.Background(), req)
 	if err != nil {
-		log.Fatal(err)
+		return "", fmt.Errorf("openrouter: %w", err)
 	}
-
-	return resp.Choices[0].Message.Content.Text, err
+	if len(resp.Choices) == 0 {
+		return "", fmt.Errorf("openrouter: empty response")
+	}
+	return resp.Choices[0].Message.Content.Text, nil
 }

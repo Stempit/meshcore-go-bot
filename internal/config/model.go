@@ -48,7 +48,7 @@ type Config struct {
 		SystemTemperature float64 `yaml:"system_temperature"`
 		ShrinkPrompt      string  `yaml:"shrink_prompt"`
 		ShrinkTemperature float64 `yaml:"shrink_temperature"`
-		ShrinkMaxRetries  int     `yaml:"shrink_max_reties"`
+		ShrinkMaxRetries  int     `yaml:"shrink_max_retries"`
 	} `yaml:"LLM"`
 	// Database struct {
 	// 	Name            string `yaml:"name"`

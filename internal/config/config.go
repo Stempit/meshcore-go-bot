@@ -14,8 +14,8 @@ var (
 	cfgErr error
 )
 
-// Load инициализирует конфигурацию из файла, если она ещё не загружена.
-// Вызывается один раз (thread-safe).
+// Load initializes the configuration from the given file path.
+// It is safe to call from multiple goroutines; the file is read exactly once.
 func Load(path string) error {
 	once.Do(func() {
 		data, err := os.ReadFile(path)
@@ -33,7 +33,8 @@ func Load(path string) error {
 	return cfgErr
 }
 
-// Get возвращает загруженную конфигурацию. Если Load ещё не вызывался или завершился ошибкой, возвращает nil.
+// Get returns the loaded configuration.
+// Returns nil if Load has not been called or returned an error.
 func Get() *Config {
 	return cfg
 }

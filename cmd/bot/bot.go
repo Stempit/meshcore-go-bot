@@ -1,13 +1,16 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
-	"time"
-
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
+	"time"
 
 	"meshbot/internal/commands"
 	"meshbot/internal/config"
@@ -17,22 +20,16 @@ import (
 )
 
 func main() {
-
 	// config
-	err := config.Load("config.yaml")
-	if err != nil {
-		// Обрабатываем ошибку: можно завершить приложение с подробным сообщением
+	if err := config.Load("config.yaml"); err != nil {
 		slog.Error("Failed to load configuration", "error", err)
 		os.Exit(1)
 	}
 
-	// logging
-	opts := &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	}
-	handler := slog.NewTextHandler(os.Stdout, opts)
-	logger := slog.New(handler)
-	slog.SetDefault(logger)
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	// history logger
 	histlog := historylog.New("log/history")
@@ -50,9 +47,7 @@ func main() {
 	client.SetMQTTConfig(&mqttCfg)
 	client.RequestAllStats()
 
-	// =================================
-	// Приветствие новых узлов
-	// =================================
+	// ─── Greet new nodes ──────────────────────────────────────────────────────
 
 	knownKeys, err := commands.NewKnownKeys("log/known.txt")
 	if err != nil {
@@ -91,9 +86,8 @@ func main() {
 		if contact.Type == 0 && contact.Name == "" {
 			// Stub contact: type/name unknown yet. Request a contacts refresh and
 			// defer the greeting until the full record arrives via OnContact.
-			slog.Info("New node seen (stub), deferring greeting until contact info arrives",
-				"pub_key", fmt.Sprintf("%x", contact.PublicKey))
 			keyHex := fmt.Sprintf("%x", contact.PublicKey)
+			slog.Info("New node seen (stub), deferring greeting", "pub_key", keyHex)
 			pendingMu.Lock()
 			pendingGreets[keyHex] = struct{}{}
 			pendingMu.Unlock()
@@ -117,25 +111,16 @@ func main() {
 			return
 		}
 		// This contact arrived as a stub advert earlier; greet it now that we
-		// have its full record (name, type).
-		alreadyKnown, err := knownKeys.CheckAndAdd(contact.PublicKey, contact.Name)
-		if err != nil {
-			slog.Error("Failed to update known keys", "error", err)
-			return
-		}
-		if alreadyKnown {
-			return
-		}
+		// have its full record (name, type). The key was already recorded as
+		// known in OnAdvert, so no second CheckAndAdd is needed.
 		sendGreeting(contact)
 	})
 
-	// =================================
-	// Пересылка сообщений из телеги
-	// =================================
+	// ─── Telegram bridge ──────────────────────────────────────────────────────
 
 	var tgb *tgbridge.Bridge
 	if tgCfg := config.Get().Telegram; tgCfg.Enabled {
-		tgb, err = tgbridge.New(tgCfg, logger)
+		tgb, err = tgbridge.New(tgCfg, slog.Default())
 		if err != nil {
 			slog.Error("Failed to start Telegram bridge", "error", err)
 		} else {
@@ -154,9 +139,9 @@ func main() {
 				prefix := fmt.Sprintf("[TG:%s] ", senderName)
 				var parts []string
 				if shrink {
-					shrunk, err := commands.ShrinkText(text)
-					if err != nil {
-						slog.Warn("Telegram bridge: shrink failed, splitting instead", "error", err)
+					shrunk, shrinkErr := commands.ShrinkText(text)
+					if shrinkErr != nil {
+						slog.Warn("Telegram bridge: shrink failed, splitting instead", "error", shrinkErr)
 						parts = splitMeshMessage(prefix, text, 140)
 					} else {
 						parts = []string{prefix + shrunk}
@@ -178,258 +163,60 @@ func main() {
 		}
 	}
 
-	// =================================
-	// Синхронизация сохранённых сообщений
-	// =================================
+	// ─── Sync stored messages ─────────────────────────────────────────────────
 
 	syncDone := make(chan struct{})
 	client.OnNoMoreMessages(func() {
 		for _, m := range client.GetAllMessages() {
-			slog.Info("[Stored] Личное", "sender", fmt.Sprintf("%x", m.SenderKey[:6]), "text", m.Text)
+			slog.Info("Stored DM", "sender", fmt.Sprintf("%x", m.SenderKey[:6]), "text", m.Text)
 		}
 		for _, m := range client.GetAllChannelMessages() {
-			slog.Info("[Stored] Канал", "channel", m.ChannelIndex, "sender", m.SenderName, "text", m.Text)
+			slog.Info("Stored channel message", "channel", m.ChannelIndex, "sender", m.SenderName, "text", m.Text)
 		}
 		close(syncDone)
 	})
-
 	if err := client.SyncNextMessage(); err != nil {
 		slog.Error("Failed to sync stored messages", "error", err)
 		close(syncDone)
 	}
 	<-syncDone
 
-	// Сбрасываем буфер канала — там могут быть сохранённые сообщения
+	// Drain messages buffered during sync so we only respond to new arrivals.
+drainLoop:
 	for {
 		select {
 		case <-client.IncomingMessages():
 		default:
-			goto startProcessing
+			break drainLoop
 		}
 	}
-startProcessing:
 
-	// =================================
-	// Обработка входящих сообщений
-	// =================================
+	// ─── Process incoming messages ────────────────────────────────────────────
 
 	go func() {
-		// слушаем поступающие сообщения
 		for msg := range client.IncomingMessages() {
-
-			// в зависимости от - личка или канал
 			switch m := msg.(type) {
-			case *meshcore.Message: // личные сообщения
-
-				// Фильтрация по whitelist/blacklist
-				senderKeyHex := fmt.Sprintf("%x", m.SenderKey)
-				if !config.Get().Security.Direct.IsAllowed(senderKeyHex) {
-					slog.Info("Direct message filtered by security policy", "sender", senderKeyHex[:12])
-					continue
-				}
-
-				// Находим контакт отправителя по ключу
-				senderKeyHex = fmt.Sprintf("%x", m.SenderKey[:6]) // можно использовать префикс
-				var contact *meshcore.Contact
-				for _, c := range client.GetContacts() {
-					if fmt.Sprintf("%x", c.PublicKey[:6]) == senderKeyHex {
-						contact = c
-						break
-					}
-				}
-				if contact == nil {
-					// Если контакт не найден, создаём временный (не сохраняем)
-					contact = &meshcore.Contact{
-						PublicKey: m.SenderKey,
-						Name:      fmt.Sprintf("?%x", m.SenderKey[:6]),
-					}
-				}
-
-				slog.Info("Личное сообщение", "sender", fmt.Sprintf("%x", m.SenderKey[:6]), "text", m.Text)
-
-				// техническая информация для пингов
-				pingMeta := &commands.PingMeta{
-					PathLength: m.PathLength,
-					PathBytes:  m.PathBytes,
-					Timestamp:  m.Timestamp,
-					SenderLat:  contact.Latitude,
-					SenderLon:  contact.Longitude,
-				}
-				setSelfCoords(pingMeta, client)
-				if hops := m.PathLength; hops > 0 && len(m.PathBytes) > 0 {
-					var bph int
-					if len(m.PathBytes) == hops {
-						bph = 1
-					} else if len(m.PathBytes) == hops*2 {
-						bph = 2
-					}
-					if bph > 0 {
-						pingMeta.HopCoords, pingMeta.HopKnown = resolveHopCoords(m.PathBytes, hops, bph, client.GetContacts())
-					}
-				}
-
-				// собираем ответы
-				replies, cmdErr := commands.GenerateReplies(m.Text, "", pingMeta)
-				if cmdErr != nil {
-					slog.Error("Ошибка команды", "error", cmdErr)
-					continue
-				}
-				if len(replies) == 0 {
-					slog.Info("Нет ответа для сообщения, пропускаем")
-					continue
-				}
-
-				// отправляем ответы; при нескольких делаем паузу между сообщениями
-				for i, replyText := range replies {
-					if i > 0 {
-						time.Sleep(5 * time.Second)
-					}
-					// пытаемся отправить с подтверждением
-					err = client.SendMessageWithRetry(contact, replyText, true, 5, 5*time.Second)
-					if err != nil {
-						// если не получилось - отправляем хотя бы без подтверждения
-						err = client.SendMessageWithRetry(contact, replyText, false, 5, 5*time.Second)
-					}
-					if err != nil {
-						slog.Error("Ошибка отправки", "error", err)
-					} else {
-						slog.Info("Сообщение отправлено")
-					}
-				}
-			case *meshcore.ChannelMessage: // сообщения в каналах
-
-				slog.Info("Канальное сообщение", "channel", m.ChannelIndex, "sender", m.SenderName, "text", m.Text)
-
-				// находим канал по номеру
-				channels := client.GetChannels()
-				channel, ok := channels[m.ChannelIndex]
-				if !ok || channel.IsEmpty {
-					slog.Warn("Канал не найден или пуст", "channel", m.ChannelIndex)
-					continue
-				}
-
-				// Фильтрация по whitelist/blacklist
-				if !config.Get().Security.Channels.IsAllowed(channel.Name) {
-					slog.Info("Channel message filtered by security policy", "channel", channel.Name)
-					continue
-				}
-
-				// Пересылка в Telegram
-				if tgb != nil {
-					tgb.Forward(channel.Name, m.SenderName, m.Text)
-				}
-
-				// техническая информация для пингов
-				pingMeta := &commands.PingMeta{
-					PathLength: m.PathLength,
-					PathBytes:  m.PathBytes,
-					Timestamp:  m.Timestamp,
-				}
-				for _, c := range client.GetContacts() {
-					if c.Name == m.SenderName {
-						pingMeta.SenderLat = c.Latitude
-						pingMeta.SenderLon = c.Longitude
-						break
-					}
-				}
-				setSelfCoords(pingMeta, client)
-				if hops := m.PathLength; hops > 0 && len(m.PathBytes) > 0 {
-					var bph int
-					if len(m.PathBytes) == hops {
-						bph = 1
-					} else if len(m.PathBytes) == hops*2 {
-						bph = 2
-					}
-					if bph > 0 {
-						pingMeta.HopCoords, pingMeta.HopKnown = resolveHopCoords(m.PathBytes, hops, bph, client.GetContacts())
-					}
-				}
-
-				// собираем ответы
-				replies, cmdErr := commands.GenerateReplies(m.Text, channel.Name, pingMeta) //todo: может channelName выпилить, используется только для .last, можно принудительно указывать в запросе канал
-				if cmdErr != nil {
-					slog.Error("Ошибка команды", "error", cmdErr)
-					continue
-				}
-				if len(replies) == 0 {
-					slog.Debug("Не найден ответ, пропускаем")
-					continue
-				}
-
-				// отправляем ответы; при нескольких делаем паузу между сообщениями
-				for i, replyText := range replies {
-					if i > 0 {
-						time.Sleep(5 * time.Second)
-					}
-					text := replyText
-					if len(replies) == 1 {
-						text = fmt.Sprintf("@[%s] %s", m.SenderName, replyText)
-					}
-					err := client.SendChannelMessageWithRetry(channel, text, false, 5, 5*time.Second)
-					if err != nil {
-						slog.Error("Ошибка отправки в канал", "error", err)
-					} else {
-						slog.Info("Сообщение в канал отправлено")
-					}
-				}
+			case *meshcore.Message:
+				processDM(m, client)
+			case *meshcore.ChannelMessage:
+				processChannelMessage(m, client, tgb)
 			}
 		}
 	}()
 
-	// Блокируемся, пока не получим сигнал завершения
-	slog.Info("Waiting for messages... Press Ctrl+C to exit.")
-	done := make(chan struct{}) // Канал для сигнала о завершении (например, при нажатии Ctrl+C)
+	// ─── Initial stats ────────────────────────────────────────────────────────
 
-	time.Sleep(10 * time.Second)
-	channels := client.GetChannels()
-	if ch, ok := channels[3]; ok && !ch.IsEmpty {
-		err := client.SendChannelMessageWithRetry(ch, "ping", false, 3, 5*time.Second)
-		if err != nil {
-			slog.Error("Ошибка отправки в канал", "error", err)
-		} else {
-			slog.Info("Сообщение отправлено в канал и подтверждено")
-		}
-	} else {
-		slog.Warn("Channel not found or empty")
-	}
-
-	contacts := client.GetContacts()
-
-	for _, v := range contacts {
-		if v.Name == "Короед" {
-			// отправка с ретраями до подтверждения отправки
-			// err := client.SendMessageWithRetry(v, "Пинг А", false, 5, 5*time.Second)
-			// if err != nil {
-			// 	slog.Error("Ошибка", "error", err)
-			// } else {
-			// 	slog.Info("Сообщение отправлено")
-			// }
-
-			// отправка с ретраями до подтверждения доставки
-			// err = client.SendMessageWithRetry(v, "ping", true, 5, 5*time.Second)
-			// if err != nil {
-			// 	slog.Error("Ошибка отправки", "error", err)
-			// } else {
-			// 	slog.Info("Сообщение отправлено и доставлено")
-			// }
-		}
-	}
-
-	// =================================
-	// Запрашиваем и показываем статистику
-	// =================================
-	time.Sleep(2 * time.Second)
 	if err := client.RequestAllStats(); err != nil {
-		slog.Error("Failed to request stats", "error", err)
+		slog.Error("Failed to request initial stats", "error", err)
 	} else {
-		// Ждём, пока придут все stats
 		time.Sleep(500 * time.Millisecond)
 		fmt.Println(client.FormatStats())
 	}
 
-	// Периодически запрашиваем статистику для обновления MQTT
+	// ─── Periodic stats (keeps MQTT up to date, detects BLE disconnection) ────
+
 	go func() {
-		ticker := time.NewTicker(30 * time.Second) // Запрашиваем каждые 30 секунд
+		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
@@ -446,13 +233,153 @@ startProcessing:
 						}
 					}
 				}
-			case <-done:
+			case <-ctx.Done():
 				return
 			}
 		}
 	}()
 
-	<-done
+	slog.Info("Bot running. Press Ctrl+C to exit.")
+	<-ctx.Done()
+	slog.Info("Shutting down...")
+}
+
+func processDM(m *meshcore.Message, client *meshcore.MeshCoreClient) {
+	senderKeyHex := fmt.Sprintf("%x", m.SenderKey)
+	if !config.Get().Security.Direct.IsAllowed(senderKeyHex) {
+		slog.Info("Direct message filtered by security policy", "sender", senderKeyHex[:12])
+		return
+	}
+
+	// Look up the full contact record for the sender.
+	shortKey := fmt.Sprintf("%x", m.SenderKey[:6])
+	var contact *meshcore.Contact
+	for _, c := range client.GetContacts() {
+		if fmt.Sprintf("%x", c.PublicKey[:6]) == shortKey {
+			contact = c
+			break
+		}
+	}
+	if contact == nil {
+		contact = &meshcore.Contact{
+			PublicKey: m.SenderKey,
+			Name:      fmt.Sprintf("?%x", m.SenderKey[:6]),
+		}
+	}
+
+	slog.Info("Direct message received", "sender", shortKey, "text", m.Text)
+
+	pingMeta := buildPingMeta(m.PathLength, m.PathBytes, m.Timestamp, contact.Latitude, contact.Longitude, client.GetContacts())
+	setSelfCoords(pingMeta, client)
+
+	replies, err := commands.GenerateReplies(m.Text, "", pingMeta)
+	if err != nil {
+		slog.Error("Command error", "error", err)
+		return
+	}
+	if len(replies) == 0 {
+		slog.Debug("No reply generated, skipping", "text", m.Text)
+		return
+	}
+
+	for i, reply := range replies {
+		if i > 0 {
+			time.Sleep(5 * time.Second)
+		}
+		err = client.SendMessageWithRetry(contact, reply, true, 5, 5*time.Second)
+		if err != nil {
+			// Fall back to send-without-delivery-confirmation.
+			err = client.SendMessageWithRetry(contact, reply, false, 5, 5*time.Second)
+		}
+		if err != nil {
+			slog.Error("Failed to send DM reply", "error", err)
+		} else {
+			slog.Info("DM reply sent")
+		}
+	}
+}
+
+func processChannelMessage(m *meshcore.ChannelMessage, client *meshcore.MeshCoreClient, tgb *tgbridge.Bridge) {
+	slog.Info("Channel message received", "channel", m.ChannelIndex, "sender", m.SenderName, "text", m.Text)
+
+	channels := client.GetChannels()
+	channel, ok := channels[m.ChannelIndex]
+	if !ok || channel.IsEmpty {
+		slog.Warn("Channel not found or empty", "channel", m.ChannelIndex)
+		return
+	}
+
+	if !config.Get().Security.Channels.IsAllowed(channel.Name) {
+		slog.Info("Channel message filtered by security policy", "channel", channel.Name)
+		return
+	}
+
+	if tgb != nil {
+		tgb.Forward(channel.Name, m.SenderName, m.Text)
+	}
+
+	// Resolve sender coordinates for ping/trace commands.
+	var senderLat, senderLon *float64
+	for _, c := range client.GetContacts() {
+		if c.Name == m.SenderName {
+			senderLat = c.Latitude
+			senderLon = c.Longitude
+			break
+		}
+	}
+
+	pingMeta := buildPingMeta(m.PathLength, m.PathBytes, m.Timestamp, senderLat, senderLon, client.GetContacts())
+	setSelfCoords(pingMeta, client)
+
+	replies, err := commands.GenerateReplies(m.Text, channel.Name, pingMeta)
+	if err != nil {
+		slog.Error("Command error", "error", err)
+		return
+	}
+	if len(replies) == 0 {
+		slog.Debug("No reply generated, skipping", "text", m.Text)
+		return
+	}
+
+	for i, reply := range replies {
+		if i > 0 {
+			time.Sleep(5 * time.Second)
+		}
+		text := reply
+		if len(replies) == 1 {
+			text = fmt.Sprintf("@[%s] %s", m.SenderName, reply)
+		}
+		if err := client.SendChannelMessageWithRetry(channel, text, false, 5, 5*time.Second); err != nil {
+			slog.Error("Failed to send channel reply", "channel", channel.Name, "error", err)
+		} else {
+			slog.Info("Channel reply sent", "channel", channel.Name)
+		}
+	}
+}
+
+// buildPingMeta constructs a PingMeta from raw message fields.
+// It resolves intermediate hop coordinates from the contact list when available.
+func buildPingMeta(pathLength int, pathBytes []byte, timestamp time.Time, senderLat, senderLon *float64, contacts map[string]*meshcore.Contact) *commands.PingMeta {
+	meta := &commands.PingMeta{
+		PathLength: pathLength,
+		PathBytes:  pathBytes,
+		Timestamp:  timestamp,
+		SenderLat:  senderLat,
+		SenderLon:  senderLon,
+	}
+	if pathLength > 0 && len(pathBytes) > 0 {
+		var bph int
+		switch len(pathBytes) {
+		case pathLength:
+			bph = 1
+		case pathLength * 2:
+			bph = 2
+		}
+		if bph > 0 {
+			meta.HopCoords, meta.HopKnown = resolveHopCoords(pathBytes, pathLength, bph, contacts)
+		}
+	}
+	return meta
 }
 
 // setSelfCoords fills pingMeta.SelfLat/SelfLon from config (when use_config_coords is true)
@@ -508,7 +435,7 @@ func resolveHopCoords(pathBytes []byte, hopCount, bytesPerHop int, contacts map[
 	for i := 0; i < hopCount; i++ {
 		chunk := pathBytes[i*bytesPerHop : (i+1)*bytesPerHop]
 		for _, c := range contacts {
-			if len(c.PublicKey) >= bytesPerHop && bytesEqual(c.PublicKey[:bytesPerHop], chunk) {
+			if len(c.PublicKey) >= bytesPerHop && bytes.Equal(c.PublicKey[:bytesPerHop], chunk) {
 				if c.Latitude != nil && c.Longitude != nil {
 					coords[i] = [2]float64{*c.Latitude, *c.Longitude}
 					known[i] = true
@@ -518,16 +445,4 @@ func resolveHopCoords(pathBytes []byte, hopCount, bytesPerHop int, contacts map[
 		}
 	}
 	return
-}
-
-func bytesEqual(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
