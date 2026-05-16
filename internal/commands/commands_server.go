@@ -6,8 +6,26 @@ import (
 
 // GenerateReplies routes incoming text to the appropriate command handler and returns
 // the messages to send back. Returns nil, nil when no command matches.
-func GenerateReplies(text, channelName string, pingMeta *PingMeta) ([]string, error) {
-	lower := strings.ToLower(text)
+//
+// senderKey is a unique session identifier (hex pubkey for DMs, sender name for channels).
+// senderName is the human-readable author name (may be empty).
+func GenerateReplies(text, channelName string, pingMeta *PingMeta, senderKey, senderName string) ([]string, error) {
+	lower := strings.ToLower(strings.TrimSpace(text))
+
+	// BBS mode: intercept all input for users who are in BBS mode.
+	if IsBBSMode(senderKey) {
+		if lower == ".exit" {
+			ExitBBSMode(senderKey)
+			return []string{"Left BBS. Bye!"}, nil
+		}
+		return ProcessBBSCommand(text, senderKey, senderName)
+	}
+
+	// Enter BBS mode.
+	if lower == ".2ch" {
+		EnterBBSMode(senderKey)
+		return []string{"Welcome to BBS!\n/hl for help\n.exit to leave"}, nil
+	}
 
 	switch {
 	case strings.HasPrefix(lower, ".news"):

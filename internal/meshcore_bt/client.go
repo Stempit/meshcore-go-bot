@@ -82,9 +82,10 @@ type MeshCoreClient struct {
 	onAdvert         func(*Contact)
 
 	// для ожидания подтверждения
-	sentConfirmCh      chan struct{} // для respCodeSent
+	sentConfirmCh      chan struct{} // для respCodeSent / respCodeOk
 	deliveredConfirmCh chan struct{} // для pushCodeSendConfirmed
 	confirmMu          sync.Mutex
+
 
 	// канал входящих сообщений
 	incomingCh chan interface{}
@@ -380,6 +381,8 @@ func (c *MeshCoreClient) notifyDelivered() {
 		c.deliveredConfirmCh = nil
 	}
 }
+
+
 
 func (c *MeshCoreClient) sendChannelTextMessage(channelIndex byte, text string) error {
 	// [cmd(1)][txt_type(1)][channel(1)][timestamp(4)][text][0x00]
@@ -729,7 +732,9 @@ func (c *MeshCoreClient) parseChannelMessageV3(data []byte) {
 	c.channelMsgs[channelIndex] = append(c.channelMsgs[channelIndex], msg)
 	c.mu.Unlock()
 
-	c.logger.Info("Channel message V3 received", "channel", channelIndex, "sender", senderName, "text", text)
+	c.logger.Info("Channel message V3 received",
+		"channel", channelIndex, "sender", fmt.Sprintf("%q", senderName), "text", fmt.Sprintf("%q", text))
+
 
 	if c.onChannelMessage != nil {
 		c.onChannelMessage(msg)
@@ -976,7 +981,9 @@ func (c *MeshCoreClient) parseChannelMessage(data []byte) {
 	c.channelMsgs[channelIndex] = append(c.channelMsgs[channelIndex], msg)
 	c.mu.Unlock()
 
-	c.logger.Debug("Channel message received", "channel", channelIndex, "sender", senderName, "text", text)
+	c.logger.Info("Channel message received (V1)",
+		"channel", channelIndex, "sender", fmt.Sprintf("%q", senderName), "text", fmt.Sprintf("%q", text))
+
 
 	if c.onChannelMessage != nil {
 		c.onChannelMessage(msg)
@@ -1810,7 +1817,7 @@ func (c *MeshCoreClient) RequestChannels(maxChannels int) error {
 // maxRetries: число повторов (0 = одна попытка).
 // timeout: таймаут ожидания подтверждения для каждой попытки.
 func (c *MeshCoreClient) SendMessageWithRetry(contact *Contact, text string, waitForDelivery bool, maxRetries int, timeout time.Duration) error {
-	defer time.Sleep(150 * time.Microsecond) // частая отправка приводит к пропаже сообщений
+	defer time.Sleep(2 * time.Second) // частая отправка приводит к пропаже сообщений
 
 	c.logger.Info("Sending private message with retry",
 		"key", fmt.Sprintf("%x", contact.PublicKey), "name", contact.Name,
@@ -1873,39 +1880,50 @@ func (c *MeshCoreClient) SendMessage(contact *Contact, text string) error {
 	return err
 }
 
-// SendChannelMessageWithRetry отправляет сообщение в канал с повторными попытками.
-// waitForDelivery: true – ждать pushCodeSendConfirmed (доставка), false – ждать respCodeSent (отправка в эфир)
-// maxRetries: максимальное число повторных попыток (0 – одна попытка без повторов)
-// timeout: таймаут ожидания подтверждения после каждой отправки
+// SendChannelMessageWithRetry sends a message to a channel with retries.
+//
+// Confirmation strategy: channel messages have no delivery ACKs and the
+// firmware's deduplication prevents the device from notifying the companion
+// app about RF repeats of its own messages. The best available confirmation
+// is respCodeOk — the device accepted the command and queued the packet for
+// RF transmission.
+//
+// waitForDelivery is accepted for API compatibility but ignored.
+// maxRetries: maximum number of additional attempts (0 = single send).
+// timeout: how long to wait for the device OK per attempt.
 func (c *MeshCoreClient) SendChannelMessageWithRetry(channel *Channel, text string, waitForDelivery bool, maxRetries int, timeout time.Duration) error {
-	defer time.Sleep(150 * time.Microsecond) // частая отправка приводит к пропаже сообщений
+	defer time.Sleep(150 * time.Millisecond) // avoid flooding the device
 
 	c.logger.Info("Sending channel message with retry",
-		"channel", channel.Index, "name", channel.Name,
-		"text", text, "waitForDelivery", waitForDelivery)
+		"channel", channel.Index, "name", channel.Name, "text", text)
 
-	if waitForDelivery {
-		c.logger.Warn("waitForDelivery unavailable for channel messages, forcing false")
-		waitForDelivery = false
-	}
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		// Отправляем сообщение (без генерации ID, так как протокол его не возвращает)
-		if err := c.sendChannelTextMessage(byte(channel.Index), text); err != nil {
-			if attempt == maxRetries {
-				return fmt.Errorf("send failed after %d attempts: %w", maxRetries+1, err)
-			}
-			time.Sleep(timeout)
-			continue
+		if attempt > 0 {
+			time.Sleep(2 * time.Second)
 		}
 
-		// Создаём канал для ожидания нужного подтверждения
+		// Register BEFORE the BLE write so we cannot miss a fast response.
 		confirmCh := make(chan struct{})
 		c.confirmMu.Lock()
 		c.sentConfirmCh = confirmCh
 		c.confirmMu.Unlock()
 
+		if err := c.sendChannelTextMessage(byte(channel.Index), text); err != nil {
+			c.confirmMu.Lock()
+			if c.sentConfirmCh == confirmCh {
+				c.sentConfirmCh = nil
+			}
+			c.confirmMu.Unlock()
+			if attempt == maxRetries {
+				return fmt.Errorf("send failed after %d attempts: %w", maxRetries+1, err)
+			}
+			continue
+		}
+
 		select {
 		case <-confirmCh:
+			c.logger.Info("Channel message queued by device",
+				"channel", channel.Name, "attempt", attempt)
 			c.publishTXChannelPacket(channel, text)
 			if c.histLog != nil {
 				if err := c.histLog.LogChannelOutgoing(channel.Name, text, time.Now()); err != nil {
@@ -1919,12 +1937,11 @@ func (c *MeshCoreClient) SendChannelMessageWithRetry(channel *Channel, text stri
 				c.sentConfirmCh = nil
 			}
 			c.confirmMu.Unlock()
-			if attempt == maxRetries {
-				return fmt.Errorf("no sent confirmation after %d attempts", maxRetries+1)
-			}
+			c.logger.Warn("Channel message: no device OK, retrying",
+				"channel", channel.Name, "attempt", attempt)
 		}
 	}
-	return nil
+	return fmt.Errorf("channel message not accepted by device after %d attempts", maxRetries+1)
 }
 
 // SendChannelMessage отправляет сообщение в канал (без ожидания подтверждения).
