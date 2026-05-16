@@ -75,7 +75,10 @@ func main() {
 		// Set lastSent to now so the first send always waits the full gap.
 		lastSent := time.Now()
 		for msg := range outgoingCh {
-			// Enforce a minimum gap between radio sends to avoid flooding.
+			// Always wait at least 1s before sending — gives the device time to
+			// switch from RX to TX mode after receiving the incoming message.
+			time.Sleep(1 * time.Second)
+			// Enforce a minimum gap between consecutive radio sends.
 			if wait := 5*time.Second - time.Since(lastSent); wait > 0 {
 				time.Sleep(wait)
 			}
