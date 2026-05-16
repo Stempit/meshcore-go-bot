@@ -19,6 +19,19 @@ import (
 	"meshbot/internal/tgbridge"
 )
 
+// processStoredMessages controls whether messages stored on the device before
+// bot startup are fed into the processing pipeline. Set to false to skip them.
+const processStoredMessages = true
+
+// outgoingMsg is a reply to be sent back over the mesh radio.
+// Exactly one of contact (DM) or channel (channel reply) must be non-nil.
+type outgoingMsg struct {
+	contact *meshcore.Contact
+	channel *meshcore.Channel
+	text    string
+	ack     bool
+}
+
 func main() {
 	// config
 	if err := config.Load("config.yaml"); err != nil {
@@ -46,6 +59,46 @@ func main() {
 	mqttCfg := config.Get().MQTT
 	client.SetMQTTConfig(&mqttCfg)
 	client.RequestAllStats()
+
+	// ─── Message channels ─────────────────────────────────────────────────────
+
+	// incomingCh carries all messages (DMs and channel messages) for processing.
+	// Stored on-device messages and live arrivals both flow through this channel.
+	incomingCh := make(chan any, 64)
+
+	// outgoingCh carries replies to be serialized and sent over the radio.
+	outgoingCh := make(chan outgoingMsg, 64)
+
+	// ─── Outgoing sender goroutine ────────────────────────────────────────────
+
+	go func() {
+		// Set lastSent to now so the first send always waits the full gap.
+		lastSent := time.Now()
+		for msg := range outgoingCh {
+			// Enforce a minimum gap between radio sends to avoid flooding.
+			if wait := 5*time.Second - time.Since(lastSent); wait > 0 {
+				time.Sleep(wait)
+			}
+			if msg.channel != nil {
+				if err := client.SendChannelMessageWithRetry(msg.channel, msg.text, msg.ack, 1, 15*time.Second); err != nil {
+					slog.Error("Failed to send channel reply", "channel", msg.channel.Name, "error", err)
+				} else {
+					slog.Info("Channel reply sent", "channel", msg.channel.Name)
+				}
+			} else if msg.contact != nil {
+				err := client.SendMessageWithRetry(msg.contact, msg.text, true, 5, 10*time.Second)
+				if err != nil {
+					err = client.SendMessageWithRetry(msg.contact, msg.text, false, 5, 10*time.Second)
+				}
+				if err != nil {
+					slog.Error("Failed to send DM reply", "error", err)
+				} else {
+					slog.Info("DM reply sent")
+				}
+			}
+			lastSent = time.Now()
+		}
+	}()
 
 	// ─── Greet new nodes ──────────────────────────────────────────────────────
 
@@ -151,13 +204,8 @@ func main() {
 				} else {
 					parts = splitMeshMessage(prefix, text, 140)
 				}
-				for i, part := range parts {
-					if i > 0 {
-						time.Sleep(3 * time.Second)
-					}
-					if err := client.SendChannelMessageWithRetry(tgChannel, part, false, 1, 15*time.Second); err != nil {
-						slog.Error("Telegram bridge: failed to send to meshcore", "error", err)
-					}
+				for _, part := range parts {
+					outgoingCh <- outgoingMsg{channel: tgChannel, text: part, ack: false}
 				}
 			})
 			go tgb.Start()
@@ -165,25 +213,49 @@ func main() {
 		}
 	}
 
+	// ─── Incoming processor goroutine ─────────────────────────────────────────
+
+	go func() {
+		for msg := range incomingCh {
+			switch m := msg.(type) {
+			case *meshcore.Message:
+				processDM(m, client, outgoingCh)
+			case *meshcore.ChannelMessage:
+				processChannelMessage(m, client, tgb, outgoingCh)
+			}
+		}
+	}()
+
 	// ─── Sync stored messages ─────────────────────────────────────────────────
+	// The BLE driver pushes every received message into client.IncomingMessages()
+	// AND into the accumulator maps (GetAllMessages / GetAllChannelMessages).
+	// We wait for sync to finish, then drain the client channel (so the live
+	// forwarder only sees truly new arrivals), log what was stored, and
+	// optionally re-queue stored messages through our own pipeline once.
 
 	syncDone := make(chan struct{})
-	client.OnNoMoreMessages(func() {
-		for _, m := range client.GetAllMessages() {
-			slog.Info("Stored DM", "sender", fmt.Sprintf("%x", m.SenderKey[:6]), "text", m.Text)
-		}
-		for _, m := range client.GetAllChannelMessages() {
-			slog.Info("Stored channel message", "channel", m.ChannelIndex, "sender", m.SenderName, "text", m.Text)
-		}
-		close(syncDone)
-	})
+	client.OnNoMoreMessages(func() { close(syncDone) })
 	if err := client.SyncNextMessage(); err != nil {
 		slog.Error("Failed to sync stored messages", "error", err)
 		close(syncDone)
 	}
-	<-syncDone
 
-	// Drain messages buffered during sync so we only respond to new arrivals.
+	select {
+	case <-syncDone:
+		slog.Info("Device sync complete")
+	case <-time.After(15 * time.Second):
+		slog.Warn("Device sync timed out, proceeding with messages received so far")
+	}
+	// Replace callback so late "no more messages" responses during live
+	// operation don't panic on the already-closed syncDone channel.
+	client.OnNoMoreMessages(func() {})
+
+	// Give the BLE device time to settle after the sync loop before we start
+	// sending replies. Without this pause the first write times out.
+	time.Sleep(2 * time.Second)
+
+	// Drain the client's incoming channel: messages buffered there during sync
+	// are already captured in the accumulator maps; we'll re-queue selectively below.
 drainLoop:
 	for {
 		select {
@@ -193,16 +265,26 @@ drainLoop:
 		}
 	}
 
-	// ─── Process incoming messages ────────────────────────────────────────────
+	// Log and optionally process stored messages exactly once.
+	for _, m := range client.GetAllMessages() {
+		slog.Info("Stored DM", "sender", fmt.Sprintf("%x", m.SenderKey[:6]), "text", m.Text)
+		if processStoredMessages {
+			incomingCh <- m
+		}
+	}
+	for _, m := range client.GetAllChannelMessages() {
+		slog.Info("Stored channel message", "channel", m.ChannelIndex, "sender", m.SenderName, "text", m.Text)
+		if processStoredMessages {
+			incomingCh <- m
+		}
+	}
+
+	// ─── Live message forwarder goroutine ─────────────────────────────────────
+	// All messages from here on are new live arrivals.
 
 	go func() {
 		for msg := range client.IncomingMessages() {
-			switch m := msg.(type) {
-			case *meshcore.Message:
-				processDM(m, client)
-			case *meshcore.ChannelMessage:
-				processChannelMessage(m, client, tgb)
-			}
+			incomingCh <- msg
 		}
 	}()
 
@@ -246,7 +328,7 @@ drainLoop:
 	slog.Info("Shutting down...")
 }
 
-func processDM(m *meshcore.Message, client *meshcore.MeshCoreClient) {
+func processDM(m *meshcore.Message, client *meshcore.MeshCoreClient, outgoingCh chan<- outgoingMsg) {
 	senderKeyHex := fmt.Sprintf("%x", m.SenderKey)
 	if !config.Get().Security.Direct.IsAllowed(senderKeyHex) {
 		slog.Info("Direct message filtered by security policy", "sender", senderKeyHex[:12])
@@ -284,24 +366,12 @@ func processDM(m *meshcore.Message, client *meshcore.MeshCoreClient) {
 		return
 	}
 
-	for i, reply := range replies {
-		if i > 0 {
-			time.Sleep(5 * time.Second)
-		}
-		err = client.SendMessageWithRetry(contact, reply, true, 5, 10*time.Second)
-		if err != nil {
-			// Fall back to send-without-delivery-confirmation.
-			err = client.SendMessageWithRetry(contact, reply, false, 5, 10*time.Second)
-		}
-		if err != nil {
-			slog.Error("Failed to send DM reply", "error", err)
-		} else {
-			slog.Info("DM reply sent")
-		}
+	for _, reply := range replies {
+		outgoingCh <- outgoingMsg{contact: contact, text: reply, ack: true}
 	}
 }
 
-func processChannelMessage(m *meshcore.ChannelMessage, client *meshcore.MeshCoreClient, tgb *tgbridge.Bridge) {
+func processChannelMessage(m *meshcore.ChannelMessage, client *meshcore.MeshCoreClient, tgb *tgbridge.Bridge, outgoingCh chan<- outgoingMsg) {
 	slog.Info("Channel message received", "channel", m.ChannelIndex, "sender", m.SenderName, "text", m.Text)
 
 	channels := client.GetChannels()
@@ -344,18 +414,11 @@ func processChannelMessage(m *meshcore.ChannelMessage, client *meshcore.MeshCore
 	}
 
 	for i, reply := range replies {
-		if i > 0 {
-			time.Sleep(5 * time.Second)
-		}
 		text := reply
 		if len(replies) == 1 {
 			text = fmt.Sprintf("@[%s] %s", m.SenderName, reply)
 		}
-		if err := client.SendChannelMessageWithRetry(channel, text, true, 1, 15*time.Second); err != nil {
-			slog.Error("Failed to send channel reply", "channel", channel.Name, "error", err)
-		} else {
-			slog.Info("Channel reply sent", "channel", channel.Name)
-		}
+		outgoingCh <- outgoingMsg{channel: channel, text: text, ack: i == 0}
 	}
 }
 

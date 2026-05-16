@@ -81,6 +81,15 @@ type MeshCoreClient struct {
 	onNoMoreMessages func()
 	onAdvert         func(*Contact)
 
+	// writeMu serializes raw GATT writes — held only for the duration of
+	// rxChar.Write(). Prevents concurrent BLE writes which cause write timeouts.
+	writeMu sync.Mutex
+
+	// sendMu serializes full send operations (write + confirmation wait).
+	// Only one Send*WithRetry can be in flight at a time.
+	// The frame handler must never lock sendMu (it delivers confirmations).
+	sendMu sync.Mutex
+
 	// для ожидания подтверждения
 	sentConfirmCh      chan struct{} // для respCodeSent / respCodeOk
 	deliveredConfirmCh chan struct{} // для pushCodeSendConfirmed
@@ -512,7 +521,9 @@ func (c *MeshCoreClient) write(data []byte) error {
 		c.mu.RUnlock()
 		return fmt.Errorf("not connected")
 	}
+	c.writeMu.Lock()
 	_, err := c.rxChar.Write(data)
+	c.writeMu.Unlock()
 	c.mu.RUnlock()
 	if err != nil {
 		c.logger.Error("Write to characteristic failed", "error", err)
@@ -1059,12 +1070,16 @@ func (c *MeshCoreClient) handleFrame(data []byte) {
 		c.parseChannelInfo(data)
 	case respCodeContactMsgRecv:
 		c.parseContactMessage(data)
+		_ = c.sendSyncNextMessage()
 	case respCodeContactMsgRecvV3:
 		c.parseContactMessageV3(data)
+		_ = c.sendSyncNextMessage()
 	case respCodeChannelMsgRecv:
 		c.parseChannelMessage(data)
+		_ = c.sendSyncNextMessage()
 	case respCodeChannelMsgRecvV3:
 		c.parseChannelMessageV3(data)
+		_ = c.sendSyncNextMessage()
 	case respCodeSent:
 		c.parseSent(data)
 	case respCodeNoMoreMessages:
@@ -1817,6 +1832,8 @@ func (c *MeshCoreClient) RequestChannels(maxChannels int) error {
 // maxRetries: число повторов (0 = одна попытка).
 // timeout: таймаут ожидания подтверждения для каждой попытки.
 func (c *MeshCoreClient) SendMessageWithRetry(contact *Contact, text string, waitForDelivery bool, maxRetries int, timeout time.Duration) error {
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
 	defer time.Sleep(2 * time.Second) // частая отправка приводит к пропаже сообщений
 
 	c.logger.Info("Sending private message with retry",
@@ -1892,6 +1909,8 @@ func (c *MeshCoreClient) SendMessage(contact *Contact, text string) error {
 // maxRetries: maximum number of additional attempts (0 = single send).
 // timeout: how long to wait for the device OK per attempt.
 func (c *MeshCoreClient) SendChannelMessageWithRetry(channel *Channel, text string, waitForDelivery bool, maxRetries int, timeout time.Duration) error {
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
 	defer time.Sleep(150 * time.Millisecond) // avoid flooding the device
 
 	c.logger.Info("Sending channel message with retry",
