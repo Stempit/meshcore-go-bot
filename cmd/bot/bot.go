@@ -274,7 +274,7 @@ func processDM(m *meshcore.Message, client *meshcore.MeshCoreClient) {
 	pingMeta := buildPingMeta(m.PathLength, m.PathBytes, m.Timestamp, contact.Latitude, contact.Longitude, client.GetContacts())
 	setSelfCoords(pingMeta, client)
 
-	replies, err := commands.GenerateReplies(m.Text, "", pingMeta)
+	replies, err := commands.GenerateReplies(m.Text, "", pingMeta, string(contact.PublicKey), contact.Name)
 	if err != nil {
 		slog.Error("Command error", "error", err)
 		return
@@ -333,7 +333,7 @@ func processChannelMessage(m *meshcore.ChannelMessage, client *meshcore.MeshCore
 	pingMeta := buildPingMeta(m.PathLength, m.PathBytes, m.Timestamp, senderLat, senderLon, client.GetContacts())
 	setSelfCoords(pingMeta, client)
 
-	replies, err := commands.GenerateReplies(m.Text, channel.Name, pingMeta)
+	replies, err := commands.GenerateReplies(m.Text, channel.Name, pingMeta, "", m.SenderName)
 	if err != nil {
 		slog.Error("Command error", "error", err)
 		return
