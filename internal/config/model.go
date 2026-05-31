@@ -34,8 +34,19 @@ type RSSConfig struct {
 	Feeds     []RSSFeedConfig `yaml:"feeds"`
 }
 
+type ConnectionConfig struct {
+	// Type selects the transport: "bt" (Bluetooth LE, default) or "serial" (USB/UART).
+	Type string `yaml:"type"`
+	// SerialPort is the OS device path used when Type is "serial"
+	// (e.g. "/dev/ttyUSB0", "/dev/tty.usbmodem14101", "COM3").
+	SerialPort string `yaml:"serial_port"`
+	// SerialBaud sets the baud rate for the serial transport (default 115200).
+	SerialBaud int `yaml:"serial_baud"`
+}
+
 type Config struct {
-	MQTT     mqttbridge.MQTTConfig   `yaml:"MQTT"`
+	Connection ConnectionConfig        `yaml:"Connection"`
+	MQTT       mqttbridge.MQTTConfig   `yaml:"MQTT"`
 	Telegram tgbridge.TelegramConfig `yaml:"Telegram"`
 	Trace    TraceConfig             `yaml:"Trace"`
 	Security SecurityConfig          `yaml:"Security"`

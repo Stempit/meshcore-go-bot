@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log/slog"
 	"strings"
 	"sync"
@@ -16,6 +17,7 @@ import (
 	"meshbot/internal/historylog"
 	"meshbot/internal/mqttbridge"
 
+	"go.bug.st/serial"
 	"tinygo.org/x/bluetooth"
 )
 
@@ -81,8 +83,13 @@ type MeshCoreClient struct {
 	onNoMoreMessages func()
 	onAdvert         func(*Contact)
 
-	// writeMu serializes raw GATT writes — held only for the duration of
-	// rxChar.Write(). Prevents concurrent BLE writes which cause write timeouts.
+	// serialPort is non-nil when connected via USB/serial instead of BLE.
+	serialPort     serial.Port
+	serialPortPath string
+	serialBaud     int
+
+	// writeMu serializes raw writes — held only for the duration of the write
+	// call. Prevents concurrent writes which cause timeouts.
 	writeMu sync.Mutex
 
 	// sendMu serializes full send operations (write + confirmation wait).
@@ -284,6 +291,10 @@ func (c *MeshCoreClient) Disconnect() error {
 	close(c.doneCh)
 	c.wg.Wait()         // ждём завершения frameHandler
 	close(c.incomingCh) // закрываем канал сообщений
+	if c.serialPort != nil {
+		c.logger.Info("Closing serial port")
+		return c.serialPort.Close()
+	}
 	if c.device != nil {
 		c.logger.Info("Disconnecting from device")
 		return c.device.Disconnect()
@@ -517,23 +528,127 @@ func (c *MeshCoreClient) sendReboot() error {
 
 func (c *MeshCoreClient) write(data []byte) error {
 	c.mu.RLock()
-	if !c.connected || c.rxChar == nil {
+	if !c.connected {
 		c.mu.RUnlock()
 		return fmt.Errorf("not connected")
 	}
-	c.writeMu.Lock()
-	_, err := c.rxChar.Write(data)
-	c.writeMu.Unlock()
+	isSerial := c.serialPort != nil
 	c.mu.RUnlock()
+
+	var err error
+	if isSerial {
+		err = c.serialWriteFramed(data)
+	} else {
+		c.mu.RLock()
+		if c.rxChar == nil {
+			c.mu.RUnlock()
+			return fmt.Errorf("not connected")
+		}
+		c.writeMu.Lock()
+		_, err = c.rxChar.Write(data)
+		c.writeMu.Unlock()
+		c.mu.RUnlock()
+	}
 	if err != nil {
-		c.logger.Error("Write to characteristic failed", "error", err)
+		c.logger.Error("Write failed", "error", err)
 		c.markDisconnected()
 	}
 	return err
 }
 
+// serialWriteFramed wraps data in the MeshCore serial frame format:
+// '<' + len_LSB + len_MSB + payload
+func (c *MeshCoreClient) serialWriteFramed(data []byte) error {
+	frame := make([]byte, 3+len(data))
+	frame[0] = '<'
+	binary.LittleEndian.PutUint16(frame[1:3], uint16(len(data)))
+	copy(frame[3:], data)
+	c.writeMu.Lock()
+	_, err := c.serialPort.Write(frame)
+	c.writeMu.Unlock()
+	return err
+}
+
+// serialReadLoop reads framed packets from the serial port and feeds them into
+// notifyCh. Frame format: '>' + len_LSB + len_MSB + payload (device→host).
+func (c *MeshCoreClient) serialReadLoop() {
+	defer c.wg.Done()
+
+	const (
+		stateIdle       = 0
+		stateGotMarker  = 1
+		stateGotLen1    = 2
+		stateCollecting = 3
+	)
+
+	state := stateIdle
+	var lenBuf [2]byte
+	var frameLen int
+	var frame []byte
+	oneByte := make([]byte, 1)
+
+	for {
+		select {
+		case <-c.doneCh:
+			return
+		default:
+		}
+
+		n, err := c.serialPort.Read(oneByte)
+		if err != nil {
+			if err == io.EOF {
+				continue
+			}
+			select {
+			case <-c.doneCh:
+				return
+			default:
+				c.logger.Error("Serial read error", "error", err)
+				c.markDisconnected()
+				return
+			}
+		}
+		if n == 0 {
+			continue
+		}
+		b := oneByte[0]
+
+		switch state {
+		case stateIdle:
+			if b == '>' {
+				state = stateGotMarker
+			}
+		case stateGotMarker:
+			lenBuf[0] = b
+			state = stateGotLen1
+		case stateGotLen1:
+			lenBuf[1] = b
+			frameLen = int(binary.LittleEndian.Uint16(lenBuf[:]))
+			if frameLen == 0 || frameLen > 512 {
+				c.logger.Warn("Serial frame: invalid length, resetting", "len", frameLen)
+				state = stateIdle
+				continue
+			}
+			frame = make([]byte, 0, frameLen)
+			state = stateCollecting
+		case stateCollecting:
+			frame = append(frame, b)
+			if len(frame) >= frameLen {
+				frameCopy := make([]byte, len(frame))
+				copy(frameCopy, frame)
+				select {
+				case c.notifyCh <- frameCopy:
+				default:
+					c.logger.Warn("Serial notification channel full, dropping frame")
+				}
+				state = stateIdle
+			}
+		}
+	}
+}
+
 // markDisconnected transitions the client to a disconnected state after a
-// write failure. It is safe to call concurrently; subsequent calls are no-ops.
+// write or read failure. It is safe to call concurrently; subsequent calls are no-ops.
 func (c *MeshCoreClient) markDisconnected() {
 	c.mu.Lock()
 	if !c.connected {
@@ -546,12 +661,16 @@ func (c *MeshCoreClient) markDisconnected() {
 	default:
 		close(c.doneCh)
 	}
+	isSerial := c.serialPort != nil
 	c.mu.Unlock()
-	c.wg.Wait() // wait for frameHandler to exit
-	if c.device != nil {
+	c.wg.Wait() // wait for goroutines to exit
+	if isSerial {
+		_ = c.serialPort.Close()
+		c.logger.Warn("Serial connection lost; reconnection required")
+	} else if c.device != nil {
 		_ = c.device.Disconnect()
+		c.logger.Warn("BLE connection lost; reconnection required")
 	}
-	c.logger.Warn("BLE connection lost; reconnection required")
 }
 
 // IsConnected reports whether the client currently has an active BLE connection.
@@ -561,12 +680,81 @@ func (c *MeshCoreClient) IsConnected() bool {
 	return c.connected
 }
 
-// Reconnect re-establishes the BLE connection to the previously connected address.
+// Reconnect re-establishes the connection (BLE or serial) to the previously used address/port.
 func (c *MeshCoreClient) Reconnect() error {
 	c.mu.RLock()
+	isSerial := c.serialPort != nil || c.serialPortPath != ""
+	portPath := c.serialPortPath
+	baud := c.serialBaud
 	addr := c.address
 	c.mu.RUnlock()
+	if isSerial {
+		return c.ConnectSerial(portPath, baud)
+	}
 	return c.Connect(addr)
+}
+
+// ConnectSerial opens a serial port and initialises the MeshCore protocol over it.
+// portPath is the OS path to the serial device (e.g. "/dev/ttyUSB0", "COM3").
+// baud should be 115200 for standard MeshCore firmware.
+func (c *MeshCoreClient) ConnectSerial(portPath string, baud int) error {
+	c.mu.Lock()
+	if c.connected {
+		c.mu.Unlock()
+		return nil
+	}
+	c.serialPortPath = portPath
+	c.serialBaud = baud
+	select {
+	case <-c.doneCh:
+	default:
+		close(c.doneCh)
+	}
+	c.doneCh = make(chan struct{})
+	c.mu.Unlock()
+
+	// Drain stale notifications from any previous connection.
+drainLoop:
+	for {
+		select {
+		case <-c.notifyCh:
+		default:
+			break drainLoop
+		}
+	}
+
+	mode := &serial.Mode{BaudRate: baud}
+	port, err := serial.Open(portPath, mode)
+	if err != nil {
+		return fmt.Errorf("open serial port %s: %w", portPath, err)
+	}
+
+	c.mu.Lock()
+	c.serialPort = port
+	c.connected = true
+	c.mu.Unlock()
+
+	c.logger.Info("Serial port opened", "port", portPath, "baud", baud)
+
+	// Start the serial read loop (feeds notifyCh like BLE notifications do).
+	c.wg.Add(1)
+	go c.serialReadLoop()
+
+	// Start the frame handler goroutine (same as BLE path).
+	c.wg.Add(1)
+	go c.frameHandler()
+
+	if err := c.sendAppStart(); err != nil {
+		c.Disconnect()
+		return err
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	if err := c.sendDeviceQuery(); err != nil {
+		c.Disconnect()
+		return err
+	}
+	return nil
 }
 
 // ============================================================================
