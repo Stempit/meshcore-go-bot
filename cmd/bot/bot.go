@@ -135,7 +135,7 @@ func main() {
 			return
 		}
 		msg := commands.GreetMessage(contact.Name, contact.PublicKey, contact.Type)
-		if err := client.SendChannelMessageWithRetry(pubCh, msg, true, 1, 15*time.Second); err != nil {
+		if err := client.SendChannelMessageWithRetry(pubCh, msg, true, 0, 15*time.Second); err != nil {
 			slog.Error("Failed to send greeting", "channel", pubCh.Name, "error", err)
 		} else {
 			slog.Info("Channel greeting sent", "channel", pubCh.Name)
