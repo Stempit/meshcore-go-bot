@@ -1,4 +1,14 @@
 ---
+Connection:
+  # Transport type: "bt" (Bluetooth LE, default) or "serial" (USB/UART)
+  type: bt
+  # serial_port is required when type is "serial"
+  # Linux:   /dev/ttyUSB0  or  /dev/ttyACM0
+  # macOS:   /dev/tty.usbmodem14101
+  # Windows: COM3
+  # serial_port: /dev/ttyUSB0
+  # serial_baud: 115200   # default 115200, matches MeshCore firmware
+
 MQTT:
   # common mqtt config
   origin: <devicename>    # yours device name

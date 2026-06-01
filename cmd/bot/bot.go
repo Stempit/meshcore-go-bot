@@ -48,8 +48,24 @@ func main() {
 	histlog := historylog.New("log/history")
 	defer histlog.Close()
 
-	// meshcore client
-	client := meshcore.CreateClient()
+	// meshcore client — BLE (default) or USB serial depending on config
+	var client *meshcore.MeshCoreClient
+	conn := config.Get().Connection
+	switch conn.Type {
+	case "serial":
+		port := conn.SerialPort
+		if port == "" {
+			slog.Error("Connection.serial_port must be set when Connection.type is \"serial\"")
+			os.Exit(1)
+		}
+		baud := conn.SerialBaud
+		if baud == 0 {
+			baud = 115200
+		}
+		client = meshcore.CreateSerialClient(port, baud)
+	default:
+		client = meshcore.CreateClient()
+	}
 	defer client.Disconnect()
 
 	// log history in client
@@ -119,7 +135,7 @@ func main() {
 			return
 		}
 		msg := commands.GreetMessage(contact.Name, contact.PublicKey, contact.Type)
-		if err := client.SendChannelMessageWithRetry(pubCh, msg, true, 1, 15*time.Second); err != nil {
+		if err := client.SendChannelMessageWithRetry(pubCh, msg, true, 0, 15*time.Second); err != nil {
 			slog.Error("Failed to send greeting", "channel", pubCh.Name, "error", err)
 		} else {
 			slog.Info("Channel greeting sent", "channel", pubCh.Name)
