@@ -115,7 +115,7 @@ func ProcessTicketCommand(text, senderKey string) (string, error) {
 	if arg == "random" {
 		phrase, ok := ticketStore.random()
 		if !ok {
-			return "нет позывных", nil
+			return "Нет позывных", nil
 		}
 		return "Выбран " + phrase, nil
 	}
@@ -123,5 +123,5 @@ func ProcessTicketCommand(text, senderKey string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return "ваш позывной - " + phrase, nil
+	return "Ваш позывной - " + phrase, nil
 }
