@@ -289,17 +289,19 @@ func (c *MeshCoreClient) Disconnect() error {
 	}
 	c.connected = false
 	close(c.doneCh)
-	c.wg.Wait()         // ждём завершения frameHandler
-	close(c.incomingCh) // закрываем канал сообщений
+	// Close the transport before waiting so any blocked Read() in serialReadLoop
+	// (or BLE notification handler) returns immediately and the goroutine can exit.
+	var closeErr error
 	if c.serialPort != nil {
 		c.logger.Info("Closing serial port")
-		return c.serialPort.Close()
-	}
-	if c.device != nil {
+		closeErr = c.serialPort.Close()
+	} else if c.device != nil {
 		c.logger.Info("Disconnecting from device")
-		return c.device.Disconnect()
+		closeErr = c.device.Disconnect()
 	}
-	return nil
+	c.wg.Wait()
+	close(c.incomingCh)
+	return closeErr
 }
 
 // ============================================================================
