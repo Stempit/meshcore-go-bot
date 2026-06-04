@@ -49,6 +49,12 @@ type ProxyConfig struct {
 	URL     string `yaml:"url"` // e.g. "socks5://user:pass@host:1080"
 }
 
+type WeatherConfig struct {
+	Enabled         bool   `yaml:"enabled"`
+	DefaultLocation string `yaml:"default_location"`
+	Units           string `yaml:"units"` // "metric" or "imperial"
+}
+
 type Config struct {
 	Connection ConnectionConfig        `yaml:"Connection"`
 	Proxy      ProxyConfig             `yaml:"Proxy"`
@@ -57,6 +63,7 @@ type Config struct {
 	Trace    TraceConfig             `yaml:"Trace"`
 	Security SecurityConfig          `yaml:"Security"`
 	RSS      RSSConfig               `yaml:"RSS"`
+	Weather  WeatherConfig           `yaml:"Weather"`
 	LLM      struct {
 		Enabled           bool    `yaml:"enabled"`
 		Type              string  `yaml:"type"`
