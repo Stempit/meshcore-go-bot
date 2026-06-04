@@ -138,6 +138,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err := commands.InitTicketStore("log/tickets.txt"); err != nil {
+		slog.Error("Failed to load ticket store", "error", err)
+		os.Exit(1)
+	}
+
 	sendGreeting := func(contact *meshcore.Contact) {
 		slog.Info("New node seen, sending greeting", "name", contact.Name, "type", contact.Type)
 		pubCh := client.GetChannels()[0]

@@ -52,6 +52,13 @@ func GenerateReplies(text, channelName string, pingMeta *PingMeta, senderKey, se
 	case lower == ".w", strings.HasPrefix(lower, ".w "):
 		return ProcessWeatherCommand(text)
 
+	case lower == ".ticket", strings.HasPrefix(lower, ".ticket "):
+		reply, err := ProcessTicketCommand(text, senderKey)
+		if err != nil {
+			return []string{"ошибка"}, err
+		}
+		return []string{reply}, nil
+
 	default:
 		return nil, nil
 	}
