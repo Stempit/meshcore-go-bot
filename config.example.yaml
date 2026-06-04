@@ -90,6 +90,11 @@ RSS:
       url: https://rssexport.rbc.ru/rbcnews/news/30/full.rss
       interval: 5m
 
+Weather:
+  enabled: true
+  default_location: "Moscow"  # used when .w is called with no argument
+  units: metric               # metric (°C, m/s) or imperial (°F, mph)
+
 Trace:
   use_config_coords: false  # использование предзаданных координат
   lat: 0

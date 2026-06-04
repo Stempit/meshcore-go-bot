@@ -49,6 +49,9 @@ func GenerateReplies(text, channelName string, pingMeta *PingMeta, senderKey, se
 		reply, _ := ProcessTraceMessage(pingMeta)
 		return []string{reply}, nil
 
+	case lower == ".w", strings.HasPrefix(lower, ".w "):
+		return ProcessWeatherCommand(text)
+
 	default:
 		return nil, nil
 	}
