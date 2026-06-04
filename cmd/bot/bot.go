@@ -382,6 +382,17 @@ func processDM(m *meshcore.Message, client *meshcore.MeshCoreClient, outgoingCh 
 
 	slog.Info("Direct message received", "sender", shortKey, "text", m.Text)
 
+	if flood, ok := commands.ParseAdvertCommand(m.Text); ok {
+		slog.Info("Sending advert", "flood", flood)
+		reply := "success"
+		if err := client.SendSelfAdvert(flood); err != nil {
+			slog.Error("SendSelfAdvert failed", "error", err)
+			reply = "error: " + err.Error()
+		}
+		outgoingCh <- outgoingMsg{contact: contact, text: reply, ack: true}
+		return
+	}
+
 	pingMeta := buildPingMeta(m.PathLength, m.PathBytes, m.Timestamp, contact.Latitude, contact.Longitude, client.GetContacts())
 	setSelfCoords(pingMeta, client)
 
@@ -427,6 +438,17 @@ func processChannelMessage(m *meshcore.ChannelMessage, client *meshcore.MeshCore
 			senderLon = c.Longitude
 			break
 		}
+	}
+
+	if flood, ok := commands.ParseAdvertCommand(m.Text); ok {
+		slog.Info("Sending advert", "flood", flood)
+		reply := "success"
+		if err := client.SendSelfAdvert(flood); err != nil {
+			slog.Error("SendSelfAdvert failed", "error", err)
+			reply = "error: " + err.Error()
+		}
+		outgoingCh <- outgoingMsg{channel: channel, text: fmt.Sprintf("@[%s] %s", m.SenderName, reply), ack: true}
+		return
 	}
 
 	pingMeta := buildPingMeta(m.PathLength, m.PathBytes, m.Timestamp, senderLat, senderLon, client.GetContacts())
