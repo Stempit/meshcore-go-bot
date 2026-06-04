@@ -16,6 +16,7 @@ import (
 	"meshbot/internal/config"
 	"meshbot/internal/historylog"
 	meshcore "meshbot/internal/meshcore_bt"
+	"meshbot/internal/proxy"
 	"meshbot/internal/tgbridge"
 )
 
@@ -40,6 +41,15 @@ func main() {
 	}
 
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
+	proxyCfg := config.Get().Proxy
+	if err := proxy.Init(proxyCfg.Enabled, proxyCfg.URL); err != nil {
+		slog.Error("Failed to initialize proxy", "error", err)
+		os.Exit(1)
+	}
+	if proxyCfg.Enabled {
+		slog.Info("Proxy enabled", "url", proxyCfg.URL)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -194,7 +204,7 @@ func main() {
 
 	var tgb *tgbridge.Bridge
 	if tgCfg := config.Get().Telegram; tgCfg.Enabled {
-		tgb, err = tgbridge.New(tgCfg, slog.Default())
+		tgb, err = tgbridge.New(tgCfg, slog.Default(), proxy.HTTPClient())
 		if err != nil {
 			slog.Error("Failed to start Telegram bridge", "error", err)
 		} else {

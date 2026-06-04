@@ -9,6 +9,10 @@ Connection:
   # serial_port: /dev/ttyUSB0
   # serial_baud: 115200   # default 115200, matches MeshCore firmware
 
+Proxy:
+  enabled: false
+  url: "socks5://user:pass@host:1080"  # proxy for Telegram and OpenRouter
+
 MQTT:
   # common mqtt config
   origin: <devicename>    # yours device name
