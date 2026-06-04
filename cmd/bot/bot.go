@@ -84,6 +84,7 @@ func main() {
 	// mqtt init
 	mqttCfg := config.Get().MQTT
 	client.SetMQTTConfig(&mqttCfg)
+	defer client.StopMQTT()
 	client.RequestAllStats()
 
 	// ─── Message channels ─────────────────────────────────────────────────────
