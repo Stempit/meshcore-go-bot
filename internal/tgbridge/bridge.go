@@ -4,7 +4,9 @@ package tgbridge
 import (
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
+	"time"
 
 	tgbotapi "github.com/OvyFlash/telegram-bot-api"
 )
@@ -47,8 +49,12 @@ type Bridge struct {
 }
 
 // New creates a Bridge and connects the Telegram bot. Call Start() to begin polling.
-func New(cfg TelegramConfig, logger *slog.Logger) (*Bridge, error) {
-	bot, err := tgbotapi.NewBotAPI(cfg.BotToken)
+// httpClient is used for all Telegram API requests; pass a proxy-aware client if needed.
+func New(cfg TelegramConfig, logger *slog.Logger, httpClient *http.Client) (*Bridge, error) {
+	// Long-poll timeout is 30s; the HTTP client must exceed it or it races.
+	pollClient := *httpClient
+	pollClient.Timeout = 60 * time.Second
+	bot, err := tgbotapi.NewBotAPIWithClient(cfg.BotToken, tgbotapi.APIEndpoint, &pollClient)
 	if err != nil {
 		return nil, fmt.Errorf("telegram bot init: %w", err)
 	}

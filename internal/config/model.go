@@ -44,8 +44,14 @@ type ConnectionConfig struct {
 	SerialBaud int `yaml:"serial_baud"`
 }
 
+type ProxyConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	URL     string `yaml:"url"` // e.g. "socks5://user:pass@host:1080"
+}
+
 type Config struct {
 	Connection ConnectionConfig        `yaml:"Connection"`
+	Proxy      ProxyConfig             `yaml:"Proxy"`
 	MQTT       mqttbridge.MQTTConfig   `yaml:"MQTT"`
 	Telegram tgbridge.TelegramConfig `yaml:"Telegram"`
 	Trace    TraceConfig             `yaml:"Trace"`

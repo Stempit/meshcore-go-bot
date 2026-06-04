@@ -12,7 +12,9 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"net"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -21,6 +23,7 @@ import (
 
 	"filippo.io/edwards25519"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+	"meshbot/internal/proxy"
 )
 
 // regexp for sanitizing client IDs (MQTT spec: alphanumeric, dash, underscore, max 23 chars)
@@ -323,7 +326,7 @@ func (b *MQTTBridge) connectToCustomBroker() {
 	// from the broker, which caused silent publish failures on every 2nd+ update.
 	client, err := b.createMQTTClient("custom", "custom", brokerURL,
 		b.config.Username, b.config.Password,
-		b.config.UseTLS, "", "", "", false)
+		b.config.UseTLS, "", "", "", false, false)
 
 	if err != nil {
 		b.logger.Error("Failed to create custom MQTT client", "error", err)
@@ -399,7 +402,7 @@ func (b *MQTTBridge) connectToAnalyzer(region, brokerURL string) {
 	var newClient mqtt.Client
 	newClient, err := b.createMQTTClient(region, clientID, brokerURL,
 		b.analyzerUsername, password,
-		true, gtsRootR4Cert, "", "", true) // Always use TLS for analyzer; paho reconnect OK for WS
+		true, gtsRootR4Cert, "", "", true, true) // Always use TLS for analyzer; paho reconnect OK for WS
 
 	if err != nil {
 		b.logger.Error("Failed to create analyzer MQTT client", "error", err, "region", region)
@@ -435,7 +438,7 @@ func (b *MQTTBridge) buildBrokerURL(host string, port int, useTLS bool) string {
 // brokerKey is the logical name used in callbacks ("custom", "us", "eu");
 // clientID is the unique MQTT protocol identifier sent to the broker.
 func (b *MQTTBridge) createMQTTClient(brokerKey, clientID, brokerURL, username, password string,
-	useTLS bool, caCert, clientCert, clientKey string, autoReconnect bool) (mqtt.Client, error) {
+	useTLS bool, caCert, clientCert, clientKey string, autoReconnect bool, useProxy bool) (mqtt.Client, error) {
 
 	// Generate a clean client ID (alphanumeric, max 23 chars for MQTT spec)
 	cleanID := sanitizeClientID(fmt.Sprintf("mc-%s", clientID))
@@ -472,6 +475,25 @@ func (b *MQTTBridge) createMQTTClient(brokerKey, clientID, brokerURL, username, 
 			}
 		}
 		opts.SetTLSConfig(tlsConfig)
+	}
+
+	// Apply SOCKS5 proxy if configured and requested for this connection.
+	if useProxy && proxy.Dialer() != nil {
+		d := proxy.Dialer()
+		u, _ := url.Parse(brokerURL)
+		switch u.Scheme {
+		case "ws", "wss":
+			proxyURL := proxy.URL()
+			opts.SetWebsocketOptions(&mqtt.WebsocketOptions{
+				Proxy: func(_ *http.Request) (*url.URL, error) {
+					return url.Parse(proxyURL)
+				},
+			})
+		default: // tcp, ssl, mqtt, mqtts
+			opts.SetCustomOpenConnectionFn(func(uri *url.URL, _ mqtt.ClientOptions) (net.Conn, error) {
+				return d.Dial("tcp", uri.Host)
+			})
+		}
 	}
 
 	// Connection handlers
