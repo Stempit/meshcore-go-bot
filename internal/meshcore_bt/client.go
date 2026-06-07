@@ -48,9 +48,10 @@ type MeshCoreClient struct {
 	mu        sync.RWMutex
 
 	// Состояние
-	selfInfo    *SelfInfo
-	contacts    map[string]*Contact // ключ – hex(pubKey)
-	channels    map[int]*Channel
+	selfInfo     *SelfInfo
+	contacts     map[string]*Contact // ключ – hex(pubKey)
+	syncLastmod  uint32              // max lastmod seen across all parsed contact frames
+	channels     map[int]*Channel
 	messages    map[string][]*Message // ключ – hex(senderKey)
 	channelMsgs map[int][]*ChannelMessage
 	stats       *CompanionRadioStats // накопленная статистика (все типы)
@@ -1482,7 +1483,7 @@ func (c *MeshCoreClient) parseContact(data []byte) {
 		lat = &latVal
 		lon = &lonVal
 	}
-	// data[144:148] = lastmod (игнорируется)
+	lastMod := binary.LittleEndian.Uint32(data[144:148])
 
 	contact := &Contact{
 		PublicKey:  pubKey,
@@ -1494,12 +1495,16 @@ func (c *MeshCoreClient) parseContact(data []byte) {
 		Latitude:   lat,
 		Longitude:  lon,
 		LastSeen:   lastSeen,
+		LastMod:    lastMod,
 	}
 
 	c.updateMessagesWithFullKey(contact.PublicKey)
 
 	c.mu.Lock()
 	c.contacts[pubKeyHex(pubKey)] = contact
+	if lastMod > c.syncLastmod {
+		c.syncLastmod = lastMod
+	}
 	c.mu.Unlock()
 	c.logger.Debug("Contact parsed", "name", name, "public_key", fmt.Sprintf("%x", pubKey))
 	if c.onContact != nil {
@@ -1639,6 +1644,7 @@ func (c *MeshCoreClient) parseAdvert(data []byte) {
 	// include name, type, GPS and path-length in the MQTT advert message.
 	c.mu.RLock()
 	contact := c.contacts[pubKeyHex(pubKey)]
+	syncLastmod := c.syncLastmod
 	c.mu.RUnlock()
 
 	if contact == nil {
@@ -1650,6 +1656,15 @@ func (c *MeshCoreClient) parseAdvert(data []byte) {
 		contact = &Contact{
 			PublicKey: pubKey,
 			LastSeen:  time.Now(),
+		}
+	} else {
+		// The device has updated this contact's data (GPS, name, path) on its
+		// side. Request only contacts modified since our last sync so the cache
+		// stays current without fetching the full list every time.
+		c.logger.Debug("parseAdvert: requesting contact refresh",
+			"pub_key", fmt.Sprintf("%x", pubKey), "since", syncLastmod)
+		if err := c.sendGetContacts(syncLastmod); err != nil {
+			c.logger.Warn("parseAdvert: failed to refresh contact", "error", err)
 		}
 	}
 
