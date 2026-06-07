@@ -119,9 +119,12 @@ func ProcessTicketCommand(text, senderKey string) (string, error) {
 		}
 		return "Выбран " + phrase, nil
 	}
+	if senderKey == "" {
+		return "Нет твоего ключа, отправь адверт", nil
+	}
 	phrase, err := ticketStore.getOrCreate(senderKey)
 	if err != nil {
 		return "", err
 	}
-	return "Ваш позывной - " + phrase, nil
+	return "Твой позывной - " + phrase, nil
 }

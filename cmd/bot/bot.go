@@ -436,12 +436,14 @@ func processChannelMessage(m *meshcore.ChannelMessage, client *meshcore.MeshCore
 		tgb.Forward(channel.Name, m.SenderName, m.Text)
 	}
 
-	// Resolve sender coordinates for ping/trace commands.
+	// Resolve sender coordinates and public key for commands.
 	var senderLat, senderLon *float64
+	var senderKeyHexCh string
 	for _, c := range client.GetContacts() {
 		if c.Name == m.SenderName {
 			senderLat = c.Latitude
 			senderLon = c.Longitude
+			senderKeyHexCh = fmt.Sprintf("%x", c.PublicKey)
 			break
 		}
 	}
@@ -460,7 +462,7 @@ func processChannelMessage(m *meshcore.ChannelMessage, client *meshcore.MeshCore
 	pingMeta := buildPingMeta(m.PathLength, m.PathBytes, m.Timestamp, senderLat, senderLon, client.GetContacts())
 	setSelfCoords(pingMeta, client)
 
-	replies, err := commands.GenerateReplies(m.Text, channel.Name, pingMeta, "", m.SenderName)
+	replies, err := commands.GenerateReplies(m.Text, channel.Name, pingMeta, senderKeyHexCh, m.SenderName)
 	if err != nil {
 		slog.Error("Command error", "error", err)
 		return
