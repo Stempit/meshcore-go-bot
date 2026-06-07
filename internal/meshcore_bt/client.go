@@ -48,10 +48,11 @@ type MeshCoreClient struct {
 	mu        sync.RWMutex
 
 	// Состояние
-	selfInfo     *SelfInfo
-	contacts     map[string]*Contact // ключ – hex(pubKey)
-	syncLastmod  uint32              // max lastmod seen across all parsed contact frames
-	channels     map[int]*Channel
+	selfInfo          *SelfInfo
+	contacts          map[string]*Contact // ключ – hex(pubKey)
+	syncLastmod       uint32              // max lastmod seen across all parsed contact frames
+	pendingNewContact *Contact            // contact from last pushCodeNewAdvert, may not be stored on device yet
+	channels          map[int]*Channel
 	messages    map[string][]*Message // ключ – hex(senderKey)
 	channelMsgs map[int][]*ChannelMessage
 	stats       *CompanionRadioStats // накопленная статистика (все типы)
@@ -508,6 +509,16 @@ func (c *MeshCoreClient) sendUpdateContact(contact *Contact) error {
 	_ = binary.Write(buf, binary.LittleEndian, lonInt)
 	// last_modified (optional)
 	_ = binary.Write(buf, binary.LittleEndian, uint32(0))
+	return c.write(buf.Bytes())
+}
+
+func (c *MeshCoreClient) sendGetContactByKey(pubKey []byte) error {
+	if len(pubKey) < pubKeySize {
+		return fmt.Errorf("get contact by key requires full %d-byte public key", pubKeySize)
+	}
+	buf := new(bytes.Buffer)
+	buf.WriteByte(cmdGetContactByKey)
+	buf.Write(pubKey[:pubKeySize])
 	return c.write(buf.Bytes())
 }
 
@@ -1306,6 +1317,12 @@ func (c *MeshCoreClient) handleFrame(data []byte) {
 		c.logger.Error("Received error response", "data", fmt.Sprintf("%x", data))
 	case pushCodeAdvert:
 		c.parseAdvert(data)
+	case pushCodeNewAdvert:
+		c.parseNewAdvert(data)
+	case pushCodeContactDeleted:
+		c.parseContactDeleted(data)
+	case pushCodeContactsFull:
+		c.handleContactsFull()
 	case pushCodeLogRxData:
 		c.parseLogRxData(data)
 	default:
@@ -1650,7 +1667,6 @@ func (c *MeshCoreClient) parseAdvert(data []byte) {
 	// include name, type, GPS and path-length in the MQTT advert message.
 	c.mu.RLock()
 	contact := c.contacts[pubKeyHex(pubKey)]
-	syncLastmod := c.syncLastmod
 	c.mu.RUnlock()
 
 	if contact == nil {
@@ -1665,11 +1681,9 @@ func (c *MeshCoreClient) parseAdvert(data []byte) {
 		}
 	} else {
 		// The device has updated this contact's data (GPS, name, path) on its
-		// side. Request only contacts modified since our last sync so the cache
-		// stays current without fetching the full list every time.
-		c.logger.Debug("parseAdvert: requesting contact refresh",
-			"pub_key", fmt.Sprintf("%x", pubKey), "since", syncLastmod)
-		if err := c.sendGetContacts(syncLastmod); err != nil {
+		// side. Fetch just this one contact by key — avoids triggering the
+		// full GET_CONTACTS iteration protocol on every advert.
+		if err := c.sendGetContactByKey(pubKey); err != nil {
 			c.logger.Warn("parseAdvert: failed to refresh contact", "error", err)
 		}
 	}
@@ -1697,6 +1711,98 @@ func (c *MeshCoreClient) parseAdvert(data []byte) {
 
 	if c.onAdvert != nil {
 		c.onAdvert(contact)
+	}
+}
+
+// parseNewAdvert handles PUSH_CODE_NEW_ADVERT (0x8A). The frame format is
+// identical to RESP_CODE_CONTACT, so we reuse parseContact to update the
+// cache. We also remember the contact in pendingNewContact: if the device
+// follows up with PUSH_CODE_CONTACTS_FULL (0x90), the contact was not stored
+// on the device and we need to add it manually after evicting the oldest.
+func (c *MeshCoreClient) parseNewAdvert(data []byte) {
+	c.parseContact(data)
+
+	// Retrieve the contact that parseContact just stored.
+	if len(data) < 33 {
+		return
+	}
+	pubKey := data[1:33]
+	c.mu.Lock()
+	c.pendingNewContact = c.contacts[pubKeyHex(pubKey)]
+	c.mu.Unlock()
+	c.logger.Info("New contact discovered", "pub_key", fmt.Sprintf("%x", pubKey))
+}
+
+// parseContactDeleted handles PUSH_CODE_CONTACT_DELETED (0x8F).
+// Frame: [code(1)][pub_key(32)]. Removes the contact from the local cache.
+func (c *MeshCoreClient) parseContactDeleted(data []byte) {
+	if len(data) < 1+pubKeySize {
+		c.logger.Warn("parseContactDeleted: frame too short", "len", len(data))
+		return
+	}
+	pubKey := data[1 : 1+pubKeySize]
+	keyHex := pubKeyHex(pubKey)
+	c.mu.Lock()
+	delete(c.contacts, keyHex)
+	c.mu.Unlock()
+	c.logger.Info("Contact deleted by device", "pub_key", fmt.Sprintf("%x", pubKey))
+}
+
+// handleContactsFull handles PUSH_CODE_CONTACTS_FULL (0x90). The device has
+// hit its 350-contact limit and could not store the most recent new contact.
+// We evict the oldest contact (by last activity) and then write the pending
+// new contact to the device so it gets a proper slot.
+func (c *MeshCoreClient) handleContactsFull() {
+	c.mu.Lock()
+	pending := c.pendingNewContact
+	c.pendingNewContact = nil
+
+	// Find the oldest contact by activity, skipping the pending new one.
+	var oldest *Contact
+	for _, ct := range c.contacts {
+		if pending != nil && pubKeyHex(ct.PublicKey) == pubKeyHex(pending.PublicKey) {
+			continue
+		}
+		if oldest == nil {
+			oldest = ct
+			continue
+		}
+		oldestActivity := oldest.LastSeen
+		if !oldest.LastMessageAt.IsZero() && oldest.LastMessageAt.After(oldestActivity) {
+			oldestActivity = oldest.LastMessageAt
+		}
+		ctActivity := ct.LastSeen
+		if !ct.LastMessageAt.IsZero() && ct.LastMessageAt.After(ctActivity) {
+			ctActivity = ct.LastMessageAt
+		}
+		if ctActivity.Before(oldestActivity) {
+			oldest = ct
+		}
+	}
+	if oldest != nil {
+		delete(c.contacts, pubKeyHex(oldest.PublicKey))
+	}
+	c.mu.Unlock()
+
+	if oldest == nil {
+		c.logger.Warn("handleContactsFull: no contact to evict")
+		return
+	}
+
+	c.logger.Info("Contacts full: evicting oldest contact",
+		"name", oldest.Name, "pub_key", fmt.Sprintf("%x", oldest.PublicKey),
+		"last_seen", oldest.LastSeen)
+
+	if err := c.sendRemoveContact(oldest.PublicKey); err != nil {
+		c.logger.Error("handleContactsFull: failed to remove contact", "error", err)
+		return
+	}
+
+	if pending == nil {
+		return
+	}
+	if err := c.sendUpdateContact(pending); err != nil {
+		c.logger.Error("handleContactsFull: failed to add new contact", "error", err)
 	}
 }
 
