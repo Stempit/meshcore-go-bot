@@ -50,7 +50,7 @@ const (
 	defaultKeepAlive        = 45
 	defaultConnectTimeout   = 30
 	defaultReconnectDelay   = 5
-	maxQueuedPackets        = 10
+	maxQueuedPackets        = 100
 	defaultStatusIntervalMs = 300000 // 5 minutes
 
 	// Let's Mesh Analyzer servers
