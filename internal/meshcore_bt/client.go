@@ -257,6 +257,13 @@ drainLoop:
 		c.Disconnect()
 		return err
 	}
+	time.Sleep(200 * time.Millisecond)
+
+	if err := c.sendSetDeviceTime(uint32(time.Now().Unix())); err != nil {
+		c.logger.Warn("Failed to sync device time", "error", err)
+	} else {
+		c.logger.Info("Device time synced")
+	}
 	return nil
 
 	// // Повторная отправка AppStart todo: выпилить
@@ -767,6 +774,13 @@ drainLoop:
 	if err := c.sendDeviceQuery(); err != nil {
 		c.Disconnect()
 		return err
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	if err := c.sendSetDeviceTime(uint32(time.Now().Unix())); err != nil {
+		c.logger.Warn("Failed to sync device time", "error", err)
+	} else {
+		c.logger.Info("Device time synced")
 	}
 	return nil
 }
