@@ -59,6 +59,10 @@ func GenerateReplies(text, channelName string, pingMeta *PingMeta, senderKey, se
 		}
 		return []string{reply}, nil
 
+	case lower == ".help", strings.HasPrefix(lower, ".help "):
+		reply, _ := ProcessHelpCommand(text)
+		return []string{reply}, nil
+
 	default:
 		return nil, nil
 	}
