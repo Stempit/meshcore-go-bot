@@ -1244,7 +1244,10 @@ func (c *MeshCoreClient) handleFrame(data []byte) {
 	case respCodeDeviceInfo:
 		c.parseDeviceInfo(data)
 	case respCodeContactsStart:
-		// Начало списка контактов
+		if len(data) >= 5 {
+			total := binary.LittleEndian.Uint32(data[1:5])
+			c.logger.Info("Contact sync started", "device_total", total)
+		}
 	case respCodeContact:
 		if len(data) < contactFrameSize {
 			c.parseContactV3(data)
@@ -1252,7 +1255,10 @@ func (c *MeshCoreClient) handleFrame(data []byte) {
 			c.parseContact(data)
 		}
 	case respCodeEndOfContacts:
-		// Конец списка
+		c.mu.RLock()
+		cached := len(c.contacts)
+		c.mu.RUnlock()
+		c.logger.Info("Contact sync complete", "contacts", cached)
 	case respCodeChannelInfo:
 		if len(data) < 2 {
 			c.logger.Warn("ChannelInfo too short", "len", len(data))
