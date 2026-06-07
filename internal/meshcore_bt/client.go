@@ -2021,7 +2021,8 @@ func (c *MeshCoreClient) RequestChannels(maxChannels int) error {
 // waitForDelivery: true — ждать pushCodeSendConfirmed, false — ждать respCodeSent.
 // maxRetries: число повторов (0 = одна попытка).
 // timeout: таймаут ожидания подтверждения для каждой попытки.
-func (c *MeshCoreClient) SendMessageWithRetry(contact *Contact, text string, waitForDelivery bool, maxRetries int, timeout time.Duration) error {
+// resetPathOnRetry: сбрасывать сохранённый путь перед каждой повторной попыткой.
+func (c *MeshCoreClient) SendMessageWithRetry(contact *Contact, text string, waitForDelivery bool, maxRetries int, timeout time.Duration, resetPathOnRetry bool) error {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
 	defer time.Sleep(2 * time.Second) // частая отправка приводит к пропаже сообщений
@@ -2031,6 +2032,15 @@ func (c *MeshCoreClient) SendMessageWithRetry(contact *Contact, text string, wai
 		"text", text, "waitForDelivery", waitForDelivery)
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 && resetPathOnRetry {
+			c.logger.Info("Resetting contact path before retry",
+				"attempt", attempt, "name", contact.Name, "key", fmt.Sprintf("%x", contact.PublicKey[:6]))
+			if err := c.sendResetPath(contact.PublicKey); err != nil {
+				c.logger.Warn("Path reset failed", "error", err)
+			}
+			time.Sleep(1 * time.Second)
+		}
+
 		timestamp := uint32(time.Now().Unix())
 		_, err := c.sendTextMessage(contact.PublicKey, text, byte(attempt), timestamp)
 		if err != nil {

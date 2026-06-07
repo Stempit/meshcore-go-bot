@@ -110,15 +110,15 @@ func main() {
 				time.Sleep(wait)
 			}
 			if msg.channel != nil {
-				if err := client.SendChannelMessageWithRetry(msg.channel, msg.text, msg.ack, 1, 15*time.Second); err != nil {
+				if err := client.SendChannelMessageWithRetry(msg.channel, msg.text, msg.ack, 1, 3*time.Second); err != nil {
 					slog.Error("Failed to send channel reply", "channel", msg.channel.Name, "error", err)
 				} else {
 					slog.Info("Channel reply sent", "channel", msg.channel.Name)
 				}
 			} else if msg.contact != nil {
-				err := client.SendMessageWithRetry(msg.contact, msg.text, true, 5, 10*time.Second)
+				err := client.SendMessageWithRetry(msg.contact, msg.text, true, 3, 3*time.Second, true)
 				if err != nil {
-					err = client.SendMessageWithRetry(msg.contact, msg.text, false, 5, 10*time.Second)
+					err = client.SendMessageWithRetry(msg.contact, msg.text, false, 3, 3*time.Second, true)
 				}
 				if err != nil {
 					slog.Error("Failed to send DM reply", "error", err)
@@ -151,7 +151,7 @@ func main() {
 			return
 		}
 		msg := commands.GreetMessage(contact.Name, contact.PublicKey, contact.Type)
-		if err := client.SendChannelMessageWithRetry(pubCh, msg, true, 0, 15*time.Second); err != nil {
+		if err := client.SendChannelMessageWithRetry(pubCh, msg, true, 0, 3*time.Second); err != nil {
 			slog.Error("Failed to send greeting", "channel", pubCh.Name, "error", err)
 		} else {
 			slog.Info("Channel greeting sent", "channel", pubCh.Name)

@@ -33,7 +33,7 @@ func main() {
 		for _, v := range contacts {
 			if v.Name == "Короед" {
 				// отправка с ретраями до подтверждения отправки
-				err := client.SendMessageWithRetry(v, "Пинг А", false, 5, 10*time.Second)
+				err := client.SendMessageWithRetry(v, "Пинг А", false, 3, 3*time.Second, true)
 				if err != nil {
 					fmt.Printf("Ошибка: %v\n", err)
 				} else {
@@ -41,7 +41,7 @@ func main() {
 				}
 
 				// отправка с ретраями до подтверждения доставки
-				err = client.SendMessageWithRetry(v, "Пинг Б", true, 5, 10*time.Second)
+				err = client.SendMessageWithRetry(v, "Пинг Б", true, 3, 3*time.Second, true)
 				if err != nil {
 					fmt.Printf("Ошибка: %v\n", err)
 				} else {
@@ -58,7 +58,7 @@ func main() {
 
 		channels := client.GetChannels()
 		if ch, ok := channels[0]; ok && !ch.IsEmpty {
-			err := client.SendChannelMessageWithRetry(ch, "ping С", false, 3, 5*time.Second)
+			err := client.SendChannelMessageWithRetry(ch, "ping С", false, 3, 3*time.Second)
 			if err != nil {
 				fmt.Printf("Ошибка: %v\n", err)
 			} else {
@@ -143,7 +143,7 @@ func main() {
 					fmt.Printf("Отвечаем")
 
 					// ответ без подтверждения
-					err := client.SendMessageWithRetry(contact, "Ответ без подтверждения доставки!", false, 5, 10*time.Second)
+					err := client.SendMessageWithRetry(contact, "Ответ без подтверждения доставки!", false, 3, 3*time.Second, true)
 					if err != nil {
 						fmt.Printf("Ошибка: %v\n", err)
 					} else {
@@ -151,7 +151,7 @@ func main() {
 					}
 
 					// ответ с подтверждением
-					err = client.SendMessageWithRetry(contact, "Ответ с подтверждением доставки!", true, 5, 10*time.Second)
+					err = client.SendMessageWithRetry(contact, "Ответ с подтверждением доставки!", true, 3, 3*time.Second, true)
 					if err != nil {
 						fmt.Printf("Ошибка: %v\n", err)
 					} else {
@@ -170,7 +170,7 @@ func main() {
 					}
 
 					// отправляем ответ
-					err := client.SendChannelMessageWithRetry(channel, fmt.Sprintf("@[%s] ack", m.SenderName), false, 5, 5*time.Second)
+					err := client.SendChannelMessageWithRetry(channel, fmt.Sprintf("@[%s] ack", m.SenderName), false, 3, 3*time.Second)
 					if err != nil {
 						fmt.Printf("Ошибка: %v\n", err)
 					} else {
