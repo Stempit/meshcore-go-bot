@@ -116,9 +116,9 @@ func main() {
 					slog.Info("Channel reply sent", "channel", msg.channel.Name)
 				}
 			} else if msg.contact != nil {
-				err := client.SendMessageWithRetry(msg.contact, msg.text, true, 3, 3*time.Second, true)
+				err := client.SendMessageWithRetry(msg.contact, msg.text, true, 3, 3, 3*time.Second)
 				if err != nil {
-					err = client.SendMessageWithRetry(msg.contact, msg.text, false, 3, 3*time.Second, true)
+					err = client.SendMessageWithRetry(msg.contact, msg.text, false, 3, 3, 3*time.Second)
 				}
 				if err != nil {
 					slog.Error("Failed to send DM reply", "error", err)
