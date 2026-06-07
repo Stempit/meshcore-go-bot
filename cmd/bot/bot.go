@@ -448,6 +448,18 @@ func processChannelMessage(m *meshcore.ChannelMessage, client *meshcore.MeshCore
 		}
 	}
 
+	// forwardBotReply sends a bot reply to Telegram only when this mesh channel
+	// has a matching entry in the Targets config (Forward filters internally).
+	botName := "Bot"
+	if info := client.GetSelfInfo(); info != nil && info.Name != "" {
+		botName = info.Name
+	}
+	forwardBotReply := func(text string) {
+		if tgb != nil && tgb.HasTarget(channel.Name) {
+			tgb.Forward(channel.Name, botName, text)
+		}
+	}
+
 	if flood, ok := commands.ParseAdvertCommand(m.Text); ok {
 		slog.Info("Sending advert", "flood", flood)
 		reply := "success"
@@ -455,7 +467,9 @@ func processChannelMessage(m *meshcore.ChannelMessage, client *meshcore.MeshCore
 			slog.Error("SendSelfAdvert failed", "error", err)
 			reply = "error: " + err.Error()
 		}
-		outgoingCh <- outgoingMsg{channel: channel, text: fmt.Sprintf("@[%s] %s", m.SenderName, reply), ack: true}
+		text := fmt.Sprintf("@[%s] %s", m.SenderName, reply)
+		outgoingCh <- outgoingMsg{channel: channel, text: text, ack: true}
+		forwardBotReply(text)
 		return
 	}
 
@@ -478,6 +492,7 @@ func processChannelMessage(m *meshcore.ChannelMessage, client *meshcore.MeshCore
 			text = fmt.Sprintf("@[%s] %s", m.SenderName, reply)
 		}
 		outgoingCh <- outgoingMsg{channel: channel, text: text, ack: i == 0}
+		forwardBotReply(text)
 	}
 }
 

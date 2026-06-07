@@ -198,6 +198,16 @@ func (b *Bridge) logUpdate(update tgbotapi.Update) {
 	}
 }
 
+// HasTarget reports whether any Telegram target is configured for the given mesh channel name.
+func (b *Bridge) HasTarget(meshChannelName string) bool {
+	for _, t := range b.cfg.Targets {
+		if t.MeshChannelName == meshChannelName {
+			return true
+		}
+	}
+	return false
+}
+
 // Forward sends a MeshCore channel message to every Telegram target configured for that channel.
 // Call this from the incoming-message handler in bot.go for ChannelMessage events.
 func (b *Bridge) Forward(meshChannelName, senderName, text string) {
