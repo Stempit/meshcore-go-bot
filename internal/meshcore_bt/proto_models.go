@@ -20,6 +20,7 @@ type Contact struct {
 	IsActive          bool
 	PathOverride      *int // -1 = flood, nil = auto, >=0 = specific length
 	PathOverrideBytes []byte
+	LastMod           uint32 // device RTC timestamp of last modification
 }
 
 type Channel struct {

@@ -63,11 +63,14 @@ const (
 
 // Push codes (async from device)
 const (
-	pushCodeAdvert        = 0x80
-	pushCodePathUpdated   = 0x81
-	pushCodeSendConfirmed = 0x82
-	pushCodeMsgWaiting    = 0x83
-	pushCodeLogRxData     = 0x88
+	pushCodeAdvert          = 0x80
+	pushCodePathUpdated     = 0x81
+	pushCodeSendConfirmed   = 0x82
+	pushCodeMsgWaiting      = 0x83
+	pushCodeLogRxData       = 0x88
+	pushCodeNewAdvert       = 0x8A // new contact discovered; same frame format as respCodeContact
+	pushCodeContactDeleted  = 0x8F // contact was deleted/overwritten; frame: [code][pubkey(32)]
+	pushCodeContactsFull    = 0x90 // device contact storage full; bot must evict oldest
 )
 
 // Text message types
