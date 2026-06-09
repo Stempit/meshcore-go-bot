@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -117,7 +118,8 @@ func main() {
 				}
 			} else if msg.contact != nil {
 				err := client.SendMessageWithRetry(msg.contact, msg.text, true, 3, 3, 3*time.Second)
-				if err != nil {
+				if err != nil && !errors.Is(err, meshcore.ErrDeviceRejected) {
+					time.Sleep(5 * time.Second)
 					err = client.SendMessageWithRetry(msg.contact, msg.text, false, 3, 3, 3*time.Second)
 				}
 				if err != nil {

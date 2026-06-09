@@ -129,3 +129,17 @@ const (
 	STATS_TYPE_RADIO   = 1
 	STATS_TYPE_PACKETS = 2
 )
+
+// pathLengthFlood is OUT_PATH_UNKNOWN (0xFF): device will flood-route the message.
+// A contact at this value has no known directed path.
+const pathLengthFlood = 0xFF
+
+// Error codes (byte 1 of RESP_CODE_ERR frames, from MyMesh.cpp ERR_CODE_*)
+const (
+	errCodeUnsupportedCmd = 0x01
+	errCodeNotFound       = 0x02
+	errCodeTableFull      = 0x03
+	errCodeBadState       = 0x04
+	errCodeFileIOError    = 0x05
+	errCodeIllegalArg     = 0x06
+)
