@@ -15,7 +15,6 @@ Proxy:
 
 MQTT:
   # common mqtt config
-  origin: <devicename>    # yours device name
   iata: KVX               # region by iata
   status_enabled: true    # send status updates
   packets_enabled: true   # send incoming packets
