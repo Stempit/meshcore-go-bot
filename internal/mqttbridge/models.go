@@ -11,15 +11,17 @@ import (
 // DeviceInfo contains device information used by the MQTT bridge for publishing.
 // Populated from SelfInfo received from the MeshCore device.
 type DeviceInfo struct {
-	PublicKey []byte
-	Name      string
-	TxPower   int8
-	Latitude  float64
-	Longitude float64
-	FreqHz    uint32
-	BwHz      uint32
-	Sf        int
-	Cr        int
+	PublicKey       []byte
+	Name            string
+	TxPower         int8
+	Latitude        float64
+	Longitude       float64
+	FreqHz          uint32
+	BwHz            uint32
+	Sf              int
+	Cr              int
+	FirmwareVersion string
+	Model           string
 }
 
 // DeviceStats contains device statistics used by the MQTT bridge for publishing.
@@ -61,8 +63,7 @@ type MQTTConfig struct {
 	Password string `yaml:"password"` // MQTT password
 
 	// Device identity
-	Origin string `yaml:"origin"` // Device origin name (e.g., "MeshCore-Repeater-01")
-	IATA   string `yaml:"iata"`   // IATA airport code (e.g., "SEA", "LAX")
+	IATA string `yaml:"iata"` // IATA airport code (e.g., "SEA", "LAX")
 
 	// Message settings
 	StatusEnabled  bool `yaml:"status_enabled"`  // Enable status messages
@@ -178,8 +179,8 @@ type MQTTPacket struct {
 	Route      string `json:"route"`          // F (FLOOD), D (DIRECT), T (TRANSPORT), U (UNKNOWN)
 	PayloadLen string `json:"payload_len"`    // Payload length
 	Raw        string `json:"raw"`            // Raw packet data (hex)
-	SNR        string `json:"SNR"`            // Signal-to-noise ratio (dB)
-	RSSI       string `json:"RSSI"`           // Received signal strength (dBm)
+	SNR        string `json:"SNR,omitempty"`  // Signal-to-noise ratio (dB); omitted for TX
+	RSSI       string `json:"RSSI,omitempty"` // Received signal strength (dBm); omitted for TX
 	Hash       string `json:"hash"`           // Packet hash (32 hex)
 	Path       string `json:"path,omitempty"` // Routing path for direct packets
 

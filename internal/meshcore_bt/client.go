@@ -5,6 +5,7 @@ import (
 	"crypto/aes"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
@@ -14,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"filippo.io/edwards25519"
+	"golang.org/x/crypto/curve25519"
 	"meshbot/internal/historylog"
 	"meshbot/internal/mqttbridge"
 
@@ -89,7 +92,10 @@ type MeshCoreClient struct {
 	onBattery        func(millivolts int, usedKb, totalKb int)
 	onError          func(error)
 	onNoMoreMessages func()
-	onAdvert         func(*Contact)
+	onAdvert       func(*Contact)
+	onTraceData    func(*TraceData)
+	onChannelData  func(*ChannelDataMessage)
+	onControlData  func(*ControlData)
 
 	// serialPort is non-nil when connected via USB/serial instead of BLE.
 	serialPort     serial.Port
@@ -395,7 +401,6 @@ func (c *MeshCoreClient) sendTextMessage(recipient []byte, text string, attempt 
 	if err := c.write(buf.Bytes()); err != nil {
 		return messageID, err
 	}
-	c.OnPacketSent(buf.Bytes())
 	return messageID, nil
 }
 
@@ -454,7 +459,9 @@ func errCodeName(code byte) string {
 
 
 
-func (c *MeshCoreClient) sendChannelTextMessage(channelIndex byte, text string) error {
+// sendChannelTextMessage returns the timestamp embedded in the BLE command so
+// callers can build a matching synthetic RF packet with the same timestamp.
+func (c *MeshCoreClient) sendChannelTextMessage(channelIndex byte, text string) (uint32, error) {
 	// [cmd(1)][txt_type(1)][channel(1)][timestamp(4)][text][0x00]
 	timestamp := uint32(time.Now().Unix())
 	buf := new(bytes.Buffer)
@@ -464,11 +471,7 @@ func (c *MeshCoreClient) sendChannelTextMessage(channelIndex byte, text string) 
 	_ = binary.Write(buf, binary.LittleEndian, timestamp)
 	buf.WriteString(text)
 	buf.WriteByte(0)
-	if err := c.write(buf.Bytes()); err != nil {
-		return err
-	}
-	c.OnPacketSent(buf.Bytes())
-	return nil
+	return timestamp, c.write(buf.Bytes())
 }
 
 func (c *MeshCoreClient) sendSetDeviceTime(timestamp uint32) error {
@@ -1385,8 +1388,67 @@ func (c *MeshCoreClient) handleFrame(data []byte) {
 		c.handleContactsFull()
 	case pushCodeLogRxData:
 		c.parseLogRxData(data)
+
+	// Priority 1 — full parse + MQTT
+	case pushCodeTraceData:
+		c.parseTraceData(data)
+	case pushCodeControlData:
+		c.parseControlData(data)
+
+	// Priority 2 — full parse + MQTT (response via MSG_WAITING queue)
+	case respCodeChannelDataRecv:
+		c.parseChannelData(data)
+		_ = c.sendSyncNextMessage()
+
+	// Priority 3 — log + MQTT publish
+	case pushCodeRawData:
+		snr := float64(0)
+		rssi := float64(0)
+		if len(data) >= 3 {
+			snr = float64(int8(data[1])) / 4.0
+			rssi = float64(int8(data[2]))
+		}
+		c.logger.Debug("Raw data packet", "snr", snr, "rssi", rssi,
+			"payload", fmt.Sprintf("%x", data[3:]))
+		c.publishPendingRawToMQTT(snr, rssi)
+
+	case pushCodeLoginSuccess:
+		if len(data) >= 7 {
+			c.logger.Info("Login success", "pubkey_prefix", fmt.Sprintf("%x", data[1:7]))
+		}
+		c.publishPendingRawToMQTT(0, 0)
+
+	case pushCodeLoginFail:
+		if len(data) >= 7 {
+			c.logger.Warn("Login failed", "pubkey_prefix", fmt.Sprintf("%x", data[1:7]))
+		}
+		c.publishPendingRawToMQTT(0, 0)
+
+	case pushCodeStatusResponse:
+		c.logger.Debug("Status response", "data", fmt.Sprintf("%x", data))
+		c.publishPendingRawToMQTT(0, 0)
+
+	case pushCodeTelemetryResponse:
+		c.logger.Debug("Telemetry response", "data", fmt.Sprintf("%x", data))
+		c.publishPendingRawToMQTT(0, 0)
+
+	case pushCodeBinaryResponse:
+		c.logger.Debug("Binary response", "data", fmt.Sprintf("%x", data))
+		c.publishPendingRawToMQTT(0, 0)
+
+	case pushCodePathDiscoveryResponse:
+		c.logger.Debug("Path discovery response", "data", fmt.Sprintf("%x", data))
+		c.publishPendingRawToMQTT(0, 0)
+
+	// Priority 4 — constants only; no command sender yet
+	case respCodeCurrTime, respCodeExportContact, respCodePrivateKey,
+		respCodeDisabled, respCodeSignStart, respCodeSignature,
+		respCodeAdvertPath, respCodeTuningParams, respCodeDefaultFloodScope:
+		c.logger.Debug("Unhandled response code (no command sender yet)",
+			"code", fmt.Sprintf("0x%02x", data[0]), "len", len(data))
+
 	default:
-		c.logger.Warn("Unknown frame code", "code", code)
+		c.logger.Warn("Unknown frame code", "code", fmt.Sprintf("0x%02x", code))
 	}
 }
 
@@ -1524,6 +1586,13 @@ func (c *MeshCoreClient) parseDeviceInfo(data []byte) {
 				"client_repeat_enabled", data[80] != 0,
 				"path_hash_mode", int(data[81]))
 		}
+
+		c.mu.Lock()
+		if c.selfInfo != nil {
+			c.selfInfo.FirmwareVersion = version
+			c.selfInfo.Model = model
+		}
+		c.mu.Unlock()
 	}
 }
 
@@ -1748,26 +1817,7 @@ func (c *MeshCoreClient) parseAdvert(data []byte) {
 		}
 	}
 
-	c.mu.RLock()
-	mqttBridge := c.mqtt
-	c.mu.RUnlock()
-
-	if mqttBridge != nil {
-		// Correlate with the oldest pending 0x88 raw frame (arrives before 0x80).
-		var rawData []byte
-		var snr, rssi float64
-		for i := 0; i < len(c.pendingRaw); i++ {
-			p := c.pendingRaw[i]
-			if time.Since(p.arrivedAt) <= pendingRawTTL {
-				rawData = p.rawData
-				snr = p.snr
-				rssi = p.rssi
-				c.pendingRaw = append(c.pendingRaw[:i], c.pendingRaw[i+1:]...)
-				break
-			}
-		}
-		mqttBridge.QueuePacket(rawData, false, snr, rssi)
-	}
+	c.publishPendingRawToMQTT(0, 0)
 
 	if c.onAdvert != nil {
 		c.onAdvert(contact)
@@ -1873,14 +1923,14 @@ func (c *MeshCoreClient) handleContactsFull() {
 // Encryption: AES-128-ECB with the 16-byte channel PSK.
 // MAC:        HMAC-SHA256(psk‖zeros16, ciphertext)[:2].
 // Wire:       [header=0x15][path_len=0x00][channel_hash(1)][mac(2)][ciphertext…]
-func buildGRPTXTPacket(psk []byte, senderName, text string) []byte {
+func buildGRPTXTPacket(psk []byte, senderName, text string, timestamp uint32) []byte {
 	if len(psk) < 16 {
 		return nil
 	}
 	key := psk[:16]
 
 	// Plaintext: timestamp(4 LE) + flags(1) + "sender: text"
-	ts := uint32(time.Now().Unix())
+	ts := timestamp
 	msg := senderName + ": " + text
 	plain := make([]byte, 5+len(msg))
 	binary.LittleEndian.PutUint32(plain[0:4], ts)
@@ -1924,7 +1974,7 @@ func buildGRPTXTPacket(psk []byte, senderName, text string) []byte {
 // publishTXChannelPacket builds a synthetic outgoing GRP_TXT RF packet and
 // queues it for MQTT publishing as a TX packet. This makes our outgoing channel
 // messages visible on analyzer servers exactly like packets from any other device.
-func (c *MeshCoreClient) publishTXChannelPacket(channel *Channel, text string) {
+func (c *MeshCoreClient) publishTXChannelPacket(channel *Channel, text string, timestamp uint32) {
 	c.mu.RLock()
 	mqttBridge := c.mqtt
 	selfInfo := c.selfInfo
@@ -1938,7 +1988,7 @@ func (c *MeshCoreClient) publishTXChannelPacket(channel *Channel, text string) {
 	}
 
 	senderName := selfInfo.Name
-	rawPkt := buildGRPTXTPacket(channel.PSK, senderName, text)
+	rawPkt := buildGRPTXTPacket(channel.PSK, senderName, text, timestamp)
 	if rawPkt == nil {
 		c.logger.Warn("publishTXChannelPacket: failed to build packet")
 		return
@@ -1950,8 +2000,247 @@ func (c *MeshCoreClient) publishTXChannelPacket(channel *Channel, text string) {
 	}
 	channelKeyHex := hex.EncodeToString(channel.PSK[:16])
 
-	mqttBridge.QueueChannelPacket(rawPkt, true, 0, 0, channel.Index, channelName, senderName, text, channelKeyHex)
+	mqttBridge.QueueChannelPacket(rawPkt, false, 0, 0, channel.Index, channelName, senderName, text, channelKeyHex)
 }
+
+// buildTXTMsgPacket constructs a synthetic MeshCore TXT_MSG RF packet for an
+// outgoing direct message, mirroring BaseChatMesh::composeMsgPacket →
+// Mesh::createDatagram → Utils::encryptThenMAC from the firmware.
+//
+// Wire format:
+//
+//	[header=0x0A][path_len=0x00][dest_hash(1)][src_hash(1)][mac(2)][aes_ecb_ciphertext…]
+//
+// header = ROUTE_TYPE_DIRECT(0x02) | PAYLOAD_TYPE_TXT_MSG(0x02)<<2 = 0x0A
+// path_len = 0x00 → zero hops (emulated: observer at source)
+//
+// Encryption:
+//
+//	shared_secret = X25519(our_x25519_scalar, ed25519_pub_to_x25519(recipient_pub))
+//	plaintext     = [timestamp(4 LE)][flags=0x00][text…]
+//	ciphertext    = AES-128-ECB(shared_secret[:16], pad(plaintext))
+//	mac           = HMAC-SHA256(shared_secret, ciphertext)[:2]
+//
+// privKeyBytes supports all three MeshCore key export sizes:
+//
+//	32 bytes — standard Ed25519 seed (SHA-512 expanded internally)
+//	64 bytes — orlp pre-expanded [scalar(32)|nonce(32)]
+//	96 bytes — full MeshCore export [prv(64)|pub(32)]
+func buildTXTMsgPacket(privKeyBytes, ourPubKey, recipientPubKey []byte, text string, timestamp uint32) []byte {
+	if len(ourPubKey) < 32 || len(recipientPubKey) < 32 {
+		return nil
+	}
+
+	// Derive X25519 scalar from whichever private key format we have.
+	var x25519Scalar [32]byte
+	switch len(privKeyBytes) {
+	case 32: // seed: expand via SHA-512
+		h := sha512.New()
+		h.Write(privKeyBytes)
+		expanded := h.Sum(nil)
+		copy(x25519Scalar[:], expanded[:32])
+	case 64, 96: // orlp expanded or full MeshCore export: first 32 bytes are the clamped scalar
+		copy(x25519Scalar[:], privKeyBytes[:32])
+	default:
+		return nil
+	}
+
+	// Convert recipient Ed25519 public key (compressed Edwards point) to X25519.
+	p, err := new(edwards25519.Point).SetBytes(recipientPubKey[:32])
+	if err != nil {
+		return nil
+	}
+	recipientX25519 := p.BytesMontgomery()
+
+	sharedSecret, err := curve25519.X25519(x25519Scalar[:], recipientX25519)
+	if err != nil {
+		return nil
+	}
+
+	// Plaintext: [timestamp(4 LE)][flags=0x00][text…]
+	plain := make([]byte, 5+len(text))
+	binary.LittleEndian.PutUint32(plain[0:4], timestamp)
+	plain[4] = 0x00
+	copy(plain[5:], text)
+
+	// Pad to AES block boundary.
+	if pad := aes.BlockSize - (len(plain) % aes.BlockSize); pad != aes.BlockSize {
+		plain = append(plain, make([]byte, pad)...)
+	}
+
+	block, err := aes.NewCipher(sharedSecret[:16])
+	if err != nil {
+		return nil
+	}
+	ct := make([]byte, len(plain))
+	for i := 0; i < len(plain); i += aes.BlockSize {
+		block.Encrypt(ct[i:i+aes.BlockSize], plain[i:i+aes.BlockSize])
+	}
+
+	// MAC = HMAC-SHA256(sharedSecret, ciphertext)[:2]
+	h := hmac.New(sha256.New, sharedSecret)
+	h.Write(ct)
+	mac := h.Sum(nil)[:2]
+
+	// RF packet: [0x0A][0x00][dest_hash][src_hash][mac(2)][ciphertext…]
+	pkt := make([]byte, 0, 2+1+1+2+len(ct))
+	pkt = append(pkt, 0x0A, 0x00)
+	pkt = append(pkt, recipientPubKey[0])
+	pkt = append(pkt, ourPubKey[0])
+	pkt = append(pkt, mac...)
+	pkt = append(pkt, ct...)
+	return pkt
+}
+
+// publishTXDirectMessage builds a synthetic TXT_MSG RF packet for an outgoing DM
+// and queues it to MQTT as an emulated RX packet (zero hop, SNR/RSSI = 0).
+func (c *MeshCoreClient) publishTXDirectMessage(contact *Contact, text string, timestamp uint32) {
+	c.mu.RLock()
+	mqttBridge := c.mqtt
+	selfInfo := c.selfInfo
+	c.mu.RUnlock()
+
+	if mqttBridge == nil || selfInfo == nil {
+		return
+	}
+	if len(contact.PublicKey) < 32 {
+		return
+	}
+
+	cfg := mqttBridge.GetConfig()
+	if cfg.DevicePrivKey == "" {
+		c.logger.Debug("publishTXDirectMessage: DevicePrivKey not configured, skipping DM TX publish")
+		return
+	}
+	privKeyBytes, err := hex.DecodeString(cfg.DevicePrivKey)
+	if err != nil {
+		c.logger.Warn("publishTXDirectMessage: invalid DevicePrivKey", "error", err)
+		return
+	}
+
+	rawPkt := buildTXTMsgPacket(privKeyBytes, selfInfo.PublicKey, contact.PublicKey, text, timestamp)
+	if rawPkt == nil {
+		c.logger.Warn("publishTXDirectMessage: failed to build packet")
+		return
+	}
+
+	mqttBridge.QueuePacket(rawPkt, false, 0, 0)
+}
+
+// parseTraceData handles PUSH_CODE_TRACE_DATA (0x89).
+// Payload: [code][reserved][path_len][flags][tag(4)][auth(4)][hashes(path_len)][snrs(path_len>>path_sz)][final_snr]
+func (c *MeshCoreClient) parseTraceData(data []byte) {
+	const minLen = 12 // code+reserved+path_len+flags+tag(4)+auth(4)
+	if len(data) < minLen {
+		c.logger.Warn("parseTraceData: too short", "len", len(data))
+		return
+	}
+	pathLen := int(data[2])
+	flags := data[3]
+	pathSz := int(flags & 0x03)
+	tag := binary.LittleEndian.Uint32(data[4:8])
+	auth := binary.LittleEndian.Uint32(data[8:12])
+
+	snrCount := pathLen >> pathSz
+	needed := 12 + pathLen + snrCount + 1
+	if len(data) < needed {
+		c.logger.Warn("parseTraceData: truncated", "len", len(data), "needed", needed)
+		return
+	}
+
+	hashes := make([]byte, pathLen)
+	copy(hashes, data[12:12+pathLen])
+
+	snrs := make([]float32, snrCount)
+	for i := range snrs {
+		snrs[i] = float32(int8(data[12+pathLen+i])) / 4.0
+	}
+	finalSNR := float32(int8(data[12+pathLen+snrCount])) / 4.0
+
+	c.logger.Debug("Trace data received",
+		"tag", fmt.Sprintf("%08x", tag),
+		"hops", pathLen,
+		"final_snr", finalSNR)
+
+	c.publishPendingRawToMQTT(float64(finalSNR), 0)
+
+	if c.onTraceData != nil {
+		c.onTraceData(&TraceData{
+			Tag:        tag,
+			AuthCode:   auth,
+			PathHashes: hashes,
+			PathSNRs:   snrs,
+			FinalSNR:   finalSNR,
+		})
+	}
+}
+
+func (c *MeshCoreClient) OnTraceData(f func(*TraceData)) { c.onTraceData = f }
+
+// parseChannelData handles RESP_CODE_CHANNEL_DATA_RECV (0x1B).
+// Payload: [code][snr*4][reserved][reserved][chan_idx][path_len][dtype_lo][dtype_hi][data_len][data...]
+func (c *MeshCoreClient) parseChannelData(data []byte) {
+	const minLen = 9
+	if len(data) < minLen {
+		c.logger.Warn("parseChannelData: too short", "len", len(data))
+		return
+	}
+	snr := float32(int8(data[1])) / 4.0
+	chanIdx := int(data[4])
+	pathLen := int(data[5])
+	dataType := uint16(data[6]) | uint16(data[7])<<8
+	dataLen := int(data[8])
+	if len(data) < 9+dataLen {
+		c.logger.Warn("parseChannelData: truncated", "len", len(data), "data_len", dataLen)
+		return
+	}
+	payload := make([]byte, dataLen)
+	copy(payload, data[9:9+dataLen])
+
+	c.logger.Debug("Channel data received",
+		"channel", chanIdx,
+		"data_type", fmt.Sprintf("0x%04x", dataType),
+		"data_len", dataLen)
+
+	c.publishPendingRawToMQTT(float64(snr), 0)
+
+	if c.onChannelData != nil {
+		c.onChannelData(&ChannelDataMessage{
+			ChannelIndex: chanIdx,
+			DataType:     dataType,
+			Data:         payload,
+			SNR:          snr,
+			PathLength:   pathLen,
+		})
+	}
+}
+
+func (c *MeshCoreClient) OnChannelData(f func(*ChannelDataMessage)) { c.onChannelData = f }
+
+// parseControlData handles PUSH_CODE_CONTROL_DATA (0x8E, firmware v8+).
+// Payload: [code][snr*4][rssi][path_len][payload...]
+func (c *MeshCoreClient) parseControlData(data []byte) {
+	if len(data) < 4 {
+		c.logger.Warn("parseControlData: too short", "len", len(data))
+		return
+	}
+	snr := float32(int8(data[1])) / 4.0
+	rssi := int8(data[2])
+	pathLen := int(data[3])
+	payload := make([]byte, len(data)-4)
+	copy(payload, data[4:])
+
+	c.logger.Info("Control data received",
+		"snr", snr, "rssi", rssi, "path_len", pathLen, "payload_len", len(payload))
+
+	c.publishPendingRawToMQTT(float64(snr), float64(rssi))
+
+	if c.onControlData != nil {
+		c.onControlData(&ControlData{SNR: snr, RSSI: rssi, PathLen: pathLen, Payload: payload})
+	}
+}
+
+func (c *MeshCoreClient) OnControlData(f func(*ControlData)) { c.onControlData = f }
 
 func (c *MeshCoreClient) parseOk(data []byte) {
 	c.logger.Debug("Received OK")
@@ -1984,6 +2273,27 @@ func (c *MeshCoreClient) parseLogRxData(data []byte) {
 	if len(c.pendingRaw) > 8 {
 		c.pendingRaw = c.pendingRaw[len(c.pendingRaw)-8:]
 	}
+}
+
+// publishPendingRawToMQTT correlates the oldest non-expired 0x88 raw frame with the
+// current RF event and queues it to MQTT. When no pending frame is available it
+// falls back to fallbackSNR/fallbackRSSI so the event is still recorded.
+func (c *MeshCoreClient) publishPendingRawToMQTT(fallbackSNR, fallbackRSSI float64) {
+	c.mu.RLock()
+	mqttBridge := c.mqtt
+	c.mu.RUnlock()
+	if mqttBridge == nil {
+		return
+	}
+	rawData, snr, rssi := []byte(nil), fallbackSNR, fallbackRSSI
+	for i, p := range c.pendingRaw {
+		if time.Since(p.arrivedAt) <= pendingRawTTL {
+			rawData, snr, rssi = p.rawData, p.snr, p.rssi
+			c.pendingRaw = append(c.pendingRaw[:i], c.pendingRaw[i+1:]...)
+			break
+		}
+	}
+	mqttBridge.QueuePacket(rawData, false, snr, rssi)
 }
 
 // flushStalePendingRaw publishes any raw packets that have waited longer than
@@ -2279,6 +2589,7 @@ func (c *MeshCoreClient) SendMessageWithRetry(contact *Contact, text string, wai
 					c.logger.Error("historylog: failed to log outgoing DM", "error", err)
 				}
 			}
+			c.publishTXDirectMessage(contact, text, timestamp)
 			return nil
 		case <-time.After(timeout):
 			c.confirmMu.Lock()
@@ -2306,6 +2617,9 @@ func (c *MeshCoreClient) SendMessageWithRetry(contact *Contact, text string, wai
 func (c *MeshCoreClient) SendMessage(contact *Contact, text string) error {
 	timestamp := uint32(time.Now().Unix())
 	_, err := c.sendTextMessage(contact.PublicKey, text, 0, timestamp)
+	if err == nil {
+		c.publishTXDirectMessage(contact, text, timestamp)
+	}
 	return err
 }
 
@@ -2339,7 +2653,8 @@ func (c *MeshCoreClient) SendChannelMessageWithRetry(channel *Channel, text stri
 		c.sentConfirmCh = confirmCh
 		c.confirmMu.Unlock()
 
-		if err := c.sendChannelTextMessage(byte(channel.Index), text); err != nil {
+		ts, err := c.sendChannelTextMessage(byte(channel.Index), text)
+		if err != nil {
 			c.confirmMu.Lock()
 			if c.sentConfirmCh == confirmCh {
 				c.sentConfirmCh = nil
@@ -2363,7 +2678,7 @@ func (c *MeshCoreClient) SendChannelMessageWithRetry(channel *Channel, text stri
 			}
 			c.logger.Info("Channel message queued by device",
 				"channel", channel.Name, "attempt", attempt)
-			c.publishTXChannelPacket(channel, text)
+			c.publishTXChannelPacket(channel, text, ts)
 			if c.histLog != nil {
 				if err := c.histLog.LogChannelOutgoing(channel.Name, text, time.Now()); err != nil {
 					c.logger.Error("historylog: failed to log outgoing channel message", "error", err)
@@ -2385,7 +2700,12 @@ func (c *MeshCoreClient) SendChannelMessageWithRetry(channel *Channel, text stri
 
 // SendChannelMessage отправляет сообщение в канал (без ожидания подтверждения).
 func (c *MeshCoreClient) SendChannelMessage(channel *Channel, text string) error {
-	return c.sendChannelTextMessage(byte(channel.Index), text) //todo: обратную совместимость
+	ts, err := c.sendChannelTextMessage(byte(channel.Index), text)
+	if err != nil {
+		return err
+	}
+	c.publishTXChannelPacket(channel, text, ts)
+	return nil
 }
 
 func (c *MeshCoreClient) SetContactPath(contact *Contact, path []byte, pathLen int) error {
@@ -2618,15 +2938,17 @@ func toDeviceInfo(info *SelfInfo) *mqttbridge.DeviceInfo {
 		return nil
 	}
 	return &mqttbridge.DeviceInfo{
-		PublicKey: info.PublicKey,
-		Name:      info.Name,
-		TxPower:   info.TxPower,
-		Latitude:  info.Latitude,
-		Longitude: info.Longitude,
-		FreqHz:    info.FreqHz,
-		BwHz:      info.BwHz,
-		Sf:        info.Sf,
-		Cr:        info.Cr,
+		PublicKey:       info.PublicKey,
+		Name:            info.Name,
+		TxPower:         info.TxPower,
+		Latitude:        info.Latitude,
+		Longitude:       info.Longitude,
+		FreqHz:          info.FreqHz,
+		BwHz:            info.BwHz,
+		Sf:              info.Sf,
+		Cr:              info.Cr,
+		FirmwareVersion: info.FirmwareVersion,
+		Model:           info.Model,
 	}
 }
 
