@@ -459,7 +459,9 @@ func errCodeName(code byte) string {
 
 
 
-func (c *MeshCoreClient) sendChannelTextMessage(channelIndex byte, text string) error {
+// sendChannelTextMessage returns the timestamp embedded in the BLE command so
+// callers can build a matching synthetic RF packet with the same timestamp.
+func (c *MeshCoreClient) sendChannelTextMessage(channelIndex byte, text string) (uint32, error) {
 	// [cmd(1)][txt_type(1)][channel(1)][timestamp(4)][text][0x00]
 	timestamp := uint32(time.Now().Unix())
 	buf := new(bytes.Buffer)
@@ -469,7 +471,7 @@ func (c *MeshCoreClient) sendChannelTextMessage(channelIndex byte, text string) 
 	_ = binary.Write(buf, binary.LittleEndian, timestamp)
 	buf.WriteString(text)
 	buf.WriteByte(0)
-	return c.write(buf.Bytes())
+	return timestamp, c.write(buf.Bytes())
 }
 
 func (c *MeshCoreClient) sendSetDeviceTime(timestamp uint32) error {
@@ -1921,14 +1923,14 @@ func (c *MeshCoreClient) handleContactsFull() {
 // Encryption: AES-128-ECB with the 16-byte channel PSK.
 // MAC:        HMAC-SHA256(psk‖zeros16, ciphertext)[:2].
 // Wire:       [header=0x15][path_len=0x00][channel_hash(1)][mac(2)][ciphertext…]
-func buildGRPTXTPacket(psk []byte, senderName, text string) []byte {
+func buildGRPTXTPacket(psk []byte, senderName, text string, timestamp uint32) []byte {
 	if len(psk) < 16 {
 		return nil
 	}
 	key := psk[:16]
 
 	// Plaintext: timestamp(4 LE) + flags(1) + "sender: text"
-	ts := uint32(time.Now().Unix())
+	ts := timestamp
 	msg := senderName + ": " + text
 	plain := make([]byte, 5+len(msg))
 	binary.LittleEndian.PutUint32(plain[0:4], ts)
@@ -1972,7 +1974,7 @@ func buildGRPTXTPacket(psk []byte, senderName, text string) []byte {
 // publishTXChannelPacket builds a synthetic outgoing GRP_TXT RF packet and
 // queues it for MQTT publishing as a TX packet. This makes our outgoing channel
 // messages visible on analyzer servers exactly like packets from any other device.
-func (c *MeshCoreClient) publishTXChannelPacket(channel *Channel, text string) {
+func (c *MeshCoreClient) publishTXChannelPacket(channel *Channel, text string, timestamp uint32) {
 	c.mu.RLock()
 	mqttBridge := c.mqtt
 	selfInfo := c.selfInfo
@@ -1986,7 +1988,7 @@ func (c *MeshCoreClient) publishTXChannelPacket(channel *Channel, text string) {
 	}
 
 	senderName := selfInfo.Name
-	rawPkt := buildGRPTXTPacket(channel.PSK, senderName, text)
+	rawPkt := buildGRPTXTPacket(channel.PSK, senderName, text, timestamp)
 	if rawPkt == nil {
 		c.logger.Warn("publishTXChannelPacket: failed to build packet")
 		return
@@ -2651,7 +2653,8 @@ func (c *MeshCoreClient) SendChannelMessageWithRetry(channel *Channel, text stri
 		c.sentConfirmCh = confirmCh
 		c.confirmMu.Unlock()
 
-		if err := c.sendChannelTextMessage(byte(channel.Index), text); err != nil {
+		ts, err := c.sendChannelTextMessage(byte(channel.Index), text)
+		if err != nil {
 			c.confirmMu.Lock()
 			if c.sentConfirmCh == confirmCh {
 				c.sentConfirmCh = nil
@@ -2675,7 +2678,7 @@ func (c *MeshCoreClient) SendChannelMessageWithRetry(channel *Channel, text stri
 			}
 			c.logger.Info("Channel message queued by device",
 				"channel", channel.Name, "attempt", attempt)
-			c.publishTXChannelPacket(channel, text)
+			c.publishTXChannelPacket(channel, text, ts)
 			if c.histLog != nil {
 				if err := c.histLog.LogChannelOutgoing(channel.Name, text, time.Now()); err != nil {
 					c.logger.Error("historylog: failed to log outgoing channel message", "error", err)
@@ -2697,10 +2700,11 @@ func (c *MeshCoreClient) SendChannelMessageWithRetry(channel *Channel, text stri
 
 // SendChannelMessage отправляет сообщение в канал (без ожидания подтверждения).
 func (c *MeshCoreClient) SendChannelMessage(channel *Channel, text string) error {
-	if err := c.sendChannelTextMessage(byte(channel.Index), text); err != nil {
+	ts, err := c.sendChannelTextMessage(byte(channel.Index), text)
+	if err != nil {
 		return err
 	}
-	c.publishTXChannelPacket(channel, text)
+	c.publishTXChannelPacket(channel, text, ts)
 	return nil
 }
 
