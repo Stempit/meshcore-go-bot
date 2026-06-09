@@ -146,17 +146,17 @@ func main() {
 	}
 
 	sendGreeting := func(contact *meshcore.Contact) {
-		slog.Info("New node seen, sending greeting", "name", contact.Name, "type", contact.Type)
 		pubCh := client.GetChannels()[0]
 		if pubCh == nil || pubCh.IsEmpty {
 			slog.Warn("Public channel 0 not available, skipping greeting")
 			return
 		}
 		msg := commands.GreetMessage(contact.Name, contact.PublicKey, contact.Type)
-		if err := client.SendChannelMessageWithRetry(pubCh, msg, true, 0, 3*time.Second); err != nil {
-			slog.Error("Failed to send greeting", "channel", pubCh.Name, "error", err)
-		} else {
-			slog.Info("Channel greeting sent", "channel", pubCh.Name)
+		slog.Info("New node seen, queuing greeting", "name", contact.Name, "type", contact.Type)
+		select {
+		case outgoingCh <- outgoingMsg{channel: pubCh, text: msg, ack: true}:
+		default:
+			slog.Warn("Outgoing channel full, dropping greeting", "name", contact.Name)
 		}
 	}
 
