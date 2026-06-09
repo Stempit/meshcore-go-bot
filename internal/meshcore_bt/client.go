@@ -5,6 +5,7 @@ import (
 	"crypto/aes"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
@@ -14,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"filippo.io/edwards25519"
+	"golang.org/x/crypto/curve25519"
 	"meshbot/internal/historylog"
 	"meshbot/internal/mqttbridge"
 
@@ -395,7 +398,6 @@ func (c *MeshCoreClient) sendTextMessage(recipient []byte, text string, attempt 
 	if err := c.write(buf.Bytes()); err != nil {
 		return messageID, err
 	}
-	c.OnPacketSent(buf.Bytes())
 	return messageID, nil
 }
 
@@ -464,11 +466,7 @@ func (c *MeshCoreClient) sendChannelTextMessage(channelIndex byte, text string) 
 	_ = binary.Write(buf, binary.LittleEndian, timestamp)
 	buf.WriteString(text)
 	buf.WriteByte(0)
-	if err := c.write(buf.Bytes()); err != nil {
-		return err
-	}
-	c.OnPacketSent(buf.Bytes())
-	return nil
+	return c.write(buf.Bytes())
 }
 
 func (c *MeshCoreClient) sendSetDeviceTime(timestamp uint32) error {
@@ -1957,7 +1955,131 @@ func (c *MeshCoreClient) publishTXChannelPacket(channel *Channel, text string) {
 	}
 	channelKeyHex := hex.EncodeToString(channel.PSK[:16])
 
-	mqttBridge.QueueChannelPacket(rawPkt, true, 0, 0, channel.Index, channelName, senderName, text, channelKeyHex)
+	mqttBridge.QueueChannelPacket(rawPkt, false, 0, 0, channel.Index, channelName, senderName, text, channelKeyHex)
+}
+
+// buildTXTMsgPacket constructs a synthetic MeshCore TXT_MSG RF packet for an
+// outgoing direct message, mirroring BaseChatMesh::composeMsgPacket →
+// Mesh::createDatagram → Utils::encryptThenMAC from the firmware.
+//
+// Wire format:
+//
+//	[header=0x0A][path_len=0x00][dest_hash(1)][src_hash(1)][mac(2)][aes_ecb_ciphertext…]
+//
+// header = ROUTE_TYPE_DIRECT(0x02) | PAYLOAD_TYPE_TXT_MSG(0x02)<<2 = 0x0A
+// path_len = 0x00 → zero hops (emulated: observer at source)
+//
+// Encryption:
+//
+//	shared_secret = X25519(our_x25519_scalar, ed25519_pub_to_x25519(recipient_pub))
+//	plaintext     = [timestamp(4 LE)][flags=0x00][text…]
+//	ciphertext    = AES-128-ECB(shared_secret[:16], pad(plaintext))
+//	mac           = HMAC-SHA256(shared_secret, ciphertext)[:2]
+//
+// privKeyBytes supports all three MeshCore key export sizes:
+//
+//	32 bytes — standard Ed25519 seed (SHA-512 expanded internally)
+//	64 bytes — orlp pre-expanded [scalar(32)|nonce(32)]
+//	96 bytes — full MeshCore export [prv(64)|pub(32)]
+func buildTXTMsgPacket(privKeyBytes, ourPubKey, recipientPubKey []byte, text string, timestamp uint32) []byte {
+	if len(ourPubKey) < 32 || len(recipientPubKey) < 32 {
+		return nil
+	}
+
+	// Derive X25519 scalar from whichever private key format we have.
+	var x25519Scalar [32]byte
+	switch len(privKeyBytes) {
+	case 32: // seed: expand via SHA-512
+		h := sha512.New()
+		h.Write(privKeyBytes)
+		expanded := h.Sum(nil)
+		copy(x25519Scalar[:], expanded[:32])
+	case 64, 96: // orlp expanded or full MeshCore export: first 32 bytes are the clamped scalar
+		copy(x25519Scalar[:], privKeyBytes[:32])
+	default:
+		return nil
+	}
+
+	// Convert recipient Ed25519 public key (compressed Edwards point) to X25519.
+	p, err := new(edwards25519.Point).SetBytes(recipientPubKey[:32])
+	if err != nil {
+		return nil
+	}
+	recipientX25519 := p.BytesMontgomery()
+
+	sharedSecret, err := curve25519.X25519(x25519Scalar[:], recipientX25519)
+	if err != nil {
+		return nil
+	}
+
+	// Plaintext: [timestamp(4 LE)][flags=0x00][text…]
+	plain := make([]byte, 5+len(text))
+	binary.LittleEndian.PutUint32(plain[0:4], timestamp)
+	plain[4] = 0x00
+	copy(plain[5:], text)
+
+	// Pad to AES block boundary.
+	if pad := aes.BlockSize - (len(plain) % aes.BlockSize); pad != aes.BlockSize {
+		plain = append(plain, make([]byte, pad)...)
+	}
+
+	block, err := aes.NewCipher(sharedSecret[:16])
+	if err != nil {
+		return nil
+	}
+	ct := make([]byte, len(plain))
+	for i := 0; i < len(plain); i += aes.BlockSize {
+		block.Encrypt(ct[i:i+aes.BlockSize], plain[i:i+aes.BlockSize])
+	}
+
+	// MAC = HMAC-SHA256(sharedSecret, ciphertext)[:2]
+	h := hmac.New(sha256.New, sharedSecret)
+	h.Write(ct)
+	mac := h.Sum(nil)[:2]
+
+	// RF packet: [0x0A][0x00][dest_hash][src_hash][mac(2)][ciphertext…]
+	pkt := make([]byte, 0, 2+1+1+2+len(ct))
+	pkt = append(pkt, 0x0A, 0x00)
+	pkt = append(pkt, recipientPubKey[0])
+	pkt = append(pkt, ourPubKey[0])
+	pkt = append(pkt, mac...)
+	pkt = append(pkt, ct...)
+	return pkt
+}
+
+// publishTXDirectMessage builds a synthetic TXT_MSG RF packet for an outgoing DM
+// and queues it to MQTT as an emulated RX packet (zero hop, SNR/RSSI = 0).
+func (c *MeshCoreClient) publishTXDirectMessage(contact *Contact, text string, timestamp uint32) {
+	c.mu.RLock()
+	mqttBridge := c.mqtt
+	selfInfo := c.selfInfo
+	c.mu.RUnlock()
+
+	if mqttBridge == nil || selfInfo == nil {
+		return
+	}
+	if len(contact.PublicKey) < 32 {
+		return
+	}
+
+	cfg := mqttBridge.GetConfig()
+	if cfg.DevicePrivKey == "" {
+		c.logger.Debug("publishTXDirectMessage: DevicePrivKey not configured, skipping DM TX publish")
+		return
+	}
+	privKeyBytes, err := hex.DecodeString(cfg.DevicePrivKey)
+	if err != nil {
+		c.logger.Warn("publishTXDirectMessage: invalid DevicePrivKey", "error", err)
+		return
+	}
+
+	rawPkt := buildTXTMsgPacket(privKeyBytes, selfInfo.PublicKey, contact.PublicKey, text, timestamp)
+	if rawPkt == nil {
+		c.logger.Warn("publishTXDirectMessage: failed to build packet")
+		return
+	}
+
+	mqttBridge.QueuePacket(rawPkt, false, 0, 0)
 }
 
 func (c *MeshCoreClient) parseOk(data []byte) {
@@ -2286,6 +2408,7 @@ func (c *MeshCoreClient) SendMessageWithRetry(contact *Contact, text string, wai
 					c.logger.Error("historylog: failed to log outgoing DM", "error", err)
 				}
 			}
+			c.publishTXDirectMessage(contact, text, timestamp)
 			return nil
 		case <-time.After(timeout):
 			c.confirmMu.Lock()
@@ -2313,6 +2436,9 @@ func (c *MeshCoreClient) SendMessageWithRetry(contact *Contact, text string, wai
 func (c *MeshCoreClient) SendMessage(contact *Contact, text string) error {
 	timestamp := uint32(time.Now().Unix())
 	_, err := c.sendTextMessage(contact.PublicKey, text, 0, timestamp)
+	if err == nil {
+		c.publishTXDirectMessage(contact, text, timestamp)
+	}
 	return err
 }
 
@@ -2392,7 +2518,11 @@ func (c *MeshCoreClient) SendChannelMessageWithRetry(channel *Channel, text stri
 
 // SendChannelMessage отправляет сообщение в канал (без ожидания подтверждения).
 func (c *MeshCoreClient) SendChannelMessage(channel *Channel, text string) error {
-	return c.sendChannelTextMessage(byte(channel.Index), text) //todo: обратную совместимость
+	if err := c.sendChannelTextMessage(byte(channel.Index), text); err != nil {
+		return err
+	}
+	c.publishTXChannelPacket(channel, text)
+	return nil
 }
 
 func (c *MeshCoreClient) SetContactPath(contact *Contact, path []byte, pathLen int) error {
