@@ -92,7 +92,10 @@ type MeshCoreClient struct {
 	onBattery        func(millivolts int, usedKb, totalKb int)
 	onError          func(error)
 	onNoMoreMessages func()
-	onAdvert         func(*Contact)
+	onAdvert       func(*Contact)
+	onTraceData    func(*TraceData)
+	onChannelData  func(*ChannelDataMessage)
+	onControlData  func(*ControlData)
 
 	// serialPort is non-nil when connected via USB/serial instead of BLE.
 	serialPort     serial.Port
@@ -1383,8 +1386,67 @@ func (c *MeshCoreClient) handleFrame(data []byte) {
 		c.handleContactsFull()
 	case pushCodeLogRxData:
 		c.parseLogRxData(data)
+
+	// Priority 1 — full parse + MQTT
+	case pushCodeTraceData:
+		c.parseTraceData(data)
+	case pushCodeControlData:
+		c.parseControlData(data)
+
+	// Priority 2 — full parse + MQTT (response via MSG_WAITING queue)
+	case respCodeChannelDataRecv:
+		c.parseChannelData(data)
+		_ = c.sendSyncNextMessage()
+
+	// Priority 3 — log + MQTT publish
+	case pushCodeRawData:
+		snr := float64(0)
+		rssi := float64(0)
+		if len(data) >= 3 {
+			snr = float64(int8(data[1])) / 4.0
+			rssi = float64(int8(data[2]))
+		}
+		c.logger.Debug("Raw data packet", "snr", snr, "rssi", rssi,
+			"payload", fmt.Sprintf("%x", data[3:]))
+		c.publishPendingRawToMQTT(snr, rssi)
+
+	case pushCodeLoginSuccess:
+		if len(data) >= 7 {
+			c.logger.Info("Login success", "pubkey_prefix", fmt.Sprintf("%x", data[1:7]))
+		}
+		c.publishPendingRawToMQTT(0, 0)
+
+	case pushCodeLoginFail:
+		if len(data) >= 7 {
+			c.logger.Warn("Login failed", "pubkey_prefix", fmt.Sprintf("%x", data[1:7]))
+		}
+		c.publishPendingRawToMQTT(0, 0)
+
+	case pushCodeStatusResponse:
+		c.logger.Debug("Status response", "data", fmt.Sprintf("%x", data))
+		c.publishPendingRawToMQTT(0, 0)
+
+	case pushCodeTelemetryResponse:
+		c.logger.Debug("Telemetry response", "data", fmt.Sprintf("%x", data))
+		c.publishPendingRawToMQTT(0, 0)
+
+	case pushCodeBinaryResponse:
+		c.logger.Debug("Binary response", "data", fmt.Sprintf("%x", data))
+		c.publishPendingRawToMQTT(0, 0)
+
+	case pushCodePathDiscoveryResponse:
+		c.logger.Debug("Path discovery response", "data", fmt.Sprintf("%x", data))
+		c.publishPendingRawToMQTT(0, 0)
+
+	// Priority 4 — constants only; no command sender yet
+	case respCodeCurrTime, respCodeExportContact, respCodePrivateKey,
+		respCodeDisabled, respCodeSignStart, respCodeSignature,
+		respCodeAdvertPath, respCodeTuningParams, respCodeDefaultFloodScope:
+		c.logger.Debug("Unhandled response code (no command sender yet)",
+			"code", fmt.Sprintf("0x%02x", data[0]), "len", len(data))
+
 	default:
-		c.logger.Warn("Unknown frame code", "code", code)
+		c.logger.Warn("Unknown frame code", "code", fmt.Sprintf("0x%02x", code))
 	}
 }
 
@@ -1753,26 +1815,7 @@ func (c *MeshCoreClient) parseAdvert(data []byte) {
 		}
 	}
 
-	c.mu.RLock()
-	mqttBridge := c.mqtt
-	c.mu.RUnlock()
-
-	if mqttBridge != nil {
-		// Correlate with the oldest pending 0x88 raw frame (arrives before 0x80).
-		var rawData []byte
-		var snr, rssi float64
-		for i := 0; i < len(c.pendingRaw); i++ {
-			p := c.pendingRaw[i]
-			if time.Since(p.arrivedAt) <= pendingRawTTL {
-				rawData = p.rawData
-				snr = p.snr
-				rssi = p.rssi
-				c.pendingRaw = append(c.pendingRaw[:i], c.pendingRaw[i+1:]...)
-				break
-			}
-		}
-		mqttBridge.QueuePacket(rawData, false, snr, rssi)
-	}
+	c.publishPendingRawToMQTT(0, 0)
 
 	if c.onAdvert != nil {
 		c.onAdvert(contact)
@@ -2082,6 +2125,121 @@ func (c *MeshCoreClient) publishTXDirectMessage(contact *Contact, text string, t
 	mqttBridge.QueuePacket(rawPkt, false, 0, 0)
 }
 
+// parseTraceData handles PUSH_CODE_TRACE_DATA (0x89).
+// Payload: [code][reserved][path_len][flags][tag(4)][auth(4)][hashes(path_len)][snrs(path_len>>path_sz)][final_snr]
+func (c *MeshCoreClient) parseTraceData(data []byte) {
+	const minLen = 12 // code+reserved+path_len+flags+tag(4)+auth(4)
+	if len(data) < minLen {
+		c.logger.Warn("parseTraceData: too short", "len", len(data))
+		return
+	}
+	pathLen := int(data[2])
+	flags := data[3]
+	pathSz := int(flags & 0x03)
+	tag := binary.LittleEndian.Uint32(data[4:8])
+	auth := binary.LittleEndian.Uint32(data[8:12])
+
+	snrCount := pathLen >> pathSz
+	needed := 12 + pathLen + snrCount + 1
+	if len(data) < needed {
+		c.logger.Warn("parseTraceData: truncated", "len", len(data), "needed", needed)
+		return
+	}
+
+	hashes := make([]byte, pathLen)
+	copy(hashes, data[12:12+pathLen])
+
+	snrs := make([]float32, snrCount)
+	for i := range snrs {
+		snrs[i] = float32(int8(data[12+pathLen+i])) / 4.0
+	}
+	finalSNR := float32(int8(data[12+pathLen+snrCount])) / 4.0
+
+	c.logger.Debug("Trace data received",
+		"tag", fmt.Sprintf("%08x", tag),
+		"hops", pathLen,
+		"final_snr", finalSNR)
+
+	c.publishPendingRawToMQTT(float64(finalSNR), 0)
+
+	if c.onTraceData != nil {
+		c.onTraceData(&TraceData{
+			Tag:        tag,
+			AuthCode:   auth,
+			PathHashes: hashes,
+			PathSNRs:   snrs,
+			FinalSNR:   finalSNR,
+		})
+	}
+}
+
+func (c *MeshCoreClient) OnTraceData(f func(*TraceData)) { c.onTraceData = f }
+
+// parseChannelData handles RESP_CODE_CHANNEL_DATA_RECV (0x1B).
+// Payload: [code][snr*4][reserved][reserved][chan_idx][path_len][dtype_lo][dtype_hi][data_len][data...]
+func (c *MeshCoreClient) parseChannelData(data []byte) {
+	const minLen = 9
+	if len(data) < minLen {
+		c.logger.Warn("parseChannelData: too short", "len", len(data))
+		return
+	}
+	snr := float32(int8(data[1])) / 4.0
+	chanIdx := int(data[4])
+	pathLen := int(data[5])
+	dataType := uint16(data[6]) | uint16(data[7])<<8
+	dataLen := int(data[8])
+	if len(data) < 9+dataLen {
+		c.logger.Warn("parseChannelData: truncated", "len", len(data), "data_len", dataLen)
+		return
+	}
+	payload := make([]byte, dataLen)
+	copy(payload, data[9:9+dataLen])
+
+	c.logger.Debug("Channel data received",
+		"channel", chanIdx,
+		"data_type", fmt.Sprintf("0x%04x", dataType),
+		"data_len", dataLen)
+
+	c.publishPendingRawToMQTT(float64(snr), 0)
+
+	if c.onChannelData != nil {
+		c.onChannelData(&ChannelDataMessage{
+			ChannelIndex: chanIdx,
+			DataType:     dataType,
+			Data:         payload,
+			SNR:          snr,
+			PathLength:   pathLen,
+		})
+	}
+}
+
+func (c *MeshCoreClient) OnChannelData(f func(*ChannelDataMessage)) { c.onChannelData = f }
+
+// parseControlData handles PUSH_CODE_CONTROL_DATA (0x8E, firmware v8+).
+// Payload: [code][snr*4][rssi][path_len][payload...]
+func (c *MeshCoreClient) parseControlData(data []byte) {
+	if len(data) < 4 {
+		c.logger.Warn("parseControlData: too short", "len", len(data))
+		return
+	}
+	snr := float32(int8(data[1])) / 4.0
+	rssi := int8(data[2])
+	pathLen := int(data[3])
+	payload := make([]byte, len(data)-4)
+	copy(payload, data[4:])
+
+	c.logger.Info("Control data received",
+		"snr", snr, "rssi", rssi, "path_len", pathLen, "payload_len", len(payload))
+
+	c.publishPendingRawToMQTT(float64(snr), float64(rssi))
+
+	if c.onControlData != nil {
+		c.onControlData(&ControlData{SNR: snr, RSSI: rssi, PathLen: pathLen, Payload: payload})
+	}
+}
+
+func (c *MeshCoreClient) OnControlData(f func(*ControlData)) { c.onControlData = f }
+
 func (c *MeshCoreClient) parseOk(data []byte) {
 	c.logger.Debug("Received OK")
 	c.notifySent() // для канальных сообщений OK означает принятие команды
@@ -2113,6 +2271,27 @@ func (c *MeshCoreClient) parseLogRxData(data []byte) {
 	if len(c.pendingRaw) > 8 {
 		c.pendingRaw = c.pendingRaw[len(c.pendingRaw)-8:]
 	}
+}
+
+// publishPendingRawToMQTT correlates the oldest non-expired 0x88 raw frame with the
+// current RF event and queues it to MQTT. When no pending frame is available it
+// falls back to fallbackSNR/fallbackRSSI so the event is still recorded.
+func (c *MeshCoreClient) publishPendingRawToMQTT(fallbackSNR, fallbackRSSI float64) {
+	c.mu.RLock()
+	mqttBridge := c.mqtt
+	c.mu.RUnlock()
+	if mqttBridge == nil {
+		return
+	}
+	rawData, snr, rssi := []byte(nil), fallbackSNR, fallbackRSSI
+	for i, p := range c.pendingRaw {
+		if time.Since(p.arrivedAt) <= pendingRawTTL {
+			rawData, snr, rssi = p.rawData, p.snr, p.rssi
+			c.pendingRaw = append(c.pendingRaw[:i], c.pendingRaw[i+1:]...)
+			break
+		}
+	}
+	mqttBridge.QueuePacket(rawData, false, snr, rssi)
 }
 
 // flushStalePendingRaw publishes any raw packets that have waited longer than

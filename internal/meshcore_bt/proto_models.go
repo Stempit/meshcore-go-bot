@@ -105,3 +105,29 @@ type SelfInfo struct {
 	FirmwareVersion string
 	Model           string
 }
+
+// TraceData holds the result of a 0x89 PUSH_CODE_TRACE_DATA frame.
+type TraceData struct {
+	Tag        uint32
+	AuthCode   uint32
+	PathHashes []byte    // one byte per hop, node-ID hash
+	PathSNRs   []float32 // dB, one entry per hop
+	FinalSNR   float32   // SNR on the last leg to this node
+}
+
+// ChannelDataMessage holds binary channel data from a 0x1B frame.
+type ChannelDataMessage struct {
+	ChannelIndex int
+	DataType     uint16
+	Data         []byte
+	SNR          float32
+	PathLength   int // 0xFF = flood-routed
+}
+
+// ControlData holds a raw binary control payload from a 0x8E frame (firmware v8+).
+type ControlData struct {
+	SNR     float32
+	RSSI    int8
+	PathLen int
+	Payload []byte
+}
