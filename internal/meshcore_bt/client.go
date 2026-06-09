@@ -23,6 +23,12 @@ import (
 
 // pendingRawPacket holds a raw RF packet from a 0x88 BLE frame while waiting
 // to be correlated with the corresponding decoded 0x11 channel message frame.
+// ErrDeviceRejected is returned by SendMessageWithRetry when the device
+// explicitly rejects every send attempt (e.g. radio queue full, message too
+// long). Callers should not retry with different confirmation settings because
+// the failure is not about ACK delivery — the message was never queued.
+var ErrDeviceRejected = fmt.Errorf("device rejected send")
+
 type pendingRawPacket struct {
 	rawData   []byte
 	snr       float64
@@ -100,8 +106,8 @@ type MeshCoreClient struct {
 	sendMu sync.Mutex
 
 	// для ожидания подтверждения
-	sentConfirmCh      chan struct{} // для respCodeSent / respCodeOk
-	deliveredConfirmCh chan struct{} // для pushCodeSendConfirmed
+	sentConfirmCh      chan error // для respCodeSent / respCodeOk
+	deliveredConfirmCh chan error // для pushCodeSendConfirmed
 	confirmMu          sync.Mutex
 
 
@@ -398,7 +404,7 @@ func (c *MeshCoreClient) notifySent() {
 	c.confirmMu.Lock()
 	defer c.confirmMu.Unlock()
 	if c.sentConfirmCh != nil {
-		close(c.sentConfirmCh)
+		c.sentConfirmCh <- nil
 		c.sentConfirmCh = nil
 	}
 }
@@ -408,8 +414,41 @@ func (c *MeshCoreClient) notifyDelivered() {
 	c.confirmMu.Lock()
 	defer c.confirmMu.Unlock()
 	if c.deliveredConfirmCh != nil {
-		close(c.deliveredConfirmCh)
+		c.deliveredConfirmCh <- nil
 		c.deliveredConfirmCh = nil
+	}
+}
+
+// notifyErr сигнализирует об ошибке всем ожидающим каналам подтверждения.
+func (c *MeshCoreClient) notifyErr(err error) {
+	c.confirmMu.Lock()
+	defer c.confirmMu.Unlock()
+	if c.sentConfirmCh != nil {
+		c.sentConfirmCh <- err
+		c.sentConfirmCh = nil
+	}
+	if c.deliveredConfirmCh != nil {
+		c.deliveredConfirmCh <- err
+		c.deliveredConfirmCh = nil
+	}
+}
+
+func errCodeName(code byte) string {
+	switch code {
+	case errCodeUnsupportedCmd:
+		return "unsupported_cmd"
+	case errCodeNotFound:
+		return "not_found"
+	case errCodeTableFull:
+		return "table_full"
+	case errCodeBadState:
+		return "bad_state"
+	case errCodeFileIOError:
+		return "file_io_error"
+	case errCodeIllegalArg:
+		return "illegal_arg"
+	default:
+		return "unknown"
 	}
 }
 
@@ -1328,7 +1367,14 @@ func (c *MeshCoreClient) handleFrame(data []byte) {
 	case respCodeOk:
 		c.parseOk(data)
 	case respCodeErr:
-		c.logger.Error("Received error response", "data", fmt.Sprintf("%x", data))
+		var errCode byte
+		var errName string
+		if len(data) >= 2 {
+			errCode = data[1]
+			errName = errCodeName(errCode)
+		}
+		c.logger.Error("Received error response", "err_code", errCode, "err_name", errName)
+		c.notifyErr(fmt.Errorf("device error %d (%s)", errCode, errName))
 	case pushCodeAdvert:
 		c.parseAdvert(data)
 	case pushCodeNewAdvert:
@@ -2184,12 +2230,17 @@ func (c *MeshCoreClient) SendMessageWithRetry(contact *Contact, text string, wai
 
 	for attempt := 0; attempt < totalAttempts; attempt++ {
 		if attempt >= savedPathTries {
-			c.logger.Info("Resetting contact path before retry",
-				"attempt", attempt, "name", contact.Name, "key", fmt.Sprintf("%x", contact.PublicKey[:6]))
-			if err := c.sendResetPath(contact.PublicKey); err != nil {
-				c.logger.Warn("Path reset failed", "error", err)
+			if contact.PathLength != pathLengthFlood {
+				c.logger.Info("Resetting contact path before retry",
+					"attempt", attempt, "name", contact.Name, "key", fmt.Sprintf("%x", contact.PublicKey[:6]))
+				if err := c.sendResetPath(contact.PublicKey); err != nil {
+					c.logger.Warn("Path reset failed", "error", err)
+				}
+				time.Sleep(1 * time.Second)
+			} else {
+				c.logger.Debug("Skipping path reset, contact is flood-routed",
+					"attempt", attempt, "name", contact.Name)
 			}
-			time.Sleep(1 * time.Second)
 		}
 
 		timestamp := uint32(time.Now().Unix())
@@ -2203,7 +2254,7 @@ func (c *MeshCoreClient) SendMessageWithRetry(contact *Contact, text string, wai
 		}
 
 		// Создаём канал для ожидания
-		confirmCh := make(chan struct{})
+		confirmCh := make(chan error, 1)
 		c.confirmMu.Lock()
 		if waitForDelivery {
 			c.deliveredConfirmCh = confirmCh
@@ -2213,7 +2264,16 @@ func (c *MeshCoreClient) SendMessageWithRetry(contact *Contact, text string, wai
 		c.confirmMu.Unlock()
 
 		select {
-		case <-confirmCh:
+		case sendErr := <-confirmCh:
+			if sendErr != nil {
+				c.logger.Warn("Device rejected message, retrying",
+					"error", sendErr, "attempt", attempt, "name", contact.Name)
+				if attempt == totalAttempts-1 {
+					return fmt.Errorf("%w after %d attempts: %v", ErrDeviceRejected, totalAttempts, sendErr)
+				}
+				time.Sleep(2 * time.Second)
+				continue
+			}
 			if c.histLog != nil {
 				if err := c.histLog.LogDMOutgoing(contact.Name, text, time.Now()); err != nil {
 					c.logger.Error("historylog: failed to log outgoing DM", "error", err)
@@ -2274,7 +2334,7 @@ func (c *MeshCoreClient) SendChannelMessageWithRetry(channel *Channel, text stri
 		}
 
 		// Register BEFORE the BLE write so we cannot miss a fast response.
-		confirmCh := make(chan struct{})
+		confirmCh := make(chan error, 1)
 		c.confirmMu.Lock()
 		c.sentConfirmCh = confirmCh
 		c.confirmMu.Unlock()
@@ -2292,7 +2352,15 @@ func (c *MeshCoreClient) SendChannelMessageWithRetry(channel *Channel, text stri
 		}
 
 		select {
-		case <-confirmCh:
+		case sendErr := <-confirmCh:
+			if sendErr != nil {
+				c.logger.Warn("Device rejected channel message, retrying",
+					"error", sendErr, "channel", channel.Name, "attempt", attempt)
+				if attempt == maxRetries {
+					return fmt.Errorf("channel message rejected after %d attempts: %w", maxRetries+1, sendErr)
+				}
+				continue
+			}
 			c.logger.Info("Channel message queued by device",
 				"channel", channel.Name, "attempt", attempt)
 			c.publishTXChannelPacket(channel, text)
