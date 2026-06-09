@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"meshbot/internal/config"
 	"strings"
 )
 
@@ -10,7 +11,17 @@ import (
 // senderKey is a unique session identifier (hex pubkey for DMs, sender name for channels).
 // senderName is the human-readable author name (may be empty).
 func GenerateReplies(text, channelName string, pingMeta *PingMeta, senderKey, senderName string) ([]string, error) {
-	lower := strings.ToLower(strings.TrimSpace(text))
+	trimmed := strings.TrimSpace(text)
+	lower := strings.ToLower(trimmed)
+
+	// @[BotName] mention: route to picoclaw.
+	if clawCfg := config.Get().Claw; clawCfg.Enabled && clawCfg.BotName != "" {
+		mentionPrefix := "@[" + clawCfg.BotName + "]"
+		if strings.HasPrefix(lower, strings.ToLower(mentionPrefix)) {
+			prompt := strings.TrimSpace(trimmed[len(mentionPrefix):])
+			return ProcessClawCommand(".claw "+prompt, senderKey, channelName)
+		}
+	}
 
 	// BBS mode: intercept all input for users who are in BBS mode.
 	if IsBBSMode(senderKey) {
@@ -62,6 +73,9 @@ func GenerateReplies(text, channelName string, pingMeta *PingMeta, senderKey, se
 	case lower == ".help", strings.HasPrefix(lower, ".help "):
 		reply, _ := ProcessHelpCommand(text)
 		return []string{reply}, nil
+
+	case strings.HasPrefix(lower, ".claw"):
+		return ProcessClawCommand(text, senderKey, channelName)
 
 	default:
 		return nil, nil

@@ -100,6 +100,14 @@ Trace:
   lat: 0
   lon: 0
 
+Claw:
+  enabled: false
+  url: "ws://localhost:18790/pico/ws"  # picoclaw gateway directly (NOT port 18800 dashboard)
+  token: "your-pico-token"            # from picoclaw dashboard → Pico channel token
+  timeout_sec: 180
+  bot_name: "Yorick 💀"               # mesh display name; @[bot_name] messages are routed to picoclaw
+  split: true                         # split long responses into numbered mesh messages [1/N] instead of LLM shrink
+
 Security:
   channels:
     whitelist: []          # empty = allow all (unless blacklisted)

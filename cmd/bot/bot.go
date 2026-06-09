@@ -490,7 +490,7 @@ func processChannelMessage(m *meshcore.ChannelMessage, client *meshcore.MeshCore
 
 	for i, reply := range replies {
 		text := reply
-		if len(replies) == 1 {
+		if i == 0 {
 			text = fmt.Sprintf("@[%s] %s", m.SenderName, reply)
 		}
 		outgoingCh <- outgoingMsg{channel: channel, text: text, ack: i == 0}

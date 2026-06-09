@@ -74,8 +74,12 @@ type Config struct {
 		ShrinkTemperature float64 `yaml:"shrink_temperature"`
 		ShrinkMaxRetries  int     `yaml:"shrink_max_retries"`
 	} `yaml:"LLM"`
-	// Database struct {
-	// 	Name            string `yaml:"name"`
-	// 	ConnMaxLifetime int    `yaml:"conn_max_lifetime"`
-	// } `yaml:"database"`
+	Claw struct {
+		Enabled    bool   `yaml:"enabled"`
+		URL        string `yaml:"url"`         // ws://host:18790/pico/ws (gateway port, not dashboard)
+		Token      string `yaml:"token"`       // from picoclaw dashboard → Pico token
+		TimeoutSec int    `yaml:"timeout_sec"` // default 180
+		BotName    string `yaml:"bot_name"`    // mesh display name of the bot, e.g. "Yorick 💀"
+		Split      bool   `yaml:"split"`       // split long responses into multiple mesh messages instead of LLM shrink
+	} `yaml:"Claw"`
 }
