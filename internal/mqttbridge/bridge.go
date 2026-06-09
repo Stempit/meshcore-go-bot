@@ -793,9 +793,9 @@ func (b *MQTTBridge) publishPacket(packet *QueuedPacket) {
 	}
 
 	originID := hex.EncodeToString(deviceInfo.PublicKey)
-	origin := b.config.Origin
+	origin := deviceInfo.Name
 	if origin == "" {
-		origin = deviceInfo.Name
+		origin = "Unknown"
 	}
 
 	// Build packet message
@@ -1146,9 +1146,9 @@ func (b *MQTTBridge) publishStatus() {
 	}
 
 	originID := hex.EncodeToString(deviceInfo.PublicKey)
-	origin := b.config.Origin
+	origin := deviceInfo.Name
 	if origin == "" {
-		origin = deviceInfo.Name
+		origin = "Unknown"
 	}
 
 	// Build status message with all available device parameters.

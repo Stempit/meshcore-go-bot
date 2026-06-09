@@ -63,8 +63,7 @@ type MQTTConfig struct {
 	Password string `yaml:"password"` // MQTT password
 
 	// Device identity
-	Origin string `yaml:"origin"` // Device origin name (e.g., "MeshCore-Repeater-01")
-	IATA   string `yaml:"iata"`   // IATA airport code (e.g., "SEA", "LAX")
+	IATA string `yaml:"iata"` // IATA airport code (e.g., "SEA", "LAX")
 
 	// Message settings
 	StatusEnabled  bool `yaml:"status_enabled"`  // Enable status messages
