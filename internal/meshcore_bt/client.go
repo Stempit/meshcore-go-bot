@@ -1524,6 +1524,13 @@ func (c *MeshCoreClient) parseDeviceInfo(data []byte) {
 				"client_repeat_enabled", data[80] != 0,
 				"path_hash_mode", int(data[81]))
 		}
+
+		c.mu.Lock()
+		if c.selfInfo != nil {
+			c.selfInfo.FirmwareVersion = version
+			c.selfInfo.Model = model
+		}
+		c.mu.Unlock()
 	}
 }
 
@@ -2618,15 +2625,17 @@ func toDeviceInfo(info *SelfInfo) *mqttbridge.DeviceInfo {
 		return nil
 	}
 	return &mqttbridge.DeviceInfo{
-		PublicKey: info.PublicKey,
-		Name:      info.Name,
-		TxPower:   info.TxPower,
-		Latitude:  info.Latitude,
-		Longitude: info.Longitude,
-		FreqHz:    info.FreqHz,
-		BwHz:      info.BwHz,
-		Sf:        info.Sf,
-		Cr:        info.Cr,
+		PublicKey:       info.PublicKey,
+		Name:            info.Name,
+		TxPower:         info.TxPower,
+		Latitude:        info.Latitude,
+		Longitude:       info.Longitude,
+		FreqHz:          info.FreqHz,
+		BwHz:            info.BwHz,
+		Sf:              info.Sf,
+		Cr:              info.Cr,
+		FirmwareVersion: info.FirmwareVersion,
+		Model:           info.Model,
 	}
 }
 

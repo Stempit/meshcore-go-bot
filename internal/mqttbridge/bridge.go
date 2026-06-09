@@ -3,6 +3,7 @@ package mqttbridge
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"crypto/sha512"
 	"crypto/tls"
 	"crypto/x509"
@@ -562,11 +563,6 @@ func (b *MQTTBridge) handleConnectionLost(brokerID string, err error) {
 	}
 }
 
-// handleDisconnecting handles disconnection
-func (b *MQTTBridge) handleDisconnecting(brokerID string) {
-	b.logger.Info("MQTT disconnecting", "broker", brokerID)
-}
-
 // canReconnect checks if enough time has passed to attempt reconnection
 func (b *MQTTBridge) canReconnect(brokerID string) bool {
 	delay := b.reconnectDelay[brokerID]
@@ -660,8 +656,7 @@ func (b *MQTTBridge) QueuePacket(rawData []byte, isTX bool, snr, rssi float64) {
 		b.logger.Warn("Packet queue full, dropping oldest")
 	}
 
-	// Calculate packet hash for deduplication
-	hash := fmt.Sprintf("%x", hashData(rawData))
+	hash := calculatePacketHash(rawData)
 
 	packet := QueuedPacket{
 		RawData:   rawData,
@@ -689,7 +684,7 @@ func (b *MQTTBridge) QueueChannelPacket(rawData []byte, isTX bool, snr, rssi flo
 		b.logger.Warn("Packet queue full, dropping oldest")
 	}
 
-	hash := fmt.Sprintf("%x", hashData(rawData))
+	hash := calculatePacketHash(rawData)
 	packet := QueuedPacket{
 		RawData:          rawData,
 		Timestamp:        time.Now(),
@@ -708,13 +703,60 @@ func (b *MQTTBridge) QueueChannelPacket(rawData []byte, isTX bool, snr, rssi flo
 	b.logger.Debug("Channel packet queued", "channel", channelIndex, "sender", senderName, "isTX", isTX, "queue_len", len(b.queue))
 }
 
-// hashData computes a simple hash of data for deduplication
-func hashData(data []byte) uint64 {
-	var hash uint64 = 5381
-	for _, b := range data {
-		hash = ((hash << 5) + hash) + uint64(b)
+// calculatePacketHash mirrors MeshCore's Packet::calculatePacketHash:
+// SHA-256 over [payload_type(1) | path_len(1, TRACE only) | payload], truncated to 8 bytes.
+// PAYLOAD_TYPE_TRACE = 9 (from Dispatcher.cpp / MQTT spec).
+func calculatePacketHash(data []byte) string {
+	payloadType := uint8(getPayloadType(data))
+	payload := extractPayload(data)
+
+	h := sha256.New()
+	h.Write([]byte{payloadType})
+	if payloadType == 9 { // PAYLOAD_TYPE_TRACE
+		h.Write([]byte{getPathLenByte(data)})
 	}
-	return hash
+	h.Write(payload)
+
+	sum := h.Sum(nil)
+	return hex.EncodeToString(sum[:8]) // MAX_HASH_SIZE = 8
+}
+
+// extractPayload returns the payload slice from a raw packet.
+func extractPayload(data []byte) []byte {
+	if len(data) < 2 {
+		return nil
+	}
+	routeType := data[0] & 0x03
+	headerLen := 2
+	if routeType == 0x00 || routeType == 0x03 { // TRANSPORT routes: +4 transport_codes
+		headerLen = 6
+	}
+	if len(data) < headerLen {
+		return nil
+	}
+	pathLenByte := data[headerLen-1]
+	hashCount := int(pathLenByte & 0x3F)
+	hashSize := int((pathLenByte>>6)&0x03) + 1
+	offset := headerLen + hashCount*hashSize
+	if offset >= len(data) {
+		return nil
+	}
+	return data[offset:]
+}
+
+// getPathLenByte returns the path_len byte from a raw packet.
+func getPathLenByte(data []byte) uint8 {
+	if len(data) < 2 {
+		return 0
+	}
+	routeType := data[0] & 0x03
+	if routeType == 0x00 || routeType == 0x03 {
+		if len(data) < 6 {
+			return 0
+		}
+		return data[5]
+	}
+	return data[1]
 }
 
 // processQueue processes queued packets for publishing
@@ -769,10 +811,13 @@ func (b *MQTTBridge) publishPacket(packet *QueuedPacket) {
 		PacketType: fmt.Sprintf("%d", getPayloadType(packet.RawData)),
 		Route:      getRouteType(packet.RawData),
 		PayloadLen: fmt.Sprintf("%d", getPayloadLen(packet.RawData)),
-		Raw:        hex.EncodeToString(packet.RawData),
-		SNR:        fmt.Sprintf("%.1f", packet.SNR),
-		RSSI:       fmt.Sprintf("%.1f", packet.RSSI),
-		Hash:       packet.Hash,
+		Raw:  hex.EncodeToString(packet.RawData),
+		Hash: packet.Hash,
+	}
+
+	if !packet.IsTX {
+		mqttPacket.SNR = fmt.Sprintf("%.1f", packet.SNR)
+		mqttPacket.RSSI = fmt.Sprintf("%.1f", packet.RSSI)
 	}
 
 	// Attach decoded channel message fields when available so the web UI can
@@ -1107,15 +1152,23 @@ func (b *MQTTBridge) publishStatus() {
 	}
 
 	// Build status message with all available device parameters.
+	model := deviceInfo.Model
+	if model == "" {
+		model = "MeshCore"
+	}
+	fwVersion := deviceInfo.FirmwareVersion
+	if fwVersion == "" {
+		fwVersion = "unknown"
+	}
 	mqttStatus := &MQTTStatus{
 		Status:          "online",
 		Timestamp:       time.Now().UTC().Format("2006-01-02T15:04:05.000000"),
 		Origin:          origin,
 		OriginID:        originID,
-		Model:           "MeshCore",
-		FirmwareVersion: "v1.0.0",
+		Model:           model,
+		FirmwareVersion: fwVersion,
 		Radio:           buildRadioString(deviceInfo),
-		ClientVersion:   "meshcore/v1.0.0",
+		ClientVersion:   "meshcore/" + fwVersion,
 	}
 
 	// GPS coordinates — include only when the device has a valid fix.
@@ -1411,13 +1464,20 @@ func (b *MQTTBridge) createSignedJWT(publicKey []byte, privateKeyHex, email, ser
 	headerB64 := base64.RawURLEncoding.EncodeToString(headerJSON)
 
 	hexPubKey := strings.ToUpper(hex.EncodeToString(publicKey))
-	payloadJSON, _ := json.Marshal(map[string]interface{}{
+	claims := map[string]interface{}{
 		"aud":       serverName,
 		"email":     email,
 		"exp":       exp,
 		"iat":       iat,
 		"publicKey": hexPubKey,
-	})
+	}
+	b.mu.RLock()
+	ownerPubKey := b.config.OwnerPublicKey
+	b.mu.RUnlock()
+	if ownerPubKey != "" {
+		claims["owner"] = strings.ToUpper(ownerPubKey)
+	}
+	payloadJSON, _ := json.Marshal(claims)
 	payloadB64 := base64.RawURLEncoding.EncodeToString(payloadJSON)
 
 	signingInput := []byte(headerB64 + "." + payloadB64)
@@ -1613,65 +1673,6 @@ func (b *MQTTBridge) GetConfig() *MQTTConfig {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	return b.config
-}
-
-// ============================================================================
-// WebSocket Support
-// ============================================================================
-
-// buildWebSocketURL constructs a WebSocket URL for MQTT over WebSocket
-func (b *MQTTBridge) buildWebSocketURL(host string, port int, useTLS bool) string {
-	scheme := "ws"
-	if useTLS {
-		scheme = "wss"
-	}
-	return fmt.Sprintf("%s://%s:%d/mqtt", scheme, host, port)
-}
-
-// createWebSocketClient creates an MQTT client using WebSocket transport
-func (b *MQTTBridge) createWebSocketClient(clientID, brokerURL, username, password string,
-	caCert string) (mqtt.Client, error) {
-
-	opts := mqtt.NewClientOptions()
-	opts.AddBroker(brokerURL)
-	opts.SetClientID(fmt.Sprintf("meshcore-ws-%s-%d", clientID, time.Now().UnixNano()))
-	opts.SetUsername(username)
-	opts.SetPassword(password)
-	opts.SetKeepAlive(defaultKeepAlive * time.Second)
-	opts.SetConnectTimeout(defaultConnectTimeout * time.Second)
-	opts.SetAutoReconnect(true)
-
-	// Configure WebSocket transport
-	opts.SetHTTPHeaders(http.Header{
-		"Sec-WebSocket-Protocol": []string{"mqtt"},
-	})
-
-	// Configure TLS if needed
-	if caCert != "" {
-		tlsConfig := &tls.Config{}
-		certPool := x509.NewCertPool()
-		if certPool.AppendCertsFromPEM([]byte(caCert)) {
-			tlsConfig.RootCAs = certPool
-		}
-		opts.SetTLSConfig(tlsConfig)
-	}
-
-	// Connection handlers
-	opts.OnConnect = func(c mqtt.Client) {
-		b.handleConnect(clientID)
-	}
-	opts.OnConnectionLost = func(c mqtt.Client, err error) {
-		b.handleConnectionLost(clientID, err)
-	}
-
-	client := mqtt.NewClient(opts)
-	token := client.Connect()
-
-	if token.Wait() && token.Error() != nil {
-		return nil, token.Error()
-	}
-
-	return client, nil
 }
 
 // ============================================================================

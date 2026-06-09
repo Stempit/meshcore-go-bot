@@ -102,4 +102,6 @@ type SelfInfo struct {
 	Sf              int
 	Cr              int
 	ClientRepeat    bool
+	FirmwareVersion string
+	Model           string
 }
