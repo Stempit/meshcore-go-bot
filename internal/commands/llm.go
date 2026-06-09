@@ -1,7 +1,6 @@
 package commands
 
 import (
-	"fmt"
 	"log/slog"
 	"meshbot/internal/config"
 	"meshbot/internal/llm"
@@ -47,7 +46,6 @@ func ShrinkText(text string) (string, error) {
 		err      error
 	)
 	for i := 1; i <= cfg.LLM.ShrinkMaxRetries; i++ {
-		fmt.Println("shrink")
 		switch cfg.LLM.Type {
 		case "openrouter":
 			response, err = llm.GetRemoteLLMResponse(cfg.LLM.Model, cfg.LLM.ShrinkPrompt, cfg.LLM.ShrinkTemperature, response)

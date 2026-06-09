@@ -12,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"meshbot/internal/commands"
 	"meshbot/internal/config"
 )
 
@@ -56,7 +55,7 @@ func main() {
 		wg.Add(1)
 		go func(feedCfg config.RSSFeedConfig, interval time.Duration) {
 			defer wg.Done()
-			runFeedLoop(feedCfg, interval, rssCfg.LongTitle, seenDir)
+			runFeedLoop(feedCfg, interval, seenDir)
 		}(f, dur)
 	}
 
@@ -68,7 +67,6 @@ func main() {
 type feedState struct {
 	name       string
 	url        string
-	longTitle  string
 	newsFile   string
 	seenFile   string
 	seen       map[string]struct{}
@@ -77,11 +75,10 @@ type feedState struct {
 	seenExists bool
 }
 
-func runFeedLoop(f config.RSSFeedConfig, interval time.Duration, longTitle, seenDir string) {
+func runFeedLoop(f config.RSSFeedConfig, interval time.Duration, seenDir string) {
 	state := &feedState{
 		name:      f.Name,
 		url:       f.URL,
-		longTitle: longTitle,
 		newsFile:  fmt.Sprintf("log/news/%s.txt", f.Name),
 		seenFile:  fmt.Sprintf("%s/%s.seen", seenDir, f.Name),
 		seen:      make(map[string]struct{}),
@@ -151,18 +148,11 @@ func (s *feedState) poll() {
 			continue
 		}
 
-		line, skip := s.processTitle(title)
-		if skip {
-			slog.Info("News: skipping long title", "feed", s.name, "title", title)
-			s.markSeen(id)
-			continue
-		}
-
-		if err := s.appendNews(line); err != nil {
+		if err := s.appendNews(title); err != nil {
 			slog.Warn("News: failed to save item", "feed", s.name, "error", err)
 			continue
 		}
-		slog.Info("News: saved", "feed", s.name, "line", line)
+		slog.Info("News: saved", "feed", s.name, "title", title)
 		s.markSeen(id)
 	}
 
@@ -171,24 +161,6 @@ func (s *feedState) poll() {
 		if skipSaving {
 			slog.Info("News: initialized feed (existing items skipped)", "feed", s.name, "count", len(items))
 		}
-	}
-}
-
-func (s *feedState) processTitle(title string) (string, bool) {
-	const maxLen = 200
-	if len(title) <= maxLen {
-		return title, false
-	}
-	switch s.longTitle {
-	case "shrink":
-		shrunk, err := commands.ShrinkText(title)
-		if err != nil {
-			slog.Warn("News: shrink error", "feed", s.name, "error", err)
-			return "", true
-		}
-		return shrunk, false
-	default: // "skip"
-		return "", true
 	}
 }
 
