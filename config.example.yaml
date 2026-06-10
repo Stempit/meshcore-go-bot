@@ -114,3 +114,10 @@ Security:
   direct:
     whitelist: ["deadbeef1234..."]  # non-empty = only these keys
     blacklist: []
+
+Stats:
+  # URL for the Let's Mesh edge-stats API (or a local snapshot for testing).
+  # HTTP/HTTPS example: https://api-eu-v1.letsmesh.net/stats/edges?token=YOUR_TOKEN
+  # Local file example: file:///home/pi/meshbot/stats.json
+  url: ""
+  cache_ttl_sec: 300  # refresh interval; 0 = use default 5 min

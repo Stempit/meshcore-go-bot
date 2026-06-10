@@ -55,6 +55,11 @@ type WeatherConfig struct {
 	Units           string `yaml:"units"` // "metric" or "imperial"
 }
 
+type StatsConfig struct {
+	URL         string `yaml:"url"`          // HTTP(S) URL or file:///path/to/stats.json
+	CacheTTLSec int    `yaml:"cache_ttl_sec"` // default 300
+}
+
 type Config struct {
 	Connection ConnectionConfig        `yaml:"Connection"`
 	Proxy      ProxyConfig             `yaml:"Proxy"`
@@ -64,6 +69,7 @@ type Config struct {
 	Security SecurityConfig          `yaml:"Security"`
 	RSS      RSSConfig               `yaml:"RSS"`
 	Weather  WeatherConfig           `yaml:"Weather"`
+	Stats    StatsConfig             `yaml:"Stats"`
 	LLM      struct {
 		Enabled           bool    `yaml:"enabled"`
 		Type              string  `yaml:"type"`
