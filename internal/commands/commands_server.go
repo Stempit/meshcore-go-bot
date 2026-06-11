@@ -77,6 +77,9 @@ func GenerateReplies(text, channelName string, pingMeta *PingMeta, senderKey, se
 	case strings.HasPrefix(lower, ".claw"):
 		return ProcessClawCommand(text, senderKey, channelName)
 
+	case lower == ".path", strings.HasPrefix(lower, ".path "):
+		return ProcessPathCommand(trimmed)
+
 	default:
 		return nil, nil
 	}

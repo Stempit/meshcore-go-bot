@@ -2,7 +2,7 @@ package commands
 
 import "strings"
 
-const helpList = ".ping .trace .last .llm .news .w .2ch .claw\n\".help <cmd>\" for details"
+const helpList = ".ping .trace .last .llm .news .w .path .2ch .claw\n\".help <cmd>\" for details"
 
 const pingHelp = ".ping — random pong\nalso: ping, пинг"
 const traceHelp = ".trace — hop count & distance from last ping"
@@ -12,6 +12,7 @@ const newsHelp = ".news — list feeds\n.news <feed> [n] [offset] — recent ite
 const weatherHelp = ".w [tomorrow] [city]\ncurrent or next-day weather"
 const BBSHelp = ".2ch - start BBS/forum mode"
 const clawHelp = ".claw <вопрос>\nспросить picoclaw AI агента"
+const pathHelp = ".path — network summary\n.path <from> to <to> — best path\nex: .path TIM to CHEP"
 
 func ProcessHelpCommand(text string) (string, error) {
 	arg := strings.TrimSpace(strings.TrimPrefix(strings.ToLower(text), ".help"))
@@ -32,6 +33,8 @@ func ProcessHelpCommand(text string) (string, error) {
 		return BBSHelp, nil
 	case "claw":
 		return clawHelp, nil
+	case "path":
+		return pathHelp, nil
 	default:
 		return helpList, nil
 	}

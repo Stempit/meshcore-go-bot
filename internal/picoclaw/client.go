@@ -81,7 +81,7 @@ func Ask(ctx context.Context, wsURL, token, sessionID, text string) ([]string, e
 	// afterInvisible extends the deadline when a tool call / thought message arrives —
 	// the agent is still working and the final response will come later.
 	afterInvisible := func() {
-		conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+		conn.SetReadDeadline(time.Now().Add(300 * time.Second))
 	}
 
 	for {
