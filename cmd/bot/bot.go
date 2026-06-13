@@ -221,13 +221,7 @@ func main() {
 			slog.Error("Failed to start Telegram bridge", "error", err)
 		} else {
 			tgb.OnMessage(func(meshChannelName, senderName, text string, shrink bool) {
-				var tgChannel *meshcore.Channel
-				for _, ch := range client.GetChannels() {
-					if ch.Name == meshChannelName {
-						tgChannel = ch
-						break
-					}
-				}
+				tgChannel := client.GetChannelByName(meshChannelName)
 				if tgChannel == nil {
 					slog.Warn("Telegram bridge: meshcore channel not found", "name", meshChannelName)
 					return
@@ -419,13 +413,7 @@ func processDM(m *meshcore.Message, client *meshcore.MeshCoreClient, outgoingCh 
 
 	// Look up the full contact record for the sender.
 	shortKey := fmt.Sprintf("%x", m.SenderKey[:6])
-	var contact *meshcore.Contact
-	for _, c := range client.GetContacts() {
-		if fmt.Sprintf("%x", c.PublicKey[:6]) == shortKey {
-			contact = c
-			break
-		}
-	}
+	contact := client.FindContactByKeyPrefix(m.SenderKey[:6])
 	if contact == nil {
 		contact = &meshcore.Contact{
 			PublicKey: m.SenderKey,
@@ -498,20 +486,17 @@ func processChannelMessage(m *meshcore.ChannelMessage, client *meshcore.MeshCore
 	// Resolve sender coordinates and public key for commands.
 	var senderLat, senderLon *float64
 	var senderKeyHexCh string
-	for _, c := range client.GetContacts() {
-		if c.Name == m.SenderName {
-			senderLat = c.Latitude
-			senderLon = c.Longitude
-			senderKeyHexCh = fmt.Sprintf("%x", c.PublicKey)
-			break
-		}
+	if c := client.FindContactByName(m.SenderName); c != nil {
+		senderLat = c.Latitude
+		senderLon = c.Longitude
+		senderKeyHexCh = fmt.Sprintf("%x", c.PublicKey)
 	}
 
 	// forwardBotReply sends a bot reply to Telegram only when this mesh channel
 	// has a matching entry in the Targets config (Forward filters internally).
 	botName := "Bot"
-	if info := client.GetSelfInfo(); info != nil && info.Name != "" {
-		botName = info.Name
+	if name := client.SelfName(); name != "" {
+		botName = name
 	}
 	forwardBotReply := func(text string) {
 		if tgb != nil && tgb.HasTarget(channel.Name) {

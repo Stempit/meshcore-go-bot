@@ -1,6 +1,7 @@
 package meshcore_bt
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 	"time"
@@ -35,6 +36,55 @@ func (c *MeshCoreClient) GetChannels() map[int]*Channel {
 		res[k] = v
 	}
 	return res
+}
+
+// FindContactByKeyPrefix returns the contact whose public key starts with the
+// given prefix, or nil if none matches. Used to resolve a message sender from
+// the short (6-byte) key carried in incoming messages.
+func (c *MeshCoreClient) FindContactByKeyPrefix(prefix []byte) *Contact {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for _, ct := range c.contacts {
+		if len(ct.PublicKey) >= len(prefix) && bytes.Equal(ct.PublicKey[:len(prefix)], prefix) {
+			return ct
+		}
+	}
+	return nil
+}
+
+// FindContactByName returns the first contact with the given name, or nil.
+func (c *MeshCoreClient) FindContactByName(name string) *Contact {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for _, ct := range c.contacts {
+		if ct.Name == name {
+			return ct
+		}
+	}
+	return nil
+}
+
+// GetChannelByName returns the channel with the given name, or nil. Empty
+// channel slots are skipped.
+func (c *MeshCoreClient) GetChannelByName(name string) *Channel {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for _, ch := range c.channels {
+		if !ch.IsEmpty && ch.Name == name {
+			return ch
+		}
+	}
+	return nil
+}
+
+// SelfName returns the device's own advertised name, or "" if unknown.
+func (c *MeshCoreClient) SelfName() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.selfInfo != nil {
+		return c.selfInfo.Name
+	}
+	return ""
 }
 
 func (c *MeshCoreClient) SyncTime() error {
