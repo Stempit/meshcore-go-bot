@@ -1002,7 +1002,7 @@ func (c *MeshCoreClient) parseChannelMessageV3(data []byte) {
 	c.mu.Unlock()
 
 	c.logger.Info("Channel message V3 received",
-		"channel", channelIndex, "sender", fmt.Sprintf("%q", senderName), "text", fmt.Sprintf("%q", text))
+		"channel", channelIndex, "sender", senderName, "text", text)
 
 
 	if c.onChannelMessage != nil {
