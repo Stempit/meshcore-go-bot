@@ -17,6 +17,7 @@ import (
 	"meshbot/internal/config"
 	"meshbot/internal/historylog"
 	meshcore "meshbot/internal/meshcore_bt"
+	"meshbot/internal/mqttbridge"
 	"meshbot/internal/proxy"
 	"meshbot/internal/tgbridge"
 )
@@ -82,10 +83,13 @@ func main() {
 	// log history in client
 	client.SetHistoryLogger(histlog)
 
-	// mqtt init
+	// mqtt init — optional. The bridge is constructed here, in the composition
+	// root, and attached to the client as a packet publisher; the meshcore_bt
+	// driver itself has no dependency on the MQTT package.
 	mqttCfg := config.Get().MQTT
-	client.SetMQTTConfig(&mqttCfg)
-	defer client.StopMQTT()
+	if bridge := startMQTTBridge(client, &mqttCfg); bridge != nil {
+		defer bridge.Stop()
+	}
 	client.RequestAllStats()
 
 	// ─── Message channels ─────────────────────────────────────────────────────
@@ -375,6 +379,78 @@ drainLoop:
 	slog.Info("Bot running. Press Ctrl+C to exit.")
 	<-ctx.Done()
 	slog.Info("Shutting down...")
+}
+
+// startMQTTBridge constructs the MQTT bridge, wires device-info/stats forwarding,
+// and attaches it to the client as a packet publisher. MQTT is optional: if the
+// bridge fails to start, it logs and returns nil so startup continues without it.
+func startMQTTBridge(client *meshcore.MeshCoreClient, cfg *mqttbridge.MQTTConfig) *mqttbridge.MQTTBridge {
+	bridge := mqttbridge.NewMQTTBridge(cfg)
+	bridge.SetLogger(slog.Default())
+	bridge.SetCallbacks(mqttbridge.MQTTCallbacks{
+		OnConnected:    func(broker string) { slog.Info("MQTT connected", "broker", broker) },
+		OnDisconnected: func(broker string) { slog.Info("MQTT disconnected", "broker", broker) },
+	})
+	if err := bridge.Start(); err != nil {
+		slog.Error("Failed to start MQTT bridge", "error", err)
+		return nil
+	}
+
+	// Seed current device info, then keep the bridge updated as self-info and
+	// stats arrive from the device.
+	if info := client.GetSelfInfo(); info != nil {
+		bridge.SetDeviceInfo(toDeviceInfo(info))
+	}
+	client.OnSelfInfo(func(info *meshcore.SelfInfo) { bridge.SetDeviceInfo(toDeviceInfo(info)) })
+	client.OnStats(func(stats *meshcore.CompanionRadioStats) { bridge.SetDeviceStats(toDeviceStats(stats)) })
+
+	client.SetPacketPublisher(bridge)
+	return bridge
+}
+
+// toDeviceInfo converts meshcore SelfInfo to the MQTT bridge's DeviceInfo.
+func toDeviceInfo(info *meshcore.SelfInfo) *mqttbridge.DeviceInfo {
+	if info == nil {
+		return nil
+	}
+	return &mqttbridge.DeviceInfo{
+		PublicKey:       info.PublicKey,
+		Name:            info.Name,
+		TxPower:         info.TxPower,
+		Latitude:        info.Latitude,
+		Longitude:       info.Longitude,
+		FreqHz:          info.FreqHz,
+		BwHz:            info.BwHz,
+		Sf:              info.Sf,
+		Cr:              info.Cr,
+		FirmwareVersion: info.FirmwareVersion,
+		Model:           info.Model,
+	}
+}
+
+// toDeviceStats converts meshcore CompanionRadioStats to the bridge's DeviceStats.
+func toDeviceStats(stats *meshcore.CompanionRadioStats) *mqttbridge.DeviceStats {
+	if stats == nil {
+		return nil
+	}
+	return &mqttbridge.DeviceStats{
+		BatteryMv:         stats.BatteryMv,
+		UptimeSecs:        stats.UptimeSecs,
+		Errors:            stats.Errors,
+		QueueLen:          stats.QueueLen,
+		TxAirSecs:         stats.TxAirSecs,
+		RxAirSecs:         stats.RxAirSecs,
+		NoiseFloorDbm:     stats.NoiseFloorDbm,
+		LastRssi:          stats.LastRssi,
+		LastSnrDb:         stats.LastSnrDb,
+		PacketsRecv:       stats.PacketsRecv,
+		PacketsSent:       stats.PacketsSent,
+		PacketsFloodTx:    stats.PacketsFloodTx,
+		PacketsDirectTx:   stats.PacketsDirectTx,
+		PacketsFloodRx:    stats.PacketsFloodRx,
+		PacketsDirectRx:   stats.PacketsDirectRx,
+		PacketsRecvErrors: stats.PacketsRecvErrors,
+	}
 }
 
 // inflightSet tracks senders that currently have a command being processed, so

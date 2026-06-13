@@ -685,11 +685,11 @@ func (c *MeshCoreClient) noteRepeatCandidate(raw []byte) {
 // messages visible on analyzer servers exactly like packets from any other device.
 func (c *MeshCoreClient) publishTXChannelPacket(channel *Channel, text string, timestamp uint32) {
 	c.mu.RLock()
-	mqttBridge := c.mqtt
+	publisher := c.publisher
 	selfInfo := c.selfInfo
 	c.mu.RUnlock()
 
-	if mqttBridge == nil || selfInfo == nil {
+	if publisher == nil || selfInfo == nil {
 		return
 	}
 	if len(channel.PSK) == 0 {
@@ -709,7 +709,7 @@ func (c *MeshCoreClient) publishTXChannelPacket(channel *Channel, text string, t
 	}
 	channelKeyHex := hex.EncodeToString(channel.PSK[:16])
 
-	mqttBridge.QueueChannelPacket(rawPkt, false, 0, 0, channel.Index, channelName, senderName, text, channelKeyHex)
+	publisher.QueueChannelPacket(rawPkt, false, 0, 0, channel.Index, channelName, senderName, text, channelKeyHex)
 }
 
 // buildTXTMsgPacket constructs a synthetic MeshCore TXT_MSG RF packet for an
@@ -805,23 +805,23 @@ func buildTXTMsgPacket(privKeyBytes, ourPubKey, recipientPubKey []byte, text str
 // and queues it to MQTT as an emulated RX packet (zero hop, SNR/RSSI = 0).
 func (c *MeshCoreClient) publishTXDirectMessage(contact *Contact, text string, timestamp uint32) {
 	c.mu.RLock()
-	mqttBridge := c.mqtt
+	publisher := c.publisher
 	selfInfo := c.selfInfo
 	c.mu.RUnlock()
 
-	if mqttBridge == nil || selfInfo == nil {
+	if publisher == nil || selfInfo == nil {
 		return
 	}
 	if len(contact.PublicKey) < 32 {
 		return
 	}
 
-	cfg := mqttBridge.GetConfig()
-	if cfg.DevicePrivKey == "" {
+	privKeyHex := publisher.DevicePrivKey()
+	if privKeyHex == "" {
 		c.logger.Debug("publishTXDirectMessage: DevicePrivKey not configured, skipping DM TX publish")
 		return
 	}
-	privKeyBytes, err := hex.DecodeString(cfg.DevicePrivKey)
+	privKeyBytes, err := hex.DecodeString(privKeyHex)
 	if err != nil {
 		c.logger.Warn("publishTXDirectMessage: invalid DevicePrivKey", "error", err)
 		return
@@ -833,7 +833,7 @@ func (c *MeshCoreClient) publishTXDirectMessage(contact *Contact, text string, t
 		return
 	}
 
-	mqttBridge.QueuePacket(rawPkt, false, 0, 0)
+	publisher.QueuePacket(rawPkt, false, 0, 0)
 }
 
 // parseTraceData handles PUSH_CODE_TRACE_DATA (0x89).
@@ -994,9 +994,9 @@ func (c *MeshCoreClient) parseLogRxData(data []byte) {
 // falls back to fallbackSNR/fallbackRSSI so the event is still recorded.
 func (c *MeshCoreClient) publishPendingRawToMQTT(fallbackSNR, fallbackRSSI float64) {
 	c.mu.RLock()
-	mqttBridge := c.mqtt
+	publisher := c.publisher
 	c.mu.RUnlock()
-	if mqttBridge == nil {
+	if publisher == nil {
 		return
 	}
 	rawData, snr, rssi := []byte(nil), fallbackSNR, fallbackRSSI
@@ -1007,7 +1007,7 @@ func (c *MeshCoreClient) publishPendingRawToMQTT(fallbackSNR, fallbackRSSI float
 			break
 		}
 	}
-	mqttBridge.QueuePacket(rawData, false, snr, rssi)
+	publisher.QueuePacket(rawData, false, snr, rssi)
 }
 
 // flushStalePendingRaw publishes any raw packets that have waited longer than
@@ -1017,15 +1017,15 @@ func (c *MeshCoreClient) flushStalePendingRaw() {
 		return
 	}
 	c.mu.RLock()
-	mqttBridge := c.mqtt
+	publisher := c.publisher
 	c.mu.RUnlock()
 
 	now := time.Now()
 	remaining := c.pendingRaw[:0]
 	for _, p := range c.pendingRaw {
 		if now.Sub(p.arrivedAt) > pendingRawTTL {
-			if mqttBridge != nil {
-				mqttBridge.QueuePacket(p.rawData, false, p.snr, p.rssi)
+			if publisher != nil {
+				publisher.QueuePacket(p.rawData, false, p.snr, p.rssi)
 			}
 		} else {
 			remaining = append(remaining, p)
