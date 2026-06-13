@@ -134,6 +134,47 @@ type MeshCoreClient struct {
 	// Логгер
 	logger  *slog.Logger
 	histLog *historylog.Logger
+
+	// dedupMu guards seenMsgs, a cache of recently received message keys used to
+	// drop protocol-level retransmissions. A MeshCore sender retransmits a DM or
+	// channel message (with the same sender timestamp) when it does not receive
+	// the ACK; the companion device passes every copy up over BLE, so without
+	// this the bot would process and reply to the same message twice.
+	dedupMu  sync.Mutex
+	seenMsgs map[string]time.Time
+}
+
+// dedupTTL is how long a received message key is remembered. It comfortably
+// exceeds a sender's retry burst (seconds to tens of seconds) while keeping the
+// cache bounded to one window's worth of traffic.
+const dedupTTL = 3 * time.Minute
+
+// isDuplicateMessage reports whether key was seen within dedupTTL. On a miss it
+// records key with the current time and evicts expired entries. The key should
+// combine sender + sender timestamp + text so that genuine retries (all equal)
+// are dropped while distinct messages — including a later resend that carries a
+// fresh timestamp — are kept. Including the text also guards channel-message
+// collisions (channel frames carry no sender prefix) and senders with a wrong
+// RTC clock that reuse the same timestamp.
+func (c *MeshCoreClient) isDuplicateMessage(key string) bool {
+	now := time.Now()
+	c.dedupMu.Lock()
+	defer c.dedupMu.Unlock()
+
+	if seen, ok := c.seenMsgs[key]; ok && now.Sub(seen) < dedupTTL {
+		return true
+	}
+
+	if c.seenMsgs == nil {
+		c.seenMsgs = make(map[string]time.Time)
+	}
+	for k, t := range c.seenMsgs {
+		if now.Sub(t) >= dedupTTL {
+			delete(c.seenMsgs, k)
+		}
+	}
+	c.seenMsgs[key] = now
+	return false
 }
 
 func NewMeshCoreClient(adapter *bluetooth.Adapter) *MeshCoreClient {
@@ -932,6 +973,13 @@ func (c *MeshCoreClient) parseContactMessageV3(data []byte) {
 		c.logger.Warn("parseContactMessageV3: unknown sender", "prefix", fmt.Sprintf("%x", prefix))
 	}
 
+	dedupKey := fmt.Sprintf("dm:%x-%d-%s", prefix, timestampRaw, text)
+	if c.isDuplicateMessage(dedupKey) {
+		c.logger.Debug("Duplicate DM dropped (sender retry)",
+			"prefix", fmt.Sprintf("%x", prefix), "timestamp", timestampRaw, "text", text)
+		return
+	}
+
 	msg := &Message{
 		SenderKey:  fullKey,
 		Text:       text,
@@ -1012,6 +1060,13 @@ func (c *MeshCoreClient) parseChannelMessageV3(data []byte) {
 	} else {
 		senderName = fmt.Sprintf("?ch%d", channelIndex)
 		c.logger.Warn("parseChannelMessageV3: no sender prefix in text")
+	}
+
+	dedupKey := fmt.Sprintf("ch:%d-%d-%s-%s", channelIndex, timestampRaw, senderName, text)
+	if c.isDuplicateMessage(dedupKey) {
+		c.logger.Debug("Duplicate channel message dropped (sender retry)",
+			"channel", channelIndex, "timestamp", timestampRaw, "sender", senderName, "text", text)
+		return
 	}
 
 	msg := &ChannelMessage{
