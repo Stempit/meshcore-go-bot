@@ -113,7 +113,7 @@ func main() {
 			if msg.channel != nil {
 				transmissions := config.Get().Connection.ChannelTransmissions
 				if transmissions < 1 {
-					transmissions = 3 // default: transmit each channel reply 3 times
+					transmissions = 3 // default: up to 3 transmissions, stops early on mesh repeat
 				}
 				if err := client.SendChannelMessageWithRetry(msg.channel, msg.text, msg.ack, 1, transmissions, 3*time.Second); err != nil {
 					slog.Error("Failed to send channel reply", "channel", msg.channel.Name, "error", err)

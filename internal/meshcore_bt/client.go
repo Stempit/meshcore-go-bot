@@ -11,14 +11,16 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"strings"
 	"sync"
 	"time"
 
-	"filippo.io/edwards25519"
-	"golang.org/x/crypto/curve25519"
 	"meshbot/internal/historylog"
 	"meshbot/internal/mqttbridge"
+
+	"filippo.io/edwards25519"
+	"golang.org/x/crypto/curve25519"
 
 	"go.bug.st/serial"
 	"tinygo.org/x/bluetooth"
@@ -62,9 +64,9 @@ type MeshCoreClient struct {
 	syncLastmod       uint32              // max lastmod seen across all parsed contact frames
 	pendingNewContact *Contact            // contact from last pushCodeNewAdvert, may not be stored on device yet
 	channels          map[int]*Channel
-	messages    map[string][]*Message // ключ – hex(senderKey)
-	channelMsgs map[int][]*ChannelMessage
-	stats       *CompanionRadioStats // накопленная статистика (все типы)
+	messages          map[string][]*Message // ключ – hex(senderKey)
+	channelMsgs       map[int][]*ChannelMessage
+	stats             *CompanionRadioStats // накопленная статистика (все типы)
 
 	// MQTT bridge
 	mqtt *mqttbridge.MQTTBridge
@@ -92,10 +94,10 @@ type MeshCoreClient struct {
 	onBattery        func(millivolts int, usedKb, totalKb int)
 	onError          func(error)
 	onNoMoreMessages func()
-	onAdvert       func(*Contact)
-	onTraceData    func(*TraceData)
-	onChannelData  func(*ChannelDataMessage)
-	onControlData  func(*ControlData)
+	onAdvert         func(*Contact)
+	onTraceData      func(*TraceData)
+	onChannelData    func(*ChannelDataMessage)
+	onControlData    func(*ControlData)
 
 	// serialPort is non-nil when connected via USB/serial instead of BLE.
 	serialPort     serial.Port
@@ -116,6 +118,14 @@ type MeshCoreClient struct {
 	deliveredConfirmCh chan error // для pushCodeSendConfirmed
 	confirmMu          sync.Mutex
 
+	// repeatWatch lets a channel send detect when the mesh has rebroadcast its
+	// own packet. While armed, every incoming 0x88 raw frame is hashed and
+	// compared to repeatHash; a match (a repeater echoing our message) is
+	// signalled on repeatCh so the sender can stop early instead of blindly
+	// transmitting all copies.
+	repeatHash []byte
+	repeatCh   chan struct{}
+	repeatMu   sync.Mutex
 
 	// канал входящих сообщений
 	incomingCh chan interface{}
@@ -467,8 +477,6 @@ func errCodeName(code byte) string {
 		return "unknown"
 	}
 }
-
-
 
 // sendChannelTextMessage returns the timestamp embedded in the BLE command so
 // callers can build a matching synthetic RF packet with the same timestamp.
@@ -1024,7 +1032,6 @@ func (c *MeshCoreClient) parseChannelMessageV3(data []byte) {
 	c.logger.Info("Channel message V3 received",
 		"channel", channelIndex, "sender", senderName, "text", text)
 
-
 	if c.onChannelMessage != nil {
 		c.onChannelMessage(msg)
 	}
@@ -1272,7 +1279,6 @@ func (c *MeshCoreClient) parseChannelMessage(data []byte) {
 
 	c.logger.Info("Channel message received (V1)",
 		"channel", channelIndex, "sender", fmt.Sprintf("%q", senderName), "text", fmt.Sprintf("%q", text))
-
 
 	if c.onChannelMessage != nil {
 		c.onChannelMessage(msg)
@@ -1991,6 +1997,151 @@ func buildGRPTXTPacket(psk []byte, senderName, text string, timestamp uint32) []
 	return pkt
 }
 
+// MeshCore packet/header constants (mirrors firmware src/MeshCore.h, src/Packet.h).
+const (
+	payloadTypeGrpTxt = 0x05 // PAYLOAD_TYPE_GRP_TXT
+	maxHashSize       = 8    // MAX_HASH_SIZE
+)
+
+// packetHash reproduces Packet::calculatePacketHash for non-TRACE packets:
+// SHA256(payloadType ‖ payload) truncated to MAX_HASH_SIZE. This is the value
+// the firmware uses for flood deduplication, so it is identical for our own
+// transmission and for any repeater's rebroadcast of the same packet.
+func packetHash(payloadType byte, payload []byte) []byte {
+	h := sha256.New()
+	h.Write([]byte{payloadType})
+	h.Write(payload)
+	return h.Sum(nil)[:maxHashSize]
+}
+
+// loraAirtimeMs estimates a LoRa frame's time-on-air in milliseconds, matching
+// RadioLib's getTimeOnAir (Semtech AN1200.13) with MeshCore's radio settings:
+// explicit header, CRC on, and preamble length 32 for SF≤8 else 16
+// (RadioLibWrapper::preambleLengthForSF). cr is MeshCore's coding-rate value
+// (5..8 == 4/5..4/8), which equals the (CR+4) symbol-formula multiplier.
+// Returns 0 when parameters are unusable.
+func loraAirtimeMs(sf int, bwHz uint32, cr, plBytes int) float64 {
+	if sf < 6 || bwHz == 0 || cr < 5 {
+		return 0
+	}
+	tSym := math.Exp2(float64(sf)) / float64(bwHz) // symbol time, seconds
+	de := 0
+	if tSym > 0.016 { // low-data-rate optimize kicks in above 16ms/symbol
+		de = 1
+	}
+	nPreamble := 16.0
+	if sf <= 8 {
+		nPreamble = 32.0
+	}
+	tPreamble := (nPreamble + 4.25) * tSym
+
+	// CRC=1, IH=0 (explicit header). Multiplier (CR+4) == MeshCore cr value.
+	num := float64(8*plBytes - 4*sf + 28 + 16)
+	den := float64(4 * (sf - 2*de))
+	symbols := math.Ceil(num/den) * float64(cr)
+	if symbols < 0 {
+		symbols = 0
+	}
+	tPayload := (8 + symbols) * tSym
+	return (tPreamble + tPayload) * 1000
+}
+
+// repeatWindowFor sizes how long to wait for the mesh to rebroadcast our packet
+// before resending. A repeater waits a random flood backoff of up to ~2.6×airtime
+// (Mesh::getRetransmitDelay: nextInt(0,5) × airtime×0.52) before its rebroadcast,
+// which itself takes ~1×airtime; add our own TX and some slack. Clamped so very
+// fast or very slow presets stay sane. Falls back to a default if airtime is
+// unknown.
+func repeatWindowFor(selfInfo *SelfInfo, pktLen int) time.Duration {
+	if selfInfo == nil {
+		return defaultRepeatWindow
+	}
+	air := loraAirtimeMs(selfInfo.Sf, selfInfo.BwHz, selfInfo.Cr, pktLen)
+	if air <= 0 {
+		return defaultRepeatWindow
+	}
+	w := time.Duration((4*air + 1500) * float64(time.Millisecond))
+	if w < 3*time.Second {
+		w = 3 * time.Second
+	}
+	if w > 12*time.Second {
+		w = 12 * time.Second
+	}
+	return w
+}
+
+// rawFramePayload extracts the payload type and payload bytes from a raw RF
+// frame (as carried in a 0x88 LOG_RX_DATA frame), mirroring
+// Dispatcher::tryParsePacket. The path is skipped so repeats with extra path
+// hashes still yield the same payload — and therefore the same packetHash.
+func rawFramePayload(raw []byte) (byte, []byte, bool) {
+	if len(raw) < 2 {
+		return 0, nil, false
+	}
+	i := 0
+	header := raw[i]
+	i++
+	payloadType := (header >> 2) & 0x0F // PH_TYPE_SHIFT / PH_TYPE_MASK
+	routeType := header & 0x03          // PH_ROUTE_MASK
+	// TRANSPORT_FLOOD (0x00) and TRANSPORT_DIRECT (0x03) carry 2×uint16 codes.
+	if routeType == 0x00 || routeType == 0x03 {
+		i += 4
+	}
+	if i >= len(raw) {
+		return 0, nil, false
+	}
+	pathLen := raw[i]
+	i++
+	pathHashSize := int(pathLen>>6) + 1 // getPathHashSize
+	pathByteLen := int(pathLen&0x3F) * pathHashSize
+	i += pathByteLen
+	if i > len(raw) {
+		return 0, nil, false
+	}
+	return payloadType, raw[i:], true
+}
+
+// armRepeatWatch starts watching incoming raw frames for a rebroadcast of the
+// packet identified by hash, returning a channel that receives once a match is
+// heard. Call disarmRepeatWatch when done.
+func (c *MeshCoreClient) armRepeatWatch(hash []byte) chan struct{} {
+	ch := make(chan struct{}, 1)
+	c.repeatMu.Lock()
+	c.repeatHash = hash
+	c.repeatCh = ch
+	c.repeatMu.Unlock()
+	return ch
+}
+
+func (c *MeshCoreClient) disarmRepeatWatch() {
+	c.repeatMu.Lock()
+	c.repeatHash = nil
+	c.repeatCh = nil
+	c.repeatMu.Unlock()
+}
+
+// noteRepeatCandidate is called for every incoming raw RF frame. If a repeat
+// watch is armed and the frame's packet hash matches, it signals the waiter.
+func (c *MeshCoreClient) noteRepeatCandidate(raw []byte) {
+	c.repeatMu.Lock()
+	want := c.repeatHash
+	ch := c.repeatCh
+	c.repeatMu.Unlock()
+	if want == nil || ch == nil {
+		return
+	}
+	ptype, payload, ok := rawFramePayload(raw)
+	if !ok || ptype != payloadTypeGrpTxt {
+		return
+	}
+	if bytes.Equal(packetHash(ptype, payload), want) {
+		select {
+		case ch <- struct{}{}:
+		default: // already signalled
+		}
+	}
+}
+
 // publishTXChannelPacket builds a synthetic outgoing GRP_TXT RF packet and
 // queues it for MQTT publishing as a TX packet. This makes our outgoing channel
 // messages visible on analyzer servers exactly like packets from any other device.
@@ -2279,6 +2430,11 @@ func (c *MeshCoreClient) parseLogRxData(data []byte) {
 	copy(rawData, data[3:])
 
 	c.logger.Debug("Log RX data", "snr", snr, "rssi", rssi, "raw_len", len(rawData))
+
+	// If a channel send is waiting to hear the mesh rebroadcast its packet,
+	// check this raw frame against it. The firmware emits 0x88 before dedup, so
+	// repeats of our own message reach us here even though no decoded 0x11 does.
+	c.noteRepeatCandidate(rawData)
 
 	// Flush any stale pending raw packets that never got a matching 0x11 frame.
 	c.flushStalePendingRaw()
@@ -2644,9 +2800,15 @@ func (c *MeshCoreClient) SendMessage(contact *Contact, text string) error {
 }
 
 // channelTxGap is the pause between successive transmissions of the same
-// channel packet. It spaces the transmissions out on air without flooding the
-// device's BLE command path or its TX duty-cycle budget.
-const channelTxGap = 1500 * time.Millisecond
+// channel packet when adaptive listening is unavailable. It spaces the
+// transmissions out on air without flooding the device's BLE command path or
+// its TX duty-cycle budget.
+const channelTxGap = 3 * time.Second
+
+// defaultRepeatWindow is the fallback listen window used when the LoRa airtime
+// cannot be estimated (no self-info / radio params). Normally the window is
+// derived from real airtime by repeatWindowFor.
+const defaultRepeatWindow = 4 * time.Second
 
 // SendChannelMessageWithRetry sends a message to a channel, transmitting the
 // SAME packet `transmissions` times to improve delivery reliability (the
@@ -2668,10 +2830,18 @@ const channelTxGap = 1500 * time.Millisecond
 // Note: this is our own node sending the same packet repeatedly; it is NOT the
 // MeshCore network "repeat"/retransmit by repeater nodes.
 //
+// Adaptive sending: rather than blindly transmitting all copies, after each
+// transmission we listen (via the firmware's pre-dedup 0x88 raw frames) for the
+// mesh rebroadcasting our exact packet — recognised by its firmware dedup hash
+// (see grpTxtPacketHash). Once we hear our message repeated, it is on the
+// network and we stop, sparing the device and the channel the remaining copies.
+// If we cannot compute the hash (no PSK / self info) or no repeater is in range,
+// we fall back to spaced blind transmissions. `transmissions` is the MAX copies.
+//
 // waitForDelivery is accepted for API compatibility but ignored.
 // maxRetries: per-transmission retries when the device explicitly REJECTS the
 // command (0 = single attempt per transmission).
-// transmissions: how many times to transmit the packet (values < 1 → 1).
+// transmissions: maximum number of times to transmit the packet (values < 1 → 1).
 // timeout: how long to wait for the device OK per attempt.
 func (c *MeshCoreClient) SendChannelMessageWithRetry(channel *Channel, text string, waitForDelivery bool, maxRetries, transmissions int, timeout time.Duration) error {
 	c.sendMu.Lock()
@@ -2682,18 +2852,62 @@ func (c *MeshCoreClient) SendChannelMessageWithRetry(channel *Channel, text stri
 		transmissions = 1
 	}
 
-	c.logger.Info("Sending channel message with retry",
-		"channel", channel.Index, "name", channel.Name, "text", text, "transmissions", transmissions)
-
 	// Reuse one timestamp across every transmission so they share a packet_hash
-	// and receivers collapse them into a single message.
+	// and receivers (and our repeat watch) collapse them into a single message.
 	timestamp := uint32(time.Now().Unix())
+
+	// Compute the dedup hash the mesh will rebroadcast so we can stop early once
+	// we hear our own message echoed. nil ⇒ adaptive listening unavailable.
+	// Size the listen window from the real LoRa airtime of this packet so it
+	// covers the repeater's flood backoff regardless of the radio preset.
+	c.mu.RLock()
+	selfInfo := c.selfInfo
+	c.mu.RUnlock()
+	var expectedHash []byte
+	window := defaultRepeatWindow
+	if selfInfo != nil {
+		if pkt := buildGRPTXTPacket(channel.PSK, selfInfo.Name, text, timestamp); pkt != nil {
+			// pkt is [header][path_len=0][payload…]; hash is over the payload.
+			expectedHash = packetHash(payloadTypeGrpTxt, pkt[2:])
+			// +6 ≈ transport codes (4) plus a repeater's appended path hashes.
+			window = repeatWindowFor(selfInfo, len(pkt)+6)
+		}
+	}
+
+	c.logger.Info("Sending channel message with retry",
+		"channel", channel.Index, "name", channel.Name, "text", text,
+		"max_transmissions", transmissions, "adaptive", expectedHash != nil,
+		"repeat_window", window.Round(time.Millisecond))
+
+	var repeatCh chan struct{}
+	if expectedHash != nil {
+		repeatCh = c.armRepeatWatch(expectedHash)
+		defer c.disarmRepeatWatch()
+	}
 
 	queued := 0
 	var lastErr error
+	stoppedEarly := false
+loop:
 	for tx := 0; tx < transmissions; tx++ {
 		if tx > 0 {
-			time.Sleep(channelTxGap)
+			// Before resending, give the mesh a chance to rebroadcast the
+			// previous transmission. If we hear it, the message is on the
+			// network — stop. Otherwise (window elapsed) resend.
+			if repeatCh != nil {
+				select {
+				case <-repeatCh:
+					stoppedEarly = true
+					c.logger.Info("Channel message repeated by mesh, stopping early",
+						"channel", channel.Name, "transmissions_sent", queued)
+					break loop
+				case <-time.After(window):
+					c.logger.Debug("No mesh repeat heard, resending",
+						"channel", channel.Name, "next_tx", tx+1)
+				}
+			} else {
+				time.Sleep(channelTxGap)
+			}
 		}
 		if err := c.sendChannelOnce(byte(channel.Index), text, timestamp, channel.Name, tx+1, transmissions, maxRetries, timeout); err != nil {
 			lastErr = err
@@ -2709,7 +2923,8 @@ func (c *MeshCoreClient) SendChannelMessageWithRetry(channel *Channel, text stri
 	}
 
 	c.logger.Info("Channel message transmitted",
-		"channel", channel.Name, "transmissions_queued", fmt.Sprintf("%d/%d", queued, transmissions))
+		"channel", channel.Name, "transmissions_sent", queued,
+		"max_transmissions", transmissions, "confirmed_by_mesh", stoppedEarly)
 
 	// Publish/log once: all transmissions are the same logical message.
 	c.publishTXChannelPacket(channel, text, timestamp)
