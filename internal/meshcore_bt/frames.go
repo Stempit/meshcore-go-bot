@@ -1,0 +1,647 @@
+package meshcore_bt
+
+import (
+	"bytes"
+	"encoding/binary"
+	"encoding/hex"
+	"fmt"
+	"strings"
+	"time"
+)
+
+// ============================================================================
+// Обработчик входящих фреймов
+// ============================================================================
+
+func (c *MeshCoreClient) frameHandler() {
+	defer c.wg.Done() // для канала входящих сообщений
+
+	for {
+		select {
+		case data := <-c.notifyCh:
+			c.logger.Debug("RX frame", "data", fmt.Sprintf("%x", data))
+			c.handleFrame(data)
+		case <-c.doneCh:
+			return
+		}
+	}
+}
+
+// parseContactMessageV3 разбирает сообщение V3 от контакта (код 0x10).
+//
+// Формат (из MyMesh.cpp, queueMessage, app_target_ver >= 3):
+//
+//	[code(1)][snr(1)][res(1)][res(1)][prefix(6)][path_len(1)][txt_type(1)][timestamp(4)][extra(4, только для signed)][text]
+//
+// path_len — только метаданные из пакета; реальных байт пути в companion-фрейме нет.
+// extra (4 байта sender_prefix) присутствует только когда txt_type == txtTypeSigned.
+func (c *MeshCoreClient) parseContactMessageV3(data []byte) {
+	// минимум: code(1)+snr+res+res(3)+prefix(6)+path_len(1)+txt_type(1)+timestamp(4) = 16
+	const minLen = 1 + 3 + 6 + 1 + 1 + 4
+	if len(data) < minLen {
+		c.logger.Warn("parseContactMessageV3: data too short", "len", len(data))
+		return
+	}
+	prefix := data[4:10]
+	// data[10] = path_len (метаданные, байты пути в companion-фрейме не передаются)
+	pathLen := int(data[10])
+	txtType := data[11]
+	timestampRaw := binary.LittleEndian.Uint32(data[12:16])
+
+	// Для signed-сообщений после timestamp идут 4 байта extra (sender_prefix)
+	textStart := 16
+	if txtType == txtTypeSigned {
+		textStart = 20
+	}
+	if textStart >= len(data) {
+		c.logger.Warn("parseContactMessageV3: text start beyond data", "textStart", textStart, "len", len(data))
+		return
+	}
+	textBytes := data[textStart:]
+	nullIdx := bytes.IndexByte(textBytes, 0)
+	var text string
+	if nullIdx >= 0 {
+		text = string(textBytes[:nullIdx])
+	} else {
+		text = string(textBytes)
+	}
+
+	// Поиск контакта по префиксу
+	var fullKey []byte
+	var senderName string
+	var contactPath []byte
+	c.mu.RLock()
+	for _, contact := range c.contacts {
+		if len(contact.PublicKey) >= 6 && bytes.Equal(contact.PublicKey[:6], prefix) {
+			fullKey = contact.PublicKey
+			senderName = contact.Name
+			contactPath = contact.Path
+			break
+		}
+	}
+	c.mu.RUnlock()
+
+	if fullKey == nil {
+		fullKey = prefix
+		c.logger.Warn("parseContactMessageV3: unknown sender", "prefix", fmt.Sprintf("%x", prefix))
+	}
+
+	dedupKey := fmt.Sprintf("dm:%x-%d-%s", prefix, timestampRaw, text)
+	if c.isDuplicateMessage(dedupKey) {
+		c.logger.Debug("Duplicate DM dropped (sender retry)",
+			"prefix", fmt.Sprintf("%x", prefix), "timestamp", timestampRaw, "text", text)
+		return
+	}
+
+	msg := &Message{
+		SenderKey:  fullKey,
+		Text:       text,
+		Timestamp:  time.Unix(int64(timestampRaw), 0),
+		IsOutgoing: false,
+		Status:     "delivered",
+		PathLength: pathLen,
+		PathBytes:  contactPath,
+		MessageID:  fmt.Sprintf("%x-%d", prefix, timestampRaw),
+	}
+
+	c.mu.Lock()
+	key := pubKeyHex(fullKey)
+	c.messages[key] = append(c.messages[key], msg)
+	c.mu.Unlock()
+
+	c.logger.Info("Received contact message V3", "sender", senderName, "key", key, "text", text)
+
+	if c.histLog != nil {
+		if err := c.histLog.LogDMIncoming(senderName, text, msg.Timestamp); err != nil {
+			c.logger.Error("historylog: failed to log incoming DM", "error", err)
+		}
+	}
+
+	if c.onMessage != nil {
+		c.onMessage(msg)
+	}
+
+	select {
+	case c.incomingCh <- msg:
+	default:
+		c.logger.Warn("Incoming message channel full, dropping message")
+	}
+}
+
+// parseChannelMessageV3 разбирает сообщение V3 в канале (код 0x11).
+//
+// Формат (из MyMesh.cpp, onChannelMessageRecv, app_target_ver >= 3):
+//
+//	[code(1)][snr(1)][res(1)][res(1)][channel(1)][path_len(1)][txt_type(1)][timestamp(4)][text]
+//
+// Префикс отправителя в канальных сообщениях НЕ передаётся.
+// Имя отправителя встроено в текст в формате "Имя: текст".
+func (c *MeshCoreClient) parseChannelMessageV3(data []byte) {
+	// минимум: code(1)+snr+res+res(3)+channel(1)+path_len(1)+txt_type(1)+timestamp(4) = 11
+	const minLen = 1 + 3 + 1 + 1 + 1 + 4
+	if len(data) < minLen {
+		c.logger.Warn("parseChannelMessageV3: data too short", "len", len(data))
+		return
+	}
+	channelIndex := int(data[4])
+	// data[5] = path_len (метаданные, байты пути не передаются)
+	pathLen := int(data[5])
+	// data[6] = txt_type
+	timestampRaw := binary.LittleEndian.Uint32(data[7:11])
+
+	textStart := 11
+	if textStart >= len(data) {
+		c.logger.Warn("parseChannelMessageV3: text start beyond data", "textStart", textStart, "len", len(data))
+		return
+	}
+	textBytes := data[textStart:]
+	nullIdx := bytes.IndexByte(textBytes, 0)
+	var text string
+	if nullIdx >= 0 {
+		text = string(textBytes[:nullIdx])
+	} else {
+		text = string(textBytes)
+	}
+
+	// Поиск имени отправителя по первым байтам текста «Имя: »,
+	// которые прошивка встраивает в sendGroupMessage.
+	senderName := ""
+	if idx := strings.Index(text, ": "); idx > 0 {
+		senderName = text[:idx]
+		text = text[idx+2:]
+		c.logger.Debug("Extracted sender name from channel text V3", "name", senderName, "text", text)
+	} else {
+		senderName = fmt.Sprintf("?ch%d", channelIndex)
+		c.logger.Warn("parseChannelMessageV3: no sender prefix in text")
+	}
+
+	dedupKey := fmt.Sprintf("ch:%d-%d-%s-%s", channelIndex, timestampRaw, senderName, text)
+	if c.isDuplicateMessage(dedupKey) {
+		c.logger.Debug("Duplicate channel message dropped (sender retry)",
+			"channel", channelIndex, "timestamp", timestampRaw, "sender", senderName, "text", text)
+		return
+	}
+
+	msg := &ChannelMessage{
+		ChannelIndex: channelIndex,
+		SenderName:   senderName,
+		Text:         text,
+		Timestamp:    time.Unix(int64(timestampRaw), 0),
+		IsOutgoing:   false,
+		Status:       "delivered",
+		PathLength:   pathLen,
+		MessageID:    fmt.Sprintf("%d-%d", channelIndex, timestampRaw),
+	}
+
+	c.mu.Lock()
+	c.channelMsgs[channelIndex] = append(c.channelMsgs[channelIndex], msg)
+	c.mu.Unlock()
+
+	c.logger.Info("Channel message V3 received",
+		"channel", channelIndex, "sender", senderName, "text", text)
+
+	if c.onChannelMessage != nil {
+		c.onChannelMessage(msg)
+	}
+
+	// Publish to MQTT packets topic with decoded fields.
+	// Correlate with the most recent pending 0x88 raw frame (same radio packet).
+	c.mu.RLock()
+	ch := c.channels[channelIndex]
+	mqttBridge := c.mqtt
+	c.mu.RUnlock()
+
+	channelName := fmt.Sprintf("ch%d", channelIndex)
+	var channelKeyHex string
+	if ch != nil && ch.Name != "" {
+		channelName = ch.Name
+	}
+	if ch != nil && len(ch.PSK) > 0 {
+		channelKeyHex = hex.EncodeToString(ch.PSK)
+	}
+
+	if c.histLog != nil {
+		if err := c.histLog.LogChannelIncoming(channelName, senderName, text, msg.Timestamp); err != nil {
+			c.logger.Error("historylog: failed to log incoming channel message", "error", err)
+		}
+	}
+
+	snr := float64(int8(data[1])) / 4.0
+	rssi := 0.0 // V3 frame does not carry RSSI; use pending raw value if found
+
+	// Find the oldest pending raw packet (0x88 arrives before 0x11, so oldest first).
+	var rawData []byte
+	for i := 0; i < len(c.pendingRaw); i++ {
+		p := c.pendingRaw[i]
+		if time.Since(p.arrivedAt) <= pendingRawTTL {
+			rawData = p.rawData
+			rssi = p.rssi
+			// Remove the matched entry so it is not published again.
+			c.pendingRaw = append(c.pendingRaw[:i], c.pendingRaw[i+1:]...)
+			break
+		}
+	}
+
+	if mqttBridge != nil {
+		mqttBridge.QueueChannelPacket(rawData, false, snr, rssi, channelIndex, channelName, senderName, text, channelKeyHex)
+	}
+
+	// Extract path bytes from raw RF packet so the bot can show repeater IDs.
+	if pathBytes, hopCount := extractPathFromRaw(rawData); len(pathBytes) > 0 {
+		msg.PathBytes = pathBytes
+		msg.PathLength = hopCount
+	}
+
+	// отправляем в канал входящих сообщений
+	select {
+	case c.incomingCh <- msg:
+	default:
+		c.logger.Warn("Incoming message channel full, dropping message")
+	}
+}
+
+// extractPathFromRaw parses the path bytes out of a raw RF packet.
+//
+// Wire format (from Packet.cpp writeTo()):
+//
+//	[header(1)] [transport_codes(4) — only for TRANSPORT routes] [path_len(1)] [path...] [payload...]
+//
+// path_len byte encoding (from Packet.h):
+//
+//	hash_count = path_len & 0x3F   (bits 0–5, number of hops)
+//	hash_size  = (path_len >> 6) + 1  (bits 6–7 → 1, 2, or 3 bytes per hop)
+//
+// Returns the raw path bytes and the hop count. Returns nil, 0 when data is
+// too short or contains no hops.
+func extractPathFromRaw(data []byte) (pathBytes []byte, hopCount int) {
+	if len(data) < 2 {
+		return nil, 0
+	}
+	routeType := data[0] & 0x03
+	hasTransportCodes := routeType == 0x00 || routeType == 0x03
+	headerLen := 2
+	if hasTransportCodes {
+		headerLen = 6
+	}
+	if len(data) < headerLen {
+		return nil, 0
+	}
+	pathLenByte := data[headerLen-1]
+	hashCount := int(pathLenByte & 0x3F)
+	hashSize := int((pathLenByte>>6)&0x03) + 1
+	if hashCount == 0 {
+		return nil, 0
+	}
+	end := headerLen + hashCount*hashSize
+	if end > len(data) {
+		return nil, 0
+	}
+	return data[headerLen:end], hashCount
+}
+
+// parseContactMessage разбирает сообщение от контакта (код 0x07).
+//
+// Формат (из MyMesh.cpp, queueMessage, app_target_ver < 3):
+//
+//	[code(1)][prefix(6)][path_len(1)][txt_type(1)][timestamp(4)][extra(4, только для signed)][text]
+//
+// path_len — метаданные из пакета (например, 0xFF = прямая доставка).
+// Реальных байт пути в companion-фрейме нет.
+func (c *MeshCoreClient) parseContactMessage(data []byte) {
+	// минимум: code(1)+prefix(6)+path_len(1)+txt_type(1)+timestamp(4) = 13
+	const minLen = 1 + 6 + 1 + 1 + 4
+	if len(data) < minLen {
+		c.logger.Warn("parseContactMessage: data too short", "len", len(data))
+		return
+	}
+	prefix := data[1:7]
+	// data[7] = path_len (метаданные, без реальных байт пути)
+	pathLen := int(data[7])
+	txtType := data[8]
+	timestampRaw := binary.LittleEndian.Uint32(data[9:13])
+
+	// Для signed-сообщений после timestamp идут 4 байта extra (sender_prefix)
+	textStart := 13
+	if txtType == txtTypeSigned {
+		textStart = 17
+	}
+	if textStart >= len(data) {
+		c.logger.Warn("parseContactMessage: no text data")
+		return
+	}
+	textBytes := data[textStart:]
+	nullIdx := bytes.IndexByte(textBytes, 0)
+	var text string
+	if nullIdx >= 0 {
+		text = string(textBytes[:nullIdx])
+	} else {
+		text = string(textBytes)
+	}
+
+	var fullKey []byte
+	var contactPath []byte
+	c.mu.RLock()
+	for _, contact := range c.contacts {
+		if len(contact.PublicKey) >= 6 && bytes.Equal(contact.PublicKey[:6], prefix) {
+			fullKey = contact.PublicKey
+			contactPath = contact.Path
+			break
+		}
+	}
+	c.mu.RUnlock()
+	if fullKey == nil {
+		fullKey = prefix
+		c.logger.Warn("parseContactMessage: unknown sender", "prefix", fmt.Sprintf("%x", prefix))
+	}
+
+	msg := &Message{
+		SenderKey:  fullKey,
+		Text:       text,
+		Timestamp:  time.Unix(int64(timestampRaw), 0),
+		IsOutgoing: false,
+		Status:     "delivered",
+		PathLength: pathLen,
+		PathBytes:  contactPath,
+		MessageID:  fmt.Sprintf("%x-%d", prefix, timestampRaw),
+	}
+
+	c.mu.Lock()
+	key := pubKeyHex(fullKey)
+	c.messages[key] = append(c.messages[key], msg)
+	c.mu.Unlock()
+
+	c.logger.Debug("Received contact message", "sender", key, "text", text)
+
+	if c.onMessage != nil {
+		c.onMessage(msg)
+	}
+
+	// отправляем в канал входящих сообщений
+	select {
+	case c.incomingCh <- msg:
+	default:
+		c.logger.Warn("Incoming message channel full, dropping message")
+	}
+}
+
+// parseChannelMessage разбирает сообщение в канале (код 0x08).
+//
+// Формат (из MyMesh.cpp, onChannelMessageRecv, app_target_ver < 3):
+//
+//	[code(1)][channel(1)][path_len(1)][txt_type(1)][timestamp(4)][text]
+//
+// Префикс отправителя в канальных сообщениях НЕ передаётся.
+// Имя отправителя встроено в текст в формате "Имя: текст".
+func (c *MeshCoreClient) parseChannelMessage(data []byte) {
+	// минимум: code(1)+channel(1)+path_len(1)+txt_type(1)+timestamp(4) = 8
+	const minLen = 1 + 1 + 1 + 1 + 4
+	if len(data) < minLen {
+		c.logger.Warn("parseChannelMessage: data too short", "len", len(data))
+		return
+	}
+	channelIndex := int(data[1])
+	// data[2] = path_len (метаданные)
+	pathLen := int(data[2])
+	// data[3] = txt_type (для каналов всегда TXT_TYPE_PLAIN)
+	timestampRaw := binary.LittleEndian.Uint32(data[4:8])
+
+	textStart := 8
+	if textStart >= len(data) {
+		c.logger.Warn("parseChannelMessage: no text data")
+		return
+	}
+	textBytes := data[textStart:]
+	nullIdx := bytes.IndexByte(textBytes, 0)
+	var text string
+	if nullIdx >= 0 {
+		text = string(textBytes[:nullIdx])
+	} else {
+		text = string(textBytes)
+	}
+
+	// Имя отправителя встроено прошивкой в текст: «Имя: сообщение»
+	senderName := ""
+	if idx := strings.Index(text, ": "); idx > 0 {
+		senderName = text[:idx]
+		text = text[idx+2:]
+		c.logger.Debug("Extracted sender name from channel text", "name", senderName, "text", text)
+	} else {
+		senderName = fmt.Sprintf("?ch%d", channelIndex)
+		c.logger.Warn("parseChannelMessage: no sender prefix in text")
+	}
+
+	msg := &ChannelMessage{
+		ChannelIndex: channelIndex,
+		SenderName:   senderName,
+		Text:         text,
+		Timestamp:    time.Unix(int64(timestampRaw), 0),
+		IsOutgoing:   false,
+		Status:       "delivered",
+		PathLength:   pathLen,
+		MessageID:    fmt.Sprintf("%d-%d", channelIndex, timestampRaw),
+	}
+
+	c.mu.Lock()
+	c.channelMsgs[channelIndex] = append(c.channelMsgs[channelIndex], msg)
+	c.mu.Unlock()
+
+	c.logger.Info("Channel message received (V1)",
+		"channel", channelIndex, "sender", fmt.Sprintf("%q", senderName), "text", fmt.Sprintf("%q", text))
+
+	if c.onChannelMessage != nil {
+		c.onChannelMessage(msg)
+	}
+
+	// Publish to MQTT packets topic with decoded fields.
+	c.mu.RLock()
+	ch := c.channels[channelIndex]
+	mqttBridge := c.mqtt
+	c.mu.RUnlock()
+
+	channelName := fmt.Sprintf("ch%d", channelIndex)
+	var channelKeyHex string
+	if ch != nil && ch.Name != "" {
+		channelName = ch.Name
+	}
+	if ch != nil && len(ch.PSK) > 0 {
+		channelKeyHex = hex.EncodeToString(ch.PSK)
+	}
+
+	// Correlate with the oldest pending 0x88 raw frame (arrives before decoded frame).
+	var rawData []byte
+	var snr, rssi float64
+	for i := 0; i < len(c.pendingRaw); i++ {
+		p := c.pendingRaw[i]
+		if time.Since(p.arrivedAt) <= pendingRawTTL {
+			rawData = p.rawData
+			snr = p.snr
+			rssi = p.rssi
+			c.pendingRaw = append(c.pendingRaw[:i], c.pendingRaw[i+1:]...)
+			break
+		}
+	}
+
+	if mqttBridge != nil {
+		mqttBridge.QueueChannelPacket(rawData, false, snr, rssi, channelIndex, channelName, senderName, text, channelKeyHex)
+	}
+
+	// отправляем в канал входящих сообщений
+	select {
+	case c.incomingCh <- msg:
+	default:
+		c.logger.Warn("Incoming message channel full, dropping message")
+	}
+}
+
+func (c *MeshCoreClient) handleFrame(data []byte) {
+	if len(data) == 0 {
+		return
+	}
+	code := data[0]
+	c.logger.Debug("handleFrame", "code", fmt.Sprintf("0x%02x", code), "len", len(data))
+	switch code {
+	case respCodeSelfInfo:
+		c.parseSelfInfo(data)
+	case respCodeDeviceInfo:
+		c.parseDeviceInfo(data)
+	case respCodeContactsStart:
+		if len(data) >= 5 {
+			total := binary.LittleEndian.Uint32(data[1:5])
+			c.logger.Info("Contact sync started", "device_total", total)
+		}
+	case respCodeContact:
+		if len(data) < contactFrameSize {
+			c.parseContactV3(data)
+		} else {
+			c.parseContact(data)
+		}
+	case respCodeEndOfContacts:
+		c.mu.RLock()
+		cached := len(c.contacts)
+		c.mu.RUnlock()
+		c.logger.Info("Contact sync complete", "contacts", cached)
+	case respCodeChannelInfo:
+		if len(data) < 2 {
+			c.logger.Warn("ChannelInfo too short", "len", len(data))
+			return
+		}
+		c.parseChannelInfo(data)
+	case respCodeContactMsgRecv:
+		c.parseContactMessage(data)
+		_ = c.sendSyncNextMessage()
+	case respCodeContactMsgRecvV3:
+		c.parseContactMessageV3(data)
+		_ = c.sendSyncNextMessage()
+	case respCodeChannelMsgRecv:
+		c.parseChannelMessage(data)
+		_ = c.sendSyncNextMessage()
+	case respCodeChannelMsgRecvV3:
+		c.parseChannelMessageV3(data)
+		_ = c.sendSyncNextMessage()
+	case respCodeSent:
+		c.parseSent(data)
+	case respCodeNoMoreMessages:
+		c.logger.Debug("Received respCodeNoMoreMessages")
+		if c.onNoMoreMessages != nil {
+			c.onNoMoreMessages()
+		}
+	case pushCodeSendConfirmed:
+		c.parseSendConfirmed(data)
+	case pushCodePathUpdated:
+		c.parsePathUpdated(data)
+	case pushCodeMsgWaiting:
+		// Есть сообщения в очереди, запросить
+		c.logger.Debug("Messages waiting, requesting sync")
+		_ = c.sendSyncNextMessage()
+	case respCodeBattAndStorage:
+		c.parseBatteryAndStorage(data)
+	case respCodeStats:
+		c.parseStats(data)
+	case respCodeAutoAddConfig:
+		c.parseAutoAddConfig(data)
+	case respCodeCustomVars:
+		c.parseCustomVars(data)
+	case respCodeOk:
+		c.parseOk(data)
+	case respCodeErr:
+		var errCode byte
+		var errName string
+		if len(data) >= 2 {
+			errCode = data[1]
+			errName = errCodeName(errCode)
+		}
+		c.logger.Error("Received error response", "err_code", errCode, "err_name", errName)
+		c.notifyErr(fmt.Errorf("device error %d (%s)", errCode, errName))
+	case pushCodeAdvert:
+		c.parseAdvert(data)
+	case pushCodeNewAdvert:
+		c.parseNewAdvert(data)
+	case pushCodeContactDeleted:
+		c.parseContactDeleted(data)
+	case pushCodeContactsFull:
+		c.handleContactsFull()
+	case pushCodeLogRxData:
+		c.parseLogRxData(data)
+
+	// Priority 1 — full parse + MQTT
+	case pushCodeTraceData:
+		c.parseTraceData(data)
+	case pushCodeControlData:
+		c.parseControlData(data)
+
+	// Priority 2 — full parse + MQTT (response via MSG_WAITING queue)
+	case respCodeChannelDataRecv:
+		c.parseChannelData(data)
+		_ = c.sendSyncNextMessage()
+
+	// Priority 3 — log + MQTT publish
+	case pushCodeRawData:
+		snr := float64(0)
+		rssi := float64(0)
+		if len(data) >= 3 {
+			snr = float64(int8(data[1])) / 4.0
+			rssi = float64(int8(data[2]))
+		}
+		c.logger.Debug("Raw data packet", "snr", snr, "rssi", rssi,
+			"payload", fmt.Sprintf("%x", data[3:]))
+		c.publishPendingRawToMQTT(snr, rssi)
+
+	case pushCodeLoginSuccess:
+		if len(data) >= 7 {
+			c.logger.Info("Login success", "pubkey_prefix", fmt.Sprintf("%x", data[1:7]))
+		}
+		c.publishPendingRawToMQTT(0, 0)
+
+	case pushCodeLoginFail:
+		if len(data) >= 7 {
+			c.logger.Warn("Login failed", "pubkey_prefix", fmt.Sprintf("%x", data[1:7]))
+		}
+		c.publishPendingRawToMQTT(0, 0)
+
+	case pushCodeStatusResponse:
+		c.logger.Debug("Status response", "data", fmt.Sprintf("%x", data))
+		c.publishPendingRawToMQTT(0, 0)
+
+	case pushCodeTelemetryResponse:
+		c.logger.Debug("Telemetry response", "data", fmt.Sprintf("%x", data))
+		c.publishPendingRawToMQTT(0, 0)
+
+	case pushCodeBinaryResponse:
+		c.logger.Debug("Binary response", "data", fmt.Sprintf("%x", data))
+		c.publishPendingRawToMQTT(0, 0)
+
+	case pushCodePathDiscoveryResponse:
+		c.logger.Debug("Path discovery response", "data", fmt.Sprintf("%x", data))
+		c.publishPendingRawToMQTT(0, 0)
+
+	// Priority 4 — constants only; no command sender yet
+	case respCodeCurrTime, respCodeExportContact, respCodePrivateKey,
+		respCodeDisabled, respCodeSignStart, respCodeSignature,
+		respCodeAdvertPath, respCodeTuningParams, respCodeDefaultFloodScope:
+		c.logger.Debug("Unhandled response code (no command sender yet)",
+			"code", fmt.Sprintf("0x%02x", data[0]), "len", len(data))
+
+	default:
+		c.logger.Warn("Unknown frame code", "code", fmt.Sprintf("0x%02x", code))
+	}
+}
