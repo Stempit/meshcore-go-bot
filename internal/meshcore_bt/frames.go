@@ -634,8 +634,19 @@ func (c *MeshCoreClient) handleFrame(data []byte) {
 		c.logger.Debug("Path discovery response", "data", fmt.Sprintf("%x", data))
 		c.publishPendingRawToMQTT(0, 0)
 
+	// Reply to cmdGetDeviceTime: the device's current RTC (unix seconds).
+	case respCodeCurrTime:
+		if len(data) >= 5 {
+			deviceTime := int64(binary.LittleEndian.Uint32(data[1:5]))
+			c.logger.Debug("Device current time",
+				"device_unix", deviceTime,
+				"device_utc", time.Unix(deviceTime, 0).UTC().Format(time.RFC3339))
+		} else {
+			c.logger.Warn("Short CURR_TIME frame", "data", fmt.Sprintf("%x", data))
+		}
+
 	// Priority 4 — constants only; no command sender yet
-	case respCodeCurrTime, respCodeExportContact, respCodePrivateKey,
+	case respCodeExportContact, respCodePrivateKey,
 		respCodeDisabled, respCodeSignStart, respCodeSignature,
 		respCodeAdvertPath, respCodeTuningParams, respCodeDefaultFloodScope:
 		c.logger.Debug("Unhandled response code (no command sender yet)",
