@@ -8,6 +8,14 @@ Connection:
   # Windows: COM3
   # serial_port: /dev/ttyUSB0
   # serial_baud: 115200   # default 115200, matches MeshCore firmware
+  # Maximum number of times to transmit each channel reply. Channel messages
+  # have no delivery ACK and the device can silently drop a queued packet, so
+  # the bot may send the same packet a few times (receivers dedup it) to improve
+  # reliability. It stops early as soon as it hears the mesh rebroadcast the
+  # message, so on a healthy network fewer transmissions are sent. This is our
+  # node transmitting, not the network "repeat" by repeater nodes. Default 3;
+  # set to 1 for a single transmission.
+  # channel_transmissions: 3
 
 Proxy:
   enabled: false

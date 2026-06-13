@@ -42,6 +42,13 @@ type ConnectionConfig struct {
 	SerialPort string `yaml:"serial_port"`
 	// SerialBaud sets the baud rate for the serial transport (default 115200).
 	SerialBaud int `yaml:"serial_baud"`
+	// ChannelTransmissions is the MAXIMUM number of times each channel reply is
+	// transmitted (the same packet, deduplicated by receivers) to improve
+	// delivery against silent RF drops. The bot stops early once it hears the
+	// mesh rebroadcast the message, so fewer transmissions are sent on a healthy
+	// network. This is our own node sending the packet, not the network "repeat"
+	// by repeater nodes. 0 or unset defaults to 3; 1 sends a single transmission.
+	ChannelTransmissions int `yaml:"channel_transmissions"`
 }
 
 type ProxyConfig struct {
