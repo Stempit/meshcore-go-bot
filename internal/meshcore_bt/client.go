@@ -414,6 +414,17 @@ func (c *MeshCoreClient) notifySent() {
 	}
 }
 
+// clearSentConfirm clears the shared sent-confirmation slot, but only if it
+// still points at the channel this caller registered. This avoids clobbering a
+// confirmation slot that a newer send has already installed.
+func (c *MeshCoreClient) clearSentConfirm(ch chan error) {
+	c.confirmMu.Lock()
+	if c.sentConfirmCh == ch {
+		c.sentConfirmCh = nil
+	}
+	c.confirmMu.Unlock()
+}
+
 // подтверждение доставки
 func (c *MeshCoreClient) notifyDelivered() {
 	c.confirmMu.Lock()
@@ -462,8 +473,17 @@ func errCodeName(code byte) string {
 // sendChannelTextMessage returns the timestamp embedded in the BLE command so
 // callers can build a matching synthetic RF packet with the same timestamp.
 func (c *MeshCoreClient) sendChannelTextMessage(channelIndex byte, text string) (uint32, error) {
+	return c.sendChannelTextMessageTS(channelIndex, text, uint32(time.Now().Unix()))
+}
+
+// sendChannelTextMessageTS is like sendChannelTextMessage but uses a caller-
+// supplied timestamp. Because the firmware derives a packet's dedup hash from
+// its payload — which begins with this timestamp (see BaseChatMesh::sendGroupMessage
+// and Packet::calculatePacketHash in the firmware) — reusing one timestamp across
+// repeated transmissions yields an identical packet_hash, so receivers dedup it
+// and show the message only once.
+func (c *MeshCoreClient) sendChannelTextMessageTS(channelIndex byte, text string, timestamp uint32) (uint32, error) {
 	// [cmd(1)][txt_type(1)][channel(1)][timestamp(4)][text][0x00]
-	timestamp := uint32(time.Now().Unix())
 	buf := new(bytes.Buffer)
 	buf.WriteByte(cmdSendChannelTxtMsg)
 	buf.WriteByte(txtTypePlain)
@@ -2623,25 +2643,85 @@ func (c *MeshCoreClient) SendMessage(contact *Contact, text string) error {
 	return err
 }
 
-// SendChannelMessageWithRetry sends a message to a channel with retries.
+// channelRepeatGap is the pause between repeated transmissions of the same
+// channel packet. It spaces the copies out on air without flooding the device's
+// BLE command path or its TX duty-cycle budget.
+const channelRepeatGap = 1500 * time.Millisecond
+
+// SendChannelMessageWithRetry sends a message to a channel, transmitting the
+// SAME packet `repeats` times to improve delivery reliability (the official
+// apps do the same).
 //
-// Confirmation strategy: channel messages have no delivery ACKs and the
-// firmware's deduplication prevents the device from notifying the companion
-// app about RF repeats of its own messages. The best available confirmation
-// is respCodeOk — the device accepted the command and queued the packet for
-// RF transmission.
+// Why repeats are needed: channel messages have no delivery ACK, and respCodeOk
+// only means the firmware accepted the command and QUEUED the packet — not that
+// it was transmitted. After OK, the firmware can still silently drop the queued
+// packet (TX duty-cycle budget exhausted, channel-activity/CAD busy, radio TX
+// start failure, or a full outbound queue) with no notification to the companion
+// app, and its own seen-hash dedup hides RF rebroadcasts of the packet from us.
+// So a single OK is a weak guarantee and the old "retry on rejection" loop never
+// helped — OK arrives reliably on the first attempt while the packet is lost on
+// air. Sending the identical packet several times gives each copy an independent
+// chance to win the channel; receivers dedup by packet_hash (see
+// sendChannelTextMessageTS) and show the message only once.
 //
 // waitForDelivery is accepted for API compatibility but ignored.
-// maxRetries: maximum number of additional attempts (0 = single send).
+// maxRetries: per-transmission retries when the device explicitly REJECTS the
+// command (0 = single attempt per copy).
+// repeats: how many copies to transmit (values < 1 are treated as 1).
 // timeout: how long to wait for the device OK per attempt.
-func (c *MeshCoreClient) SendChannelMessageWithRetry(channel *Channel, text string, waitForDelivery bool, maxRetries int, timeout time.Duration) error {
+func (c *MeshCoreClient) SendChannelMessageWithRetry(channel *Channel, text string, waitForDelivery bool, maxRetries, repeats int, timeout time.Duration) error {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
 	defer time.Sleep(150 * time.Millisecond) // avoid flooding the device
 
-	c.logger.Info("Sending channel message with retry",
-		"channel", channel.Index, "name", channel.Name, "text", text)
+	if repeats < 1 {
+		repeats = 1
+	}
 
+	c.logger.Info("Sending channel message with retry",
+		"channel", channel.Index, "name", channel.Name, "text", text, "repeats", repeats)
+
+	// Reuse one timestamp across every repeat so all copies share a packet_hash
+	// and receivers collapse them into a single message.
+	timestamp := uint32(time.Now().Unix())
+
+	queued := 0
+	var lastErr error
+	for rep := 0; rep < repeats; rep++ {
+		if rep > 0 {
+			time.Sleep(channelRepeatGap)
+		}
+		if err := c.sendChannelOnce(byte(channel.Index), text, timestamp, channel.Name, rep+1, repeats, maxRetries, timeout); err != nil {
+			lastErr = err
+			c.logger.Warn("Channel message copy not queued",
+				"channel", channel.Name, "copy", fmt.Sprintf("%d/%d", rep+1, repeats), "error", err)
+			continue
+		}
+		queued++
+	}
+
+	if queued == 0 {
+		return fmt.Errorf("channel message not accepted by device after %d copies: %w", repeats, lastErr)
+	}
+
+	c.logger.Info("Channel message transmitted",
+		"channel", channel.Name, "copies_queued", fmt.Sprintf("%d/%d", queued, repeats))
+
+	// Publish/log once: all copies are the same logical message.
+	c.publishTXChannelPacket(channel, text, timestamp)
+	if c.histLog != nil {
+		if err := c.histLog.LogChannelOutgoing(channel.Name, text, time.Now()); err != nil {
+			c.logger.Error("historylog: failed to log outgoing channel message", "error", err)
+		}
+	}
+	return nil
+}
+
+// sendChannelOnce transmits a single copy of a channel packet (with the given
+// fixed timestamp) and waits for the device to confirm it queued the packet
+// (respCodeOk). It retries only when the device explicitly rejects the command.
+func (c *MeshCoreClient) sendChannelOnce(channelIndex byte, text string, timestamp uint32, channelName string, copyNum, copies, maxRetries int, timeout time.Duration) error {
+	copyLabel := fmt.Sprintf("%d/%d", copyNum, copies)
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
 			time.Sleep(2 * time.Second)
@@ -2653,13 +2733,8 @@ func (c *MeshCoreClient) SendChannelMessageWithRetry(channel *Channel, text stri
 		c.sentConfirmCh = confirmCh
 		c.confirmMu.Unlock()
 
-		ts, err := c.sendChannelTextMessage(byte(channel.Index), text)
-		if err != nil {
-			c.confirmMu.Lock()
-			if c.sentConfirmCh == confirmCh {
-				c.sentConfirmCh = nil
-			}
-			c.confirmMu.Unlock()
+		if _, err := c.sendChannelTextMessageTS(channelIndex, text, timestamp); err != nil {
+			c.clearSentConfirm(confirmCh)
 			if attempt == maxRetries {
 				return fmt.Errorf("send failed after %d attempts: %w", maxRetries+1, err)
 			}
@@ -2670,29 +2745,19 @@ func (c *MeshCoreClient) SendChannelMessageWithRetry(channel *Channel, text stri
 		case sendErr := <-confirmCh:
 			if sendErr != nil {
 				c.logger.Warn("Device rejected channel message, retrying",
-					"error", sendErr, "channel", channel.Name, "attempt", attempt)
+					"error", sendErr, "channel", channelName, "copy", copyLabel, "attempt", attempt)
 				if attempt == maxRetries {
 					return fmt.Errorf("channel message rejected after %d attempts: %w", maxRetries+1, sendErr)
 				}
 				continue
 			}
-			c.logger.Info("Channel message queued by device",
-				"channel", channel.Name, "attempt", attempt)
-			c.publishTXChannelPacket(channel, text, ts)
-			if c.histLog != nil {
-				if err := c.histLog.LogChannelOutgoing(channel.Name, text, time.Now()); err != nil {
-					c.logger.Error("historylog: failed to log outgoing channel message", "error", err)
-				}
-			}
+			c.logger.Info("Channel message copy queued by device",
+				"channel", channelName, "copy", copyLabel)
 			return nil
 		case <-time.After(timeout):
-			c.confirmMu.Lock()
-			if c.sentConfirmCh == confirmCh {
-				c.sentConfirmCh = nil
-			}
-			c.confirmMu.Unlock()
+			c.clearSentConfirm(confirmCh)
 			c.logger.Warn("Channel message: no device OK, retrying",
-				"channel", channel.Name, "attempt", attempt)
+				"channel", channelName, "copy", copyLabel, "attempt", attempt)
 		}
 	}
 	return fmt.Errorf("channel message not accepted by device after %d attempts", maxRetries+1)

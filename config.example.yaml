@@ -8,6 +8,11 @@ Connection:
   # Windows: COM3
   # serial_port: /dev/ttyUSB0
   # serial_baud: 115200   # default 115200, matches MeshCore firmware
+  # How many times to transmit each channel reply. Channel messages have no
+  # delivery ACK and the device can silently drop a queued packet, so sending
+  # the same packet a few times (receivers dedup it) improves reliability.
+  # Default 3; set to 1 to disable repeats.
+  # channel_send_repeats: 3
 
 Proxy:
   enabled: false

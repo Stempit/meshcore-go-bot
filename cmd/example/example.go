@@ -58,7 +58,7 @@ func main() {
 
 		channels := client.GetChannels()
 		if ch, ok := channels[0]; ok && !ch.IsEmpty {
-			err := client.SendChannelMessageWithRetry(ch, "ping С", false, 3, 3*time.Second)
+			err := client.SendChannelMessageWithRetry(ch, "ping С", false, 3, 2, 3*time.Second)
 			if err != nil {
 				fmt.Printf("Ошибка: %v\n", err)
 			} else {
@@ -170,7 +170,7 @@ func main() {
 					}
 
 					// отправляем ответ
-					err := client.SendChannelMessageWithRetry(channel, fmt.Sprintf("@[%s] ack", m.SenderName), false, 3, 3*time.Second)
+					err := client.SendChannelMessageWithRetry(channel, fmt.Sprintf("@[%s] ack", m.SenderName), false, 3, 2, 3*time.Second)
 					if err != nil {
 						fmt.Printf("Ошибка: %v\n", err)
 					} else {
