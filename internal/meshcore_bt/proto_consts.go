@@ -10,33 +10,68 @@ const (
 	txCharacteristicUUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
 )
 
-// Command codes (to device)
+// Command codes (to device). The full set the firmware understands
+// (companion_radio/MyMesh.cpp CMD_*); some are defined here for future use and
+// have no sender helper yet.
 const (
-	cmdAppStart          = 0x01
-	cmdSendTxtMsg        = 0x02
-	cmdSendChannelTxtMsg = 0x03
-	cmdGetContacts       = 0x04
-	cmdSetDeviceTime     = 0x06
-	cmdSendSelfAdvert    = 0x07
-	cmdSetAdvertName     = 0x08
-	cmdAddUpdateContact  = 0x09
-	cmdSyncNextMessage   = 0x0A
-	cmdResetPath         = 0x0D
-	cmdSetAdvertLatLon   = 0x0E
-	cmdRemoveContact     = 0x0F
-	cmdReboot            = 0x13
-	cmdGetBattAndStorage = 0x14
-	cmdDeviceQuery       = 0x16
-	cmdGetContactByKey   = 0x1E
-	cmdGetChannel        = 0x1F
-	cmdSetChannel        = 0x20
-	cmdSetOtherParams    = 0x26
-	cmdGetCustomVar      = 0x28
-	cmdSetCustomVar      = 0x29
-	cmdSetAutoAddConfig  = 0x3A
-	cmdGetAutoAddConfig  = 0x3B
-	cmdSetPathHashMode   = 0x3D
-	cmdGetStats          = 0x38
+	cmdAppStart             = 0x01
+	cmdSendTxtMsg           = 0x02
+	cmdSendChannelTxtMsg    = 0x03
+	cmdGetContacts          = 0x04 // with optional 'since' for efficient sync
+	cmdGetDeviceTime        = 0x05 // query device RTC (reply: respCodeCurrTime)
+	cmdSetDeviceTime        = 0x06
+	cmdSendSelfAdvert       = 0x07
+	cmdSetAdvertName        = 0x08
+	cmdAddUpdateContact     = 0x09
+	cmdSyncNextMessage      = 0x0A
+	cmdSetRadioParams       = 0x0B
+	cmdSetRadioTxPower      = 0x0C
+	cmdResetPath            = 0x0D
+	cmdSetAdvertLatLon      = 0x0E
+	cmdRemoveContact        = 0x0F
+	cmdShareContact         = 0x10
+	cmdExportContact        = 0x11 // reply: respCodeExportContact
+	cmdImportContact        = 0x12
+	cmdReboot               = 0x13
+	cmdGetBattAndStorage    = 0x14 // was CMD_GET_BATTERY_VOLTAGE
+	cmdSetTuningParams      = 0x15
+	cmdDeviceQuery          = 0x16
+	cmdExportPrivateKey     = 0x17 // reply: respCodePrivateKey
+	cmdImportPrivateKey     = 0x18
+	cmdSendRawData          = 0x19
+	cmdSendLogin            = 0x1A // reply: pushCodeLoginSuccess/Fail
+	cmdSendStatusReq        = 0x1B // reply: pushCodeStatusResponse
+	cmdHasConnection        = 0x1C
+	cmdLogout               = 0x1D // 'Disconnect'
+	cmdGetContactByKey      = 0x1E
+	cmdGetChannel           = 0x1F
+	cmdSetChannel           = 0x20
+	cmdSignStart            = 0x21 // reply: respCodeSignStart
+	cmdSignData             = 0x22 // reply: respCodeSignature
+	cmdSignFinish           = 0x23
+	cmdSendTracePath        = 0x24 // reply: pushCodeTraceData
+	cmdSetDevicePin         = 0x25
+	cmdSetOtherParams       = 0x26
+	cmdSendTelemetryReq     = 0x27 // reply: pushCodeTelemetryResponse
+	cmdGetCustomVar         = 0x28 // CMD_GET_CUSTOM_VARS
+	cmdSetCustomVar         = 0x29
+	cmdGetAdvertPath        = 0x2A // reply: respCodeAdvertPath
+	cmdGetTuningParams      = 0x2B // reply: respCodeTuningParams
+	cmdSendBinaryReq        = 0x32 // reply: pushCodeBinaryResponse
+	cmdFactoryReset         = 0x33
+	cmdSendPathDiscoveryReq = 0x34 // reply: pushCodePathDiscoveryResponse
+	cmdSetFloodScopeKey     = 0x36 // v8+
+	cmdSendControlData      = 0x37 // v8+, reply: pushCodeControlData
+	cmdGetStats             = 0x38 // v8+, second byte is stats type
+	cmdSendAnonReq          = 0x39
+	cmdSetAutoAddConfig     = 0x3A
+	cmdGetAutoAddConfig     = 0x3B
+	cmdGetAllowedRepeatFreq = 0x3C
+	cmdSetPathHashMode      = 0x3D
+	cmdSendChannelData      = 0x3E // reply: respCodeChannelDataRecv
+	cmdSetDefaultFloodScope = 0x3F
+	cmdGetDefaultFloodScope = 0x40 // reply: respCodeDefaultFloodScope
+	cmdSendRawPacket        = 0x41
 )
 
 // Response codes (from device)
