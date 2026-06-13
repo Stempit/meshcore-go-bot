@@ -208,7 +208,7 @@ func (c *MeshCoreClient) parseChannelMessageV3(data []byte) {
 	// Correlate with the most recent pending 0x88 raw frame (same radio packet).
 	c.mu.RLock()
 	ch := c.channels[channelIndex]
-	mqttBridge := c.mqtt
+	publisher := c.publisher
 	c.mu.RUnlock()
 
 	channelName := fmt.Sprintf("ch%d", channelIndex)
@@ -242,8 +242,8 @@ func (c *MeshCoreClient) parseChannelMessageV3(data []byte) {
 		}
 	}
 
-	if mqttBridge != nil {
-		mqttBridge.QueueChannelPacket(rawData, false, snr, rssi, channelIndex, channelName, senderName, text, channelKeyHex)
+	if publisher != nil {
+		publisher.QueueChannelPacket(rawData, false, snr, rssi, channelIndex, channelName, senderName, text, channelKeyHex)
 	}
 
 	// Extract path bytes from raw RF packet so the bot can show repeater IDs.
@@ -455,7 +455,7 @@ func (c *MeshCoreClient) parseChannelMessage(data []byte) {
 	// Publish to MQTT packets topic with decoded fields.
 	c.mu.RLock()
 	ch := c.channels[channelIndex]
-	mqttBridge := c.mqtt
+	publisher := c.publisher
 	c.mu.RUnlock()
 
 	channelName := fmt.Sprintf("ch%d", channelIndex)
@@ -481,8 +481,8 @@ func (c *MeshCoreClient) parseChannelMessage(data []byte) {
 		}
 	}
 
-	if mqttBridge != nil {
-		mqttBridge.QueueChannelPacket(rawData, false, snr, rssi, channelIndex, channelName, senderName, text, channelKeyHex)
+	if publisher != nil {
+		publisher.QueueChannelPacket(rawData, false, snr, rssi, channelIndex, channelName, senderName, text, channelKeyHex)
 	}
 
 	// отправляем в канал входящих сообщений

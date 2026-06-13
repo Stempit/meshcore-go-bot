@@ -811,8 +811,8 @@ func (b *MQTTBridge) publishPacket(packet *QueuedPacket) {
 		PacketType: fmt.Sprintf("%d", getPayloadType(packet.RawData)),
 		Route:      getRouteType(packet.RawData),
 		PayloadLen: fmt.Sprintf("%d", getPayloadLen(packet.RawData)),
-		Raw:  hex.EncodeToString(packet.RawData),
-		Hash: packet.Hash,
+		Raw:        hex.EncodeToString(packet.RawData),
+		Hash:       packet.Hash,
 	}
 
 	if !packet.IsTX {
@@ -1673,6 +1673,18 @@ func (b *MQTTBridge) GetConfig() *MQTTConfig {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	return b.config
+}
+
+// DevicePrivKey returns the configured device private key (hex), or "" if unset.
+// It lets the bridge satisfy the meshcore_bt.PacketPublisher interface without
+// exposing the whole config.
+func (b *MQTTBridge) DevicePrivKey() string {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if b.config == nil {
+		return ""
+	}
+	return b.config.DevicePrivKey
 }
 
 // ============================================================================

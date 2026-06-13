@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"meshbot/internal/historylog"
-	"meshbot/internal/mqttbridge"
 
 	"go.bug.st/serial"
 	"tinygo.org/x/bluetooth"
@@ -55,11 +54,9 @@ type MeshCoreClient struct {
 	channelMsgs       map[int][]*ChannelMessage
 	stats             *CompanionRadioStats // накопленная статистика (все типы)
 
-	// MQTT bridge
-	mqtt *mqttbridge.MQTTBridge
-
-	// Contact lookup function for MQTT message sender names
-	contactLookupFunc func(pubKey []byte) string
+	// publisher is an optional sink for received/transmitted RF packets
+	// (e.g. the MQTT bridge). nil when no publisher is attached.
+	publisher PacketPublisher
 
 	// pendingRaw holds raw RF packets from 0x88 frames waiting to be correlated
 	// with a decoded 0x11 channel message frame. Both frames arrive sequentially

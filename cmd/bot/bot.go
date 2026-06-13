@@ -17,6 +17,7 @@ import (
 	"meshbot/internal/config"
 	"meshbot/internal/historylog"
 	meshcore "meshbot/internal/meshcore_bt"
+	"meshbot/internal/mqttbridge"
 	"meshbot/internal/proxy"
 	"meshbot/internal/tgbridge"
 )
@@ -82,10 +83,13 @@ func main() {
 	// log history in client
 	client.SetHistoryLogger(histlog)
 
-	// mqtt init
+	// mqtt init — optional. The bridge is constructed here, in the composition
+	// root, and attached to the client as a packet publisher; the meshcore_bt
+	// driver itself has no dependency on the MQTT package.
 	mqttCfg := config.Get().MQTT
-	client.SetMQTTConfig(&mqttCfg)
-	defer client.StopMQTT()
+	if bridge := startMQTTBridge(client, &mqttCfg); bridge != nil {
+		defer bridge.Stop()
+	}
 	client.RequestAllStats()
 
 	// ─── Message channels ─────────────────────────────────────────────────────
@@ -221,13 +225,7 @@ func main() {
 			slog.Error("Failed to start Telegram bridge", "error", err)
 		} else {
 			tgb.OnMessage(func(meshChannelName, senderName, text string, shrink bool) {
-				var tgChannel *meshcore.Channel
-				for _, ch := range client.GetChannels() {
-					if ch.Name == meshChannelName {
-						tgChannel = ch
-						break
-					}
-				}
+				tgChannel := client.GetChannelByName(meshChannelName)
 				if tgChannel == nil {
 					slog.Warn("Telegram bridge: meshcore channel not found", "name", meshChannelName)
 					return
@@ -383,6 +381,78 @@ drainLoop:
 	slog.Info("Shutting down...")
 }
 
+// startMQTTBridge constructs the MQTT bridge, wires device-info/stats forwarding,
+// and attaches it to the client as a packet publisher. MQTT is optional: if the
+// bridge fails to start, it logs and returns nil so startup continues without it.
+func startMQTTBridge(client *meshcore.MeshCoreClient, cfg *mqttbridge.MQTTConfig) *mqttbridge.MQTTBridge {
+	bridge := mqttbridge.NewMQTTBridge(cfg)
+	bridge.SetLogger(slog.Default())
+	bridge.SetCallbacks(mqttbridge.MQTTCallbacks{
+		OnConnected:    func(broker string) { slog.Info("MQTT connected", "broker", broker) },
+		OnDisconnected: func(broker string) { slog.Info("MQTT disconnected", "broker", broker) },
+	})
+	if err := bridge.Start(); err != nil {
+		slog.Error("Failed to start MQTT bridge", "error", err)
+		return nil
+	}
+
+	// Seed current device info, then keep the bridge updated as self-info and
+	// stats arrive from the device.
+	if info := client.GetSelfInfo(); info != nil {
+		bridge.SetDeviceInfo(toDeviceInfo(info))
+	}
+	client.OnSelfInfo(func(info *meshcore.SelfInfo) { bridge.SetDeviceInfo(toDeviceInfo(info)) })
+	client.OnStats(func(stats *meshcore.CompanionRadioStats) { bridge.SetDeviceStats(toDeviceStats(stats)) })
+
+	client.SetPacketPublisher(bridge)
+	return bridge
+}
+
+// toDeviceInfo converts meshcore SelfInfo to the MQTT bridge's DeviceInfo.
+func toDeviceInfo(info *meshcore.SelfInfo) *mqttbridge.DeviceInfo {
+	if info == nil {
+		return nil
+	}
+	return &mqttbridge.DeviceInfo{
+		PublicKey:       info.PublicKey,
+		Name:            info.Name,
+		TxPower:         info.TxPower,
+		Latitude:        info.Latitude,
+		Longitude:       info.Longitude,
+		FreqHz:          info.FreqHz,
+		BwHz:            info.BwHz,
+		Sf:              info.Sf,
+		Cr:              info.Cr,
+		FirmwareVersion: info.FirmwareVersion,
+		Model:           info.Model,
+	}
+}
+
+// toDeviceStats converts meshcore CompanionRadioStats to the bridge's DeviceStats.
+func toDeviceStats(stats *meshcore.CompanionRadioStats) *mqttbridge.DeviceStats {
+	if stats == nil {
+		return nil
+	}
+	return &mqttbridge.DeviceStats{
+		BatteryMv:         stats.BatteryMv,
+		UptimeSecs:        stats.UptimeSecs,
+		Errors:            stats.Errors,
+		QueueLen:          stats.QueueLen,
+		TxAirSecs:         stats.TxAirSecs,
+		RxAirSecs:         stats.RxAirSecs,
+		NoiseFloorDbm:     stats.NoiseFloorDbm,
+		LastRssi:          stats.LastRssi,
+		LastSnrDb:         stats.LastSnrDb,
+		PacketsRecv:       stats.PacketsRecv,
+		PacketsSent:       stats.PacketsSent,
+		PacketsFloodTx:    stats.PacketsFloodTx,
+		PacketsDirectTx:   stats.PacketsDirectTx,
+		PacketsFloodRx:    stats.PacketsFloodRx,
+		PacketsDirectRx:   stats.PacketsDirectRx,
+		PacketsRecvErrors: stats.PacketsRecvErrors,
+	}
+}
+
 // inflightSet tracks senders that currently have a command being processed, so
 // one sender can't occupy multiple worker slots by spamming slow commands.
 // begin reports whether the slot was acquired; false means the sender already
@@ -419,13 +489,7 @@ func processDM(m *meshcore.Message, client *meshcore.MeshCoreClient, outgoingCh 
 
 	// Look up the full contact record for the sender.
 	shortKey := fmt.Sprintf("%x", m.SenderKey[:6])
-	var contact *meshcore.Contact
-	for _, c := range client.GetContacts() {
-		if fmt.Sprintf("%x", c.PublicKey[:6]) == shortKey {
-			contact = c
-			break
-		}
-	}
+	contact := client.FindContactByKeyPrefix(m.SenderKey[:6])
 	if contact == nil {
 		contact = &meshcore.Contact{
 			PublicKey: m.SenderKey,
@@ -498,20 +562,17 @@ func processChannelMessage(m *meshcore.ChannelMessage, client *meshcore.MeshCore
 	// Resolve sender coordinates and public key for commands.
 	var senderLat, senderLon *float64
 	var senderKeyHexCh string
-	for _, c := range client.GetContacts() {
-		if c.Name == m.SenderName {
-			senderLat = c.Latitude
-			senderLon = c.Longitude
-			senderKeyHexCh = fmt.Sprintf("%x", c.PublicKey)
-			break
-		}
+	if c := client.FindContactByName(m.SenderName); c != nil {
+		senderLat = c.Latitude
+		senderLon = c.Longitude
+		senderKeyHexCh = fmt.Sprintf("%x", c.PublicKey)
 	}
 
 	// forwardBotReply sends a bot reply to Telegram only when this mesh channel
 	// has a matching entry in the Targets config (Forward filters internally).
 	botName := "Bot"
-	if info := client.GetSelfInfo(); info != nil && info.Name != "" {
-		botName = info.Name
+	if name := client.SelfName(); name != "" {
+		botName = name
 	}
 	forwardBotReply := func(text string) {
 		if tgb != nil && tgb.HasTarget(channel.Name) {
