@@ -93,14 +93,26 @@ func (c *MeshCoreClient) parseContactMessageV3(data []byte) {
 		return
 	}
 
+	// The companion frame carries only the hop count; the actual path bytes are
+	// in the correlated raw RF packet (present only for live, not history-synced,
+	// messages). This reflects the real route the message took — e.g. a sender's
+	// forced path — rather than the bot's stored outbound path to the contact.
+	pathBytes, pathHops := c.takePendingRawPath()
+	msgPathLen := pathLen
+	msgPathBytes := contactPath
+	if len(pathBytes) > 0 {
+		msgPathLen = pathHops
+		msgPathBytes = pathBytes
+	}
+
 	msg := &Message{
 		SenderKey:  fullKey,
 		Text:       text,
 		Timestamp:  time.Unix(int64(timestampRaw), 0),
 		IsOutgoing: false,
 		Status:     "delivered",
-		PathLength: pathLen,
-		PathBytes:  contactPath,
+		PathLength: msgPathLen,
+		PathBytes:  msgPathBytes,
 		MessageID:  fmt.Sprintf("%x-%d", prefix, timestampRaw),
 	}
 
@@ -110,7 +122,7 @@ func (c *MeshCoreClient) parseContactMessageV3(data []byte) {
 	c.mu.Unlock()
 
 	c.logger.Info("Received contact message V3", "sender", senderName, "key", key, "text", text,
-		"pathLen", pathLen, "path", formatPath(pathLen, contactPath))
+		"pathLen", msg.PathLength, "path", pathHex(pathBytes))
 
 	if c.histLog != nil {
 		if err := c.histLog.LogDMIncoming(senderName, text, msg.Timestamp); err != nil {
@@ -198,9 +210,6 @@ func (c *MeshCoreClient) parseChannelMessageV3(data []byte) {
 	c.channelMsgs[channelIndex] = append(c.channelMsgs[channelIndex], msg)
 	c.mu.Unlock()
 
-	c.logger.Info("Channel message V3 received",
-		"channel", channelIndex, "sender", senderName, "text", text, "pathLen", pathLen)
-
 	if c.onChannelMessage != nil {
 		c.onChannelMessage(msg)
 	}
@@ -248,10 +257,16 @@ func (c *MeshCoreClient) parseChannelMessageV3(data []byte) {
 	}
 
 	// Extract path bytes from raw RF packet so the bot can show repeater IDs.
+	// The path is only on the wire for live (just-delivered) messages; those
+	// synced from the device's history arrive without a correlated 0x88 frame.
 	if pathBytes, hopCount := extractPathFromRaw(rawData); len(pathBytes) > 0 {
 		msg.PathBytes = pathBytes
 		msg.PathLength = hopCount
 	}
+
+	c.logger.Info("Channel message V3 received",
+		"channel", channelIndex, "sender", senderName, "text", text,
+		"pathLen", msg.PathLength, "path", pathHex(msg.PathBytes))
 
 	// отправляем в канал входящих сообщений
 	select {
@@ -259,6 +274,41 @@ func (c *MeshCoreClient) parseChannelMessageV3(data []byte) {
 	default:
 		c.logger.Warn("Incoming message channel full, dropping message")
 	}
+}
+
+// pathHex renders raw path hop bytes as hex for logging, or "n/a" when the path
+// is unavailable (e.g. a message synced from device history with no live packet).
+func pathHex(pathBytes []byte) string {
+	if len(pathBytes) == 0 {
+		return "n/a"
+	}
+	return hexHops(pathBytes)
+}
+
+// hexHops renders path bytes as colon-separated hex hop IDs, e.g. "db:58:79".
+func hexHops(b []byte) string {
+	parts := make([]string, len(b))
+	for i, by := range b {
+		parts[i] = fmt.Sprintf("%02x", by)
+	}
+	return strings.Join(parts, ":")
+}
+
+// takePendingRawPath returns the path hops from the oldest still-valid pending
+// raw RF packet and removes it. The 0x88 raw frame arrives just before its
+// decoded companion frame, so the oldest entry corresponds to this message.
+// Returns nil, 0 when no live raw packet is available (e.g. a message synced
+// from device history). Must be called from the frameHandler goroutine, which
+// is the only writer of c.pendingRaw.
+func (c *MeshCoreClient) takePendingRawPath() (pathBytes []byte, hopCount int) {
+	for i := 0; i < len(c.pendingRaw); i++ {
+		p := c.pendingRaw[i]
+		if time.Since(p.arrivedAt) <= pendingRawTTL {
+			c.pendingRaw = append(c.pendingRaw[:i], c.pendingRaw[i+1:]...)
+			return extractPathFromRaw(p.rawData)
+		}
+	}
+	return nil, 0
 }
 
 // extractPathFromRaw parses the path bytes out of a raw RF packet.
@@ -355,14 +405,24 @@ func (c *MeshCoreClient) parseContactMessage(data []byte) {
 		c.logger.Warn("parseContactMessage: unknown sender", "prefix", fmt.Sprintf("%x", prefix))
 	}
 
+	// Prefer the real path from the correlated raw RF packet over the bot's
+	// stored outbound path to the contact (see parseContactMessageV3).
+	pathBytes, pathHops := c.takePendingRawPath()
+	msgPathLen := pathLen
+	msgPathBytes := contactPath
+	if len(pathBytes) > 0 {
+		msgPathLen = pathHops
+		msgPathBytes = pathBytes
+	}
+
 	msg := &Message{
 		SenderKey:  fullKey,
 		Text:       text,
 		Timestamp:  time.Unix(int64(timestampRaw), 0),
 		IsOutgoing: false,
 		Status:     "delivered",
-		PathLength: pathLen,
-		PathBytes:  contactPath,
+		PathLength: msgPathLen,
+		PathBytes:  msgPathBytes,
 		MessageID:  fmt.Sprintf("%x-%d", prefix, timestampRaw),
 	}
 
@@ -372,7 +432,7 @@ func (c *MeshCoreClient) parseContactMessage(data []byte) {
 	c.mu.Unlock()
 
 	c.logger.Debug("Received contact message", "sender", key, "text", text,
-		"pathLen", pathLen, "path", formatPath(pathLen, contactPath))
+		"pathLen", msg.PathLength, "path", pathHex(pathBytes))
 
 	if c.onMessage != nil {
 		c.onMessage(msg)
@@ -447,10 +507,6 @@ func (c *MeshCoreClient) parseChannelMessage(data []byte) {
 	c.channelMsgs[channelIndex] = append(c.channelMsgs[channelIndex], msg)
 	c.mu.Unlock()
 
-	c.logger.Info("Channel message received (V1)",
-		"channel", channelIndex, "sender", fmt.Sprintf("%q", senderName), "text", fmt.Sprintf("%q", text),
-		"pathLen", pathLen)
-
 	if c.onChannelMessage != nil {
 		c.onChannelMessage(msg)
 	}
@@ -487,6 +543,16 @@ func (c *MeshCoreClient) parseChannelMessage(data []byte) {
 	if publisher != nil {
 		publisher.QueueChannelPacket(rawData, false, snr, rssi, channelIndex, channelName, senderName, text, channelKeyHex)
 	}
+
+	// Extract path bytes from the raw RF packet so the bot can show repeater IDs.
+	if pathBytes, hopCount := extractPathFromRaw(rawData); len(pathBytes) > 0 {
+		msg.PathBytes = pathBytes
+		msg.PathLength = hopCount
+	}
+
+	c.logger.Info("Channel message received (V1)",
+		"channel", channelIndex, "sender", fmt.Sprintf("%q", senderName), "text", fmt.Sprintf("%q", text),
+		"pathLen", msg.PathLength, "path", pathHex(msg.PathBytes))
 
 	// отправляем в канал входящих сообщений
 	select {

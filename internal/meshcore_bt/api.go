@@ -124,7 +124,7 @@ func formatPath(pathLen int, path []byte) string {
 	if pathLen > len(path) {
 		pathLen = len(path)
 	}
-	return fmt.Sprintf("%x", path[:pathLen])
+	return hexHops(path[:pathLen])
 }
 
 func (c *MeshCoreClient) SendMessageWithRetry(contact *Contact, text string, waitForDelivery bool, savedPathTries, resetPathTries int, timeout time.Duration) error {
