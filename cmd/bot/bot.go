@@ -256,14 +256,28 @@ func main() {
 
 	// ─── Incoming processor goroutine ─────────────────────────────────────────
 
+	// Each incoming message is processed in its own goroutine so that slow
+	// commands (.claw, .llm — they block on network) don't hold up fast ones
+	// like .ping. Reply *generation* runs concurrently; reply *sending* stays
+	// serialized through outgoingCh, since the radio can only transmit one
+	// message at a time. The semaphore caps total in-flight messages so a
+	// burst can't spawn unbounded goroutines. The per-sender guard (one
+	// command in flight per sender) lives inside the processors, where the
+	// sender identity is already resolved.
 	go func() {
+		const maxConcurrent = 8
+		sem := make(chan struct{}, maxConcurrent)
 		for msg := range incomingCh {
-			switch m := msg.(type) {
-			case *meshcore.Message:
-				processDM(m, client, outgoingCh)
-			case *meshcore.ChannelMessage:
-				processChannelMessage(m, client, tgb, outgoingCh)
-			}
+			sem <- struct{}{}
+			go func(msg any) {
+				defer func() { <-sem }()
+				switch m := msg.(type) {
+				case *meshcore.Message:
+					processDM(m, client, outgoingCh)
+				case *meshcore.ChannelMessage:
+					processChannelMessage(m, client, tgb, outgoingCh)
+				}
+			}(msg)
 		}
 	}()
 
@@ -369,6 +383,33 @@ drainLoop:
 	slog.Info("Shutting down...")
 }
 
+// inflightSet tracks senders that currently have a command being processed, so
+// one sender can't occupy multiple worker slots by spamming slow commands.
+// begin reports whether the slot was acquired; false means the sender already
+// has a command in flight.
+type inflightSet struct {
+	mu sync.Mutex
+	m  map[string]struct{}
+}
+
+func (s *inflightSet) begin(key string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.m[key]; ok {
+		return false
+	}
+	s.m[key] = struct{}{}
+	return true
+}
+
+func (s *inflightSet) done(key string) {
+	s.mu.Lock()
+	delete(s.m, key)
+	s.mu.Unlock()
+}
+
+var inflight = &inflightSet{m: make(map[string]struct{})}
+
 func processDM(m *meshcore.Message, client *meshcore.MeshCoreClient, outgoingCh chan<- outgoingMsg) {
 	senderKeyHex := fmt.Sprintf("%x", m.SenderKey)
 	if !config.Get().Security.Direct.IsAllowed(senderKeyHex) {
@@ -393,6 +434,18 @@ func processDM(m *meshcore.Message, client *meshcore.MeshCoreClient, outgoingCh 
 	}
 
 	slog.Info("Direct message received", "sender", shortKey, "text", m.Text)
+
+	// One command in flight per sender: reply busy instead of queuing a second.
+	if !inflight.begin("dm:" + senderKeyHex) {
+		slog.Info("Sender busy, replying busy", "sender", contact.Name)
+		select {
+		case outgoingCh <- outgoingMsg{contact: contact, text: "busy, try again", ack: true}:
+		default:
+			slog.Warn("Outgoing channel full, dropping busy reply", "sender", contact.Name)
+		}
+		return
+	}
+	defer inflight.done("dm:" + senderKeyHex)
 
 	if flood, ok := commands.ParseAdvertCommand(m.Text); ok {
 		slog.Info("Sending advert", "flood", flood)
@@ -465,6 +518,20 @@ func processChannelMessage(m *meshcore.ChannelMessage, client *meshcore.MeshCore
 			tgb.Forward(channel.Name, botName, text)
 		}
 	}
+
+	// One command in flight per sender: reply busy instead of queuing a second.
+	if !inflight.begin("ch:" + m.SenderName) {
+		slog.Info("Sender busy, replying busy", "channel", channel.Name, "sender", m.SenderName)
+		text := fmt.Sprintf("@[%s] busy, try again", m.SenderName)
+		select {
+		case outgoingCh <- outgoingMsg{channel: channel, text: text, ack: true}:
+			forwardBotReply(text)
+		default:
+			slog.Warn("Outgoing channel full, dropping busy reply", "channel", channel.Name)
+		}
+		return
+	}
+	defer inflight.done("ch:" + m.SenderName)
 
 	if flood, ok := commands.ParseAdvertCommand(m.Text); ok {
 		slog.Info("Sending advert", "flood", flood)
