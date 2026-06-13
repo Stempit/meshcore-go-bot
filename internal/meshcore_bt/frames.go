@@ -109,7 +109,8 @@ func (c *MeshCoreClient) parseContactMessageV3(data []byte) {
 	c.messages[key] = append(c.messages[key], msg)
 	c.mu.Unlock()
 
-	c.logger.Info("Received contact message V3", "sender", senderName, "key", key, "text", text)
+	c.logger.Info("Received contact message V3", "sender", senderName, "key", key, "text", text,
+		"pathLen", pathLen, "path", formatPath(pathLen, contactPath))
 
 	if c.histLog != nil {
 		if err := c.histLog.LogDMIncoming(senderName, text, msg.Timestamp); err != nil {
@@ -198,7 +199,7 @@ func (c *MeshCoreClient) parseChannelMessageV3(data []byte) {
 	c.mu.Unlock()
 
 	c.logger.Info("Channel message V3 received",
-		"channel", channelIndex, "sender", senderName, "text", text)
+		"channel", channelIndex, "sender", senderName, "text", text, "pathLen", pathLen)
 
 	if c.onChannelMessage != nil {
 		c.onChannelMessage(msg)
@@ -370,7 +371,8 @@ func (c *MeshCoreClient) parseContactMessage(data []byte) {
 	c.messages[key] = append(c.messages[key], msg)
 	c.mu.Unlock()
 
-	c.logger.Debug("Received contact message", "sender", key, "text", text)
+	c.logger.Debug("Received contact message", "sender", key, "text", text,
+		"pathLen", pathLen, "path", formatPath(pathLen, contactPath))
 
 	if c.onMessage != nil {
 		c.onMessage(msg)
@@ -446,7 +448,8 @@ func (c *MeshCoreClient) parseChannelMessage(data []byte) {
 	c.mu.Unlock()
 
 	c.logger.Info("Channel message received (V1)",
-		"channel", channelIndex, "sender", fmt.Sprintf("%q", senderName), "text", fmt.Sprintf("%q", text))
+		"channel", channelIndex, "sender", fmt.Sprintf("%q", senderName), "text", fmt.Sprintf("%q", text),
+		"pathLen", pathLen)
 
 	if c.onChannelMessage != nil {
 		c.onChannelMessage(msg)
