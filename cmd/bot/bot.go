@@ -111,11 +111,11 @@ func main() {
 				time.Sleep(wait)
 			}
 			if msg.channel != nil {
-				repeats := config.Get().Connection.ChannelSendRepeats
-				if repeats < 1 {
-					repeats = 3 // default: transmit each channel reply 3 times
+				transmissions := config.Get().Connection.ChannelTransmissions
+				if transmissions < 1 {
+					transmissions = 3 // default: transmit each channel reply 3 times
 				}
-				if err := client.SendChannelMessageWithRetry(msg.channel, msg.text, msg.ack, 1, repeats, 3*time.Second); err != nil {
+				if err := client.SendChannelMessageWithRetry(msg.channel, msg.text, msg.ack, 1, transmissions, 3*time.Second); err != nil {
 					slog.Error("Failed to send channel reply", "channel", msg.channel.Name, "error", err)
 				} else {
 					slog.Info("Channel reply sent", "channel", msg.channel.Name)

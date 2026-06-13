@@ -42,10 +42,12 @@ type ConnectionConfig struct {
 	SerialPort string `yaml:"serial_port"`
 	// SerialBaud sets the baud rate for the serial transport (default 115200).
 	SerialBaud int `yaml:"serial_baud"`
-	// ChannelSendRepeats sets how many times each channel reply is transmitted
+	// ChannelTransmissions sets how many times each channel reply is transmitted
 	// (the same packet, deduplicated by receivers) to improve delivery against
-	// silent RF drops. 0 or unset defaults to 3; 1 disables repeats.
-	ChannelSendRepeats int `yaml:"channel_send_repeats"`
+	// silent RF drops. This is our own node sending the packet repeatedly, not
+	// the network "repeat" by repeater nodes. 0 or unset defaults to 3; 1 sends
+	// a single transmission.
+	ChannelTransmissions int `yaml:"channel_transmissions"`
 }
 
 type ProxyConfig struct {

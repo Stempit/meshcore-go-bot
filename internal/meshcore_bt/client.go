@@ -2643,71 +2643,75 @@ func (c *MeshCoreClient) SendMessage(contact *Contact, text string) error {
 	return err
 }
 
-// channelRepeatGap is the pause between repeated transmissions of the same
-// channel packet. It spaces the copies out on air without flooding the device's
-// BLE command path or its TX duty-cycle budget.
-const channelRepeatGap = 1500 * time.Millisecond
+// channelTxGap is the pause between successive transmissions of the same
+// channel packet. It spaces the transmissions out on air without flooding the
+// device's BLE command path or its TX duty-cycle budget.
+const channelTxGap = 1500 * time.Millisecond
 
 // SendChannelMessageWithRetry sends a message to a channel, transmitting the
-// SAME packet `repeats` times to improve delivery reliability (the official
-// apps do the same).
+// SAME packet `transmissions` times to improve delivery reliability (the
+// official apps do the same).
 //
-// Why repeats are needed: channel messages have no delivery ACK, and respCodeOk
-// only means the firmware accepted the command and QUEUED the packet — not that
-// it was transmitted. After OK, the firmware can still silently drop the queued
-// packet (TX duty-cycle budget exhausted, channel-activity/CAD busy, radio TX
-// start failure, or a full outbound queue) with no notification to the companion
-// app, and its own seen-hash dedup hides RF rebroadcasts of the packet from us.
-// So a single OK is a weak guarantee and the old "retry on rejection" loop never
-// helped — OK arrives reliably on the first attempt while the packet is lost on
-// air. Sending the identical packet several times gives each copy an independent
-// chance to win the channel; receivers dedup by packet_hash (see
-// sendChannelTextMessageTS) and show the message only once.
+// Why multiple transmissions are needed: channel messages have no delivery ACK,
+// and respCodeOk only means the firmware accepted the command and QUEUED the
+// packet — not that it was transmitted. After OK, the firmware can still
+// silently drop the queued packet (TX duty-cycle budget exhausted,
+// channel-activity/CAD busy, radio TX start failure, or a full outbound queue)
+// with no notification to the companion app, and its own seen-hash dedup hides
+// RF rebroadcasts of the packet from us. So a single OK is a weak guarantee and
+// the old "retry on rejection" loop never helped — OK arrives reliably on the
+// first attempt while the packet is lost on air. Transmitting the identical
+// packet several times gives each transmission an independent chance to win the
+// channel; receivers dedup by packet_hash (see sendChannelTextMessageTS) and
+// show the message only once.
+//
+// Note: this is our own node sending the same packet repeatedly; it is NOT the
+// MeshCore network "repeat"/retransmit by repeater nodes.
 //
 // waitForDelivery is accepted for API compatibility but ignored.
 // maxRetries: per-transmission retries when the device explicitly REJECTS the
-// command (0 = single attempt per copy).
-// repeats: how many copies to transmit (values < 1 are treated as 1).
+// command (0 = single attempt per transmission).
+// transmissions: how many times to transmit the packet (values < 1 → 1).
 // timeout: how long to wait for the device OK per attempt.
-func (c *MeshCoreClient) SendChannelMessageWithRetry(channel *Channel, text string, waitForDelivery bool, maxRetries, repeats int, timeout time.Duration) error {
+func (c *MeshCoreClient) SendChannelMessageWithRetry(channel *Channel, text string, waitForDelivery bool, maxRetries, transmissions int, timeout time.Duration) error {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
 	defer time.Sleep(150 * time.Millisecond) // avoid flooding the device
 
-	if repeats < 1 {
-		repeats = 1
+	if transmissions < 1 {
+		transmissions = 1
 	}
 
 	c.logger.Info("Sending channel message with retry",
-		"channel", channel.Index, "name", channel.Name, "text", text, "repeats", repeats)
+		"channel", channel.Index, "name", channel.Name, "text", text, "transmissions", transmissions)
 
-	// Reuse one timestamp across every repeat so all copies share a packet_hash
+	// Reuse one timestamp across every transmission so they share a packet_hash
 	// and receivers collapse them into a single message.
 	timestamp := uint32(time.Now().Unix())
 
 	queued := 0
 	var lastErr error
-	for rep := 0; rep < repeats; rep++ {
-		if rep > 0 {
-			time.Sleep(channelRepeatGap)
+	for tx := 0; tx < transmissions; tx++ {
+		if tx > 0 {
+			time.Sleep(channelTxGap)
 		}
-		if err := c.sendChannelOnce(byte(channel.Index), text, timestamp, channel.Name, rep+1, repeats, maxRetries, timeout); err != nil {
+		if err := c.sendChannelOnce(byte(channel.Index), text, timestamp, channel.Name, tx+1, transmissions, maxRetries, timeout); err != nil {
 			lastErr = err
-			c.logger.Warn("Channel message copy not queued",
-				"channel", channel.Name, "copy", fmt.Sprintf("%d/%d", rep+1, repeats), "error", err)
+			c.logger.Warn("Channel message transmission not queued",
+				"channel", channel.Name, "tx", fmt.Sprintf("%d/%d", tx+1, transmissions), "error", err)
 			continue
 		}
 		queued++
 	}
 
 	if queued == 0 {
-		return fmt.Errorf("channel message not accepted by device after %d copies: %w", repeats, lastErr)
+		return fmt.Errorf("channel message not accepted by device after %d transmissions: %w", transmissions, lastErr)
 	}
 
 	c.logger.Info("Channel message transmitted",
-		"channel", channel.Name, "copies_queued", fmt.Sprintf("%d/%d", queued, repeats))
+		"channel", channel.Name, "transmissions_queued", fmt.Sprintf("%d/%d", queued, transmissions))
 
-	// Publish/log once: all copies are the same logical message.
+	// Publish/log once: all transmissions are the same logical message.
 	c.publishTXChannelPacket(channel, text, timestamp)
 	if c.histLog != nil {
 		if err := c.histLog.LogChannelOutgoing(channel.Name, text, time.Now()); err != nil {
@@ -2717,11 +2721,12 @@ func (c *MeshCoreClient) SendChannelMessageWithRetry(channel *Channel, text stri
 	return nil
 }
 
-// sendChannelOnce transmits a single copy of a channel packet (with the given
-// fixed timestamp) and waits for the device to confirm it queued the packet
-// (respCodeOk). It retries only when the device explicitly rejects the command.
-func (c *MeshCoreClient) sendChannelOnce(channelIndex byte, text string, timestamp uint32, channelName string, copyNum, copies, maxRetries int, timeout time.Duration) error {
-	copyLabel := fmt.Sprintf("%d/%d", copyNum, copies)
+// sendChannelOnce performs a single transmission of a channel packet (with the
+// given fixed timestamp) and waits for the device to confirm it queued the
+// packet (respCodeOk). It retries only when the device explicitly rejects the
+// command.
+func (c *MeshCoreClient) sendChannelOnce(channelIndex byte, text string, timestamp uint32, channelName string, txNum, transmissions, maxRetries int, timeout time.Duration) error {
+	txLabel := fmt.Sprintf("%d/%d", txNum, transmissions)
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
 			time.Sleep(2 * time.Second)
@@ -2745,19 +2750,19 @@ func (c *MeshCoreClient) sendChannelOnce(channelIndex byte, text string, timesta
 		case sendErr := <-confirmCh:
 			if sendErr != nil {
 				c.logger.Warn("Device rejected channel message, retrying",
-					"error", sendErr, "channel", channelName, "copy", copyLabel, "attempt", attempt)
+					"error", sendErr, "channel", channelName, "tx", txLabel, "attempt", attempt)
 				if attempt == maxRetries {
 					return fmt.Errorf("channel message rejected after %d attempts: %w", maxRetries+1, sendErr)
 				}
 				continue
 			}
-			c.logger.Info("Channel message copy queued by device",
-				"channel", channelName, "copy", copyLabel)
+			c.logger.Info("Channel message transmission queued by device",
+				"channel", channelName, "tx", txLabel)
 			return nil
 		case <-time.After(timeout):
 			c.clearSentConfirm(confirmCh)
 			c.logger.Warn("Channel message: no device OK, retrying",
-				"channel", channelName, "copy", copyLabel, "attempt", attempt)
+				"channel", channelName, "tx", txLabel, "attempt", attempt)
 		}
 	}
 	return fmt.Errorf("channel message not accepted by device after %d attempts", maxRetries+1)
