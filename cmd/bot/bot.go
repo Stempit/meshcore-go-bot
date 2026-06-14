@@ -35,6 +35,37 @@ type outgoingMsg struct {
 	ack     bool
 }
 
+// migrateNotifier nudges nodes still using 1-byte routing hashes to switch to
+// 2-byte. It is set once in main and read from the advert observer and the
+// channel-message handler. nil until main initializes it.
+var migrateNotifier *commands.MigrationNotifier
+
+// warnOldHash posts the migration reminder on channel ch for a node still using
+// 1-byte routing hashes, subject to the per-node cooldown. hashSize is the
+// node's bytes-per-hop (<=0 = unknown, skipped). displayName is the @[…] mention;
+// pubKeyHex keys the cooldown. It is a no-op until migrateNotifier is set.
+func warnOldHash(outgoingCh chan<- outgoingMsg, ch *meshcore.Channel, pubKeyHex, displayName string, hashSize int) {
+	if migrateNotifier == nil || ch == nil || ch.IsEmpty {
+		return
+	}
+	if !migrateNotifier.ShouldWarn(pubKeyHex, hashSize) {
+		return
+	}
+	if displayName == "" {
+		displayName = pubKeyHex
+		if len(displayName) > 8 {
+			displayName = displayName[:8]
+		}
+	}
+	text := fmt.Sprintf("@[%s] %s", displayName, migrateNotifier.Message())
+	slog.Info("Queuing 1-byte hash migration warning", "node", displayName, "channel", ch.Name)
+	select {
+	case outgoingCh <- outgoingMsg{channel: ch, text: text, ack: true}:
+	default:
+		slog.Warn("Outgoing channel full, dropping migration warning", "node", displayName)
+	}
+}
+
 func main() {
 	// config
 	if err := config.Load("config.yaml"); err != nil {
@@ -170,6 +201,19 @@ func main() {
 		}
 	}
 
+	// ─── 1-byte → 2-byte hash migration nudge ────────────────────────────────
+
+	migCfg := config.Get().Migration
+	migMsg := migCfg.Message
+	if migMsg == "" {
+		migMsg = "switch to 2-byte please"
+	}
+	migCooldown := time.Duration(migCfg.CooldownSec) * time.Second
+	if migCooldown <= 0 {
+		migCooldown = 24 * time.Hour
+	}
+	migrateNotifier = commands.NewMigrationNotifier(migCfg.Enabled, migMsg, migCooldown)
+
 	// pendingGreets holds public-key hex strings of nodes whose advert arrived
 	// before their contact record was in the cache. They will be greeted once
 	// the full contact is received via OnContact.
@@ -177,6 +221,14 @@ func main() {
 	var pendingMu sync.Mutex
 
 	client.OnAdvert(func(contact *meshcore.Contact) {
+		// Detect a node still routing with 1-byte hashes. Contact.PathLength is
+		// the firmware-encoded out_path byte (0xFF = flood/unknown); only paths
+		// with real hops reveal the hash size.
+		if pl := contact.PathLength; pl != 0xFF && meshcore.PathHashCount(byte(pl)) > 0 {
+			warnOldHash(outgoingCh, client.GetChannels()[0], fmt.Sprintf("%x", contact.PublicKey),
+				contact.Name, meshcore.PathHashSize(byte(pl)))
+		}
+
 		alreadyKnown, err := knownKeys.CheckAndAdd(contact.PublicKey, contact.Name)
 		if err != nil {
 			slog.Error("Failed to update known keys", "error", err)
@@ -558,6 +610,18 @@ func processChannelMessage(m *meshcore.ChannelMessage, client *meshcore.MeshCore
 		senderLat = c.Latitude
 		senderLon = c.Longitude
 		senderKeyHexCh = fmt.Sprintf("%x", c.PublicKey)
+	}
+
+	// Nudge senders still routing with 1-byte hashes. m.PathBytes/m.PathLength
+	// (meaningful path bytes + hop count) are populated for live messages; their
+	// ratio is the bytes-per-hop. Done before the per-sender in-flight guard so it
+	// fires for any message, not just commands, and never consumes a command slot.
+	if hops := m.PathLength; hops > 0 && len(m.PathBytes) > 0 && len(m.PathBytes)%hops == 0 {
+		warnKey := senderKeyHexCh
+		if warnKey == "" {
+			warnKey = "name:" + m.SenderName
+		}
+		warnOldHash(outgoingCh, channel, warnKey, m.SenderName, len(m.PathBytes)/hops)
 	}
 
 	// forwardBotReply sends a bot reply to Telegram only when this mesh channel
