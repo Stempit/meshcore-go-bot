@@ -7,10 +7,8 @@ A MeshCore mesh-radio bot. Bridges a Bluetooth LE MeshCore device to Telegram, M
 ```bash
 go build ./...                    # build everything
 go build ./cmd/bot                # build the main bot
-go build ./cmd/news               # build the RSS poller daemon
 
 go run ./cmd/bot                  # run the bot (reads config.yaml in CWD)
-go run ./cmd/news                 # run the RSS poller
 go run ./cmd/example              # run the BLE example harness
 go run ./cmd/llm                  # run the LLM prompt test utility
 
@@ -30,7 +28,6 @@ internal/
   historylog/           – per-conversation append-only log files
   llm/                  – Ollama and OpenRouter LLM providers
   mqttbridge/           – MQTT publishing to custom broker + Let's Mesh analyzer
-  rss/                  – RSS feed poller
   tgbridge/             – Telegram bot bridge (long-poll)
 ```
 
@@ -67,13 +64,12 @@ log/
     channels/<name>.txt   – channel message history (used by .last)
     dm/<name>.txt         – direct-message history
   known.txt               – greeted node public keys (hex, one per line)
-  news/<feed>.txt         – RSS items (one per line, newest appended)
-  rss_seen.txt            – persisted RSS GUIDs to avoid re-posting
+  news/<feed>.txt         – RSS items written by the separate newswire app (https://github.com/Stempit/newswire); read by .news
 ```
 
 ## Packages that need care
 
-- **`internal/meshcore_bt/client.go`** (~2300 lines) – BLE protocol state machine. The `sentConfirmCh` channel is a single shared slot; only one send can be in flight at a time. The RSS poller serialises sends with its own mutex for this reason.
+- **`internal/meshcore_bt/client.go`** (~2300 lines) – BLE protocol state machine. The `sentConfirmCh` channel is a single shared slot; only one send can be in flight at a time, so concurrent senders must serialise their sends.
 - **`internal/mqttbridge/bridge.go`** (~1700 lines) – manages multiple MQTT connections (custom broker + EU/US analyzers) with JWT auth (Ed25519). Changes here affect network-visible state.
 - **`internal/config/model.go`** – adding a new config field requires a YAML tag; check for typos before committing.
 
@@ -85,7 +81,7 @@ log/
 | `.trace` | `commands.ProcessTraceMessage` | Haversine distance + hop IDs from `PingMeta` |
 | `.last [n] [channel]` | `commands.ProcessLastCommand` | Last *n* lines from `historylog` (max 7) |
 | `.llm <prompt>` | `commands.ProcessLLMMessage` | LLM query; auto-shrinks response to ≤130 chars |
-| `.news [feed] [n] [offset]` | `commands.ProcessNewsCommand` | Lists feeds or returns recent RSS items |
+| `.news [feed] [n] [offset]` | `commands.ProcessNewsCommand` | Lists feeds or returns recent RSS items from `log/news/`, populated by the [newswire](https://github.com/Stempit/newswire) poller |
 | `.claw <prompt>` | `commands.ProcessClawCommand` | Sends prompt to picoclaw AI agent via WebSocket; auto-shrinks response |
 
 New commands go in `internal/commands/` and must be wired into the `switch` in `commands_server.go`.

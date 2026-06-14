@@ -21,18 +21,6 @@ type SecurityConfig struct {
 	Direct   SecurityListConfig `yaml:"direct"`
 }
 
-type RSSFeedConfig struct {
-	Name     string `yaml:"name"` // used as filename in log/news/<name>.txt
-	URL      string `yaml:"url"`
-	Interval string `yaml:"interval"` // e.g. "5m", "1h"
-}
-
-type RSSConfig struct {
-	Enabled bool            `yaml:"enabled"`
-	SeenDir string          `yaml:"seen_dir"` // defaults to "log/news"
-	Feeds   []RSSFeedConfig `yaml:"feeds"`
-}
-
 // ShrinkLLMConfig configures the "llm" shrink variant. Type/Model are optional
 // overrides that inherit from the top-level LLM section when empty, so a light
 // model can shrink while a big model answers.
@@ -94,7 +82,6 @@ type Config struct {
 	Telegram   tgbridge.TelegramConfig `yaml:"Telegram"`
 	Trace      TraceConfig             `yaml:"Trace"`
 	Security   SecurityConfig          `yaml:"Security"`
-	RSS        RSSConfig               `yaml:"RSS"`
 	Weather    WeatherConfig           `yaml:"Weather"`
 	Stats      StatsConfig             `yaml:"Stats"`
 	Shrink     ShrinkConfig            `yaml:"Shrink"`

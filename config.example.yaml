@@ -95,20 +95,6 @@ Telegram:
       chat_id: -1009876543210
       thread_id: 5                     # topic/thread ID (0 or omit = no thread)
 
-RSS:
-  enabled: true
-  seen_file: log/rss_seen.txt   # omit to use this default path
-  feeds:
-    - name: "habr"
-      url: https://habr.com/ru/rss/news/rated0/?fl=ru
-      interval: 5m
-    - name: "ixbt"
-      url: https://www.ixbt.com/export/news.rss
-      interval: 5m
-    - name: "rbc"
-      url: https://rssexport.rbc.ru/rbcnews/news/30/full.rss
-      interval: 5m
-
 Weather:
   enabled: true
   default_location: "Moscow"  # used when .w is called with no argument
