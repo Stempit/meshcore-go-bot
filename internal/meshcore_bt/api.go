@@ -114,6 +114,19 @@ func (c *MeshCoreClient) RequestChannels(maxChannels int) error {
 //
 // Пример: savedPathTries=3, resetPathTries=3 — сначала 3 попытки по сохранённому
 // пути, затем ещё 3 с принудительным сбросом пути перед каждой попыткой.
+// formatPath renders a routing path as hex hop IDs for logging, or "flood" when
+// the path is unknown (flood-routed). pathLen bounds how many bytes of path are
+// meaningful; extra bytes are ignored and a short path is rendered in full.
+func formatPath(pathLen int, path []byte) string {
+	if pathLen == pathLengthFlood {
+		return "flood"
+	}
+	if pathLen > len(path) {
+		pathLen = len(path)
+	}
+	return hexHops(path[:pathLen])
+}
+
 func (c *MeshCoreClient) SendMessageWithRetry(contact *Contact, text string, waitForDelivery bool, savedPathTries, resetPathTries int, timeout time.Duration) error {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
@@ -125,9 +138,10 @@ func (c *MeshCoreClient) SendMessageWithRetry(contact *Contact, text string, wai
 	totalAttempts := savedPathTries + resetPathTries
 
 	c.logger.Info("Sending private message with retry",
-		"key", fmt.Sprintf("%x", contact.PublicKey), "name", contact.Name,
+		"key", shortKeyHex(contact.PublicKey), "name", contact.Name,
 		"text", text, "waitForDelivery", waitForDelivery,
-		"savedPathTries", savedPathTries, "resetPathTries", resetPathTries)
+		"savedPathTries", savedPathTries, "resetPathTries", resetPathTries,
+		"pathLen", contact.PathLength, "path", formatPath(contact.PathLength, contact.Path))
 
 	for attempt := 0; attempt < totalAttempts; attempt++ {
 		if attempt >= savedPathTries {
