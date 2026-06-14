@@ -114,17 +114,24 @@ func (c *MeshCoreClient) RequestChannels(maxChannels int) error {
 //
 // Пример: savedPathTries=3, resetPathTries=3 — сначала 3 попытки по сохранённому
 // пути, затем ещё 3 с принудительным сбросом пути перед каждой попыткой.
-// formatPath renders a routing path as hex hop IDs for logging, or "flood" when
-// the path is unknown (flood-routed). pathLen bounds how many bytes of path are
-// meaningful; extra bytes are ignored and a short path is rendered in full.
+// formatPath renders a contact's routing path as hex hop IDs for logging, or
+// "flood" when the path is unknown (flood-routed). pathLen is the firmware's
+// encoded out_path_len byte: it carries the hop count (low 6 bits) and the
+// bytes-per-hop (top 2 bits), so multi-byte hops are grouped correctly, e.g.
+// "8888:1cdb". "direct" is shown for a zero-hop path.
 func formatPath(pathLen int, path []byte) string {
 	if pathLen == pathLengthFlood {
 		return "flood"
 	}
-	if pathLen > len(path) {
-		pathLen = len(path)
+	size := pathHashSize(byte(pathLen))
+	n := pathByteLen(byte(pathLen))
+	if n > len(path) {
+		n = len(path)
 	}
-	return hexHops(path[:pathLen])
+	if n == 0 {
+		return "direct"
+	}
+	return hopsHex(path[:n], size)
 }
 
 func (c *MeshCoreClient) SendMessageWithRetry(contact *Contact, text string, waitForDelivery bool, savedPathTries, resetPathTries int, timeout time.Duration) error {
@@ -150,7 +157,7 @@ func (c *MeshCoreClient) SendMessageWithRetry(contact *Contact, text string, wai
 		"key", shortKeyHex(contact.PublicKey), "name", contact.Name,
 		"text", text, "waitForDelivery", waitForDelivery,
 		"savedPathTries", savedPathTries, "resetPathTries", resetPathTries,
-		"pathLen", contact.PathLength, "path", formatPath(contact.PathLength, contact.Path))
+		"pathLen", displayHops(decodeMsgHops(byte(contact.PathLength))), "path", formatPath(contact.PathLength, contact.Path))
 
 	// A single confirmation channel for the WHOLE retry sequence. The companion
 	// device remembers the expected ACK of every attempt (its expected_ack_table),
@@ -197,7 +204,7 @@ func (c *MeshCoreClient) SendMessageWithRetry(contact *Contact, text string, wai
 		if attempt >= savedPathTries {
 			if contact.PathLength != pathLengthFlood {
 				c.logger.Info("Resetting contact path before retry",
-					"attempt", attempt, "name", contact.Name, "key", fmt.Sprintf("%x", contact.PublicKey[:6]))
+					"attempt", attempt, "name", contact.Name, "key", shortKeyHex(contact.PublicKey))
 				if err := c.sendResetPath(contact.PublicKey); err != nil {
 					c.logger.Warn("Path reset failed", "error", err)
 				}
@@ -461,6 +468,11 @@ func (c *MeshCoreClient) SendChannelMessage(channel *Channel, text string) error
 	return nil
 }
 
+// SetContactPath updates a contact's stored route. pathLen must be the
+// firmware-encoded out_path_len byte (hop count in the low 6 bits, bytes-per-hop
+// in the top 2 bits, or 0xFF for flood), and path the matching meaningful path
+// bytes — the same representation parseContact stores and sendUpdateContact
+// writes back.
 func (c *MeshCoreClient) SetContactPath(contact *Contact, path []byte, pathLen int) error {
 	// Создаём копию с новым путём
 	updated := *contact
