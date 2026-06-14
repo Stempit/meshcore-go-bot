@@ -36,14 +36,13 @@ type Source struct {
 	ChatID          int64  `yaml:"chat_id"`           // channel or group ID (e.g. -1001234567890)
 	ThreadID        int    `yaml:"thread_id"`         // topic/thread ID inside the group (group_thread only)
 	MeshChannelName string `yaml:"mesh_channel_name"` // MeshCore channel to forward into (e.g. "#tg")
-	Shrink          bool   `yaml:"shrink"`            // shrink long messages via LLM instead of splitting
 }
 
 // Bridge polls configured Telegram sources and calls OnMessage for each relevant message.
 type Bridge struct {
 	cfg    TelegramConfig
 	bot    *tgbotapi.BotAPI
-	onMsg  func(meshChannelName, senderName, text string, shrink bool)
+	onMsg  func(meshChannelName, senderName, text string)
 	logger *slog.Logger
 	done   chan struct{}
 }
@@ -82,7 +81,7 @@ func New(cfg TelegramConfig, logger *slog.Logger, httpClient *http.Client) (*Bri
 
 // OnMessage registers the callback invoked for each matched message.
 // meshChannelName is the MeshCore channel name from the source config.
-func (b *Bridge) OnMessage(fn func(meshChannelName, senderName, text string, shrink bool)) {
+func (b *Bridge) OnMessage(fn func(meshChannelName, senderName, text string)) {
 	b.onMsg = fn
 }
 
@@ -232,7 +231,7 @@ func (b *Bridge) Forward(meshChannelName, senderName, text string) {
 
 func (b *Bridge) emit(src Source, senderName, text string) {
 	if b.onMsg != nil {
-		b.onMsg(src.MeshChannelName, senderName, text, src.Shrink)
+		b.onMsg(src.MeshChannelName, senderName, text)
 	}
 }
 
