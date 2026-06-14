@@ -177,14 +177,22 @@ func (c *MeshCoreClient) parseContact(data []byte) {
 	pubKey := data[1:33]
 	contactType := int(data[33])
 	flags := int(data[34])
-	pathLen := int(data[35])
-	// Ограничиваем длину пути максимально допустимой (64)
-	if pathLen > 64 {
-		pathLen = 64
+	// data[35] — кодированный байт out_path_len прошивки: младшие 6 бит — число
+	// прыжков, старшие 2 бита — (байт-на-прыжок − 1). Реальная длина пути в байтах
+	// = hash_count × hash_size. Для 1-байтных хопов это совпадает с числом прыжков
+	// (старое поведение); для многобайтных — нет. 0xFF (OUT_PATH_UNKNOWN) = flood.
+	pathLenByte := data[35]
+	byteLen := 0
+	if pathLenByte != pathLengthFlood {
+		byteLen = pathByteLen(pathLenByte)
 	}
-	// путь всегда занимает ровно 64 байта в фрейме
-	path := data[36:100]
-	actualPath := path[:pathLen]
+	if byteLen > 64 {
+		byteLen = 64
+	}
+	// путь всегда занимает ровно 64 байта в фрейме; копируем только значимые
+	pathField := data[36:100]
+	actualPath := make([]byte, byteLen)
+	copy(actualPath, pathField[:byteLen])
 
 	nameBytes := data[100:132]
 	name := string(bytes.TrimRight(nameBytes, "\x00"))
@@ -206,7 +214,7 @@ func (c *MeshCoreClient) parseContact(data []byte) {
 		Name:       name,
 		Type:       contactType,
 		Flags:      flags,
-		PathLength: pathLen,
+		PathLength: int(pathLenByte), // кодированный байт out_path_len (0xFF = flood)
 		Path:       actualPath,
 		Latitude:   lat,
 		Longitude:  lon,
@@ -868,7 +876,7 @@ func (c *MeshCoreClient) parseTraceData(data []byte) {
 
 	c.logger.Debug("Trace data received",
 		"tag", fmt.Sprintf("%08x", tag),
-		"hops", pathLen,
+		"hops", snrCount, // path_len is the hash byte length; one SNR per hop = hop count
 		"final_snr", finalSNR)
 
 	c.publishPendingRawToMQTT(float64(finalSNR), 0)

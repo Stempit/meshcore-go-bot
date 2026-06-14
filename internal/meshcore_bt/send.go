@@ -237,11 +237,11 @@ func (c *MeshCoreClient) sendUpdateContact(contact *Contact) error {
 	buf.Write(contact.PublicKey[:32])
 	buf.WriteByte(byte(contact.Type))
 	buf.WriteByte(byte(contact.Flags))
-	pathLen := len(contact.Path)
-	if pathLen > 255 {
-		pathLen = 255
-	}
-	buf.WriteByte(byte(pathLen))
+	// PathLength хранит кодированный байт out_path_len прошивки (число прыжков +
+	// размер хеша, или 0xFF для flood). Пишем его обратно как есть, чтобы устройство
+	// корректно сохранило маршрут для многобайтных хопов — не путать с числом байт
+	// в contact.Path.
+	buf.WriteByte(byte(contact.PathLength))
 	// Путь: 64 байта
 	pathPadded := make([]byte, 64)
 	copy(pathPadded, contact.Path)

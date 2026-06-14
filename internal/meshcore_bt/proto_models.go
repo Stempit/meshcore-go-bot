@@ -11,8 +11,8 @@ type Contact struct {
 	Name              string
 	Type              int
 	Flags             int
-	PathLength        int
-	Path              []byte
+	PathLength        int    // firmware-encoded out_path_len byte: hop count (low 6 bits) + bytes-per-hop (top 2 bits); 0xFF = flood/unknown
+	Path              []byte // meaningful path bytes only (hop_count × bytes-per-hop)
 	Latitude          *float64
 	Longitude         *float64
 	LastSeen          time.Time

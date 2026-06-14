@@ -43,8 +43,10 @@ func (c *MeshCoreClient) parseContactMessageV3(data []byte) {
 		return
 	}
 	prefix := data[4:10]
-	// data[10] = path_len (метаданные, байты пути в companion-фрейме не передаются)
-	pathLen := int(data[10])
+	// data[10] = path_len (метаданные, байты пути в companion-фрейме не передаются).
+	// Поле — кодированный байт path_len (или 0xFF для прямой доставки); берём из
+	// него число прыжков, а не «сырое» значение (важно для многобайтных хопов).
+	pathLen := decodeMsgHops(data[10])
 	txtType := data[11]
 	timestampRaw := binary.LittleEndian.Uint32(data[12:16])
 
@@ -122,7 +124,7 @@ func (c *MeshCoreClient) parseContactMessageV3(data []byte) {
 	c.mu.Unlock()
 
 	c.logger.Info("Received contact message V3", "sender", senderName, "key", shortKeyHex(fullKey), "text", text,
-		"pathLen", displayHops(msg.PathLength), "path", pathHex(pathBytes))
+		"pathLen", displayHops(msg.PathLength), "path", pathHex(msg.PathBytes, msg.PathLength))
 
 	if c.histLog != nil {
 		if err := c.histLog.LogDMIncoming(fullKey, senderName, text, msg.Timestamp); err != nil {
@@ -157,8 +159,8 @@ func (c *MeshCoreClient) parseChannelMessageV3(data []byte) {
 		return
 	}
 	channelIndex := int(data[4])
-	// data[5] = path_len (метаданные, байты пути не передаются)
-	pathLen := int(data[5])
+	// data[5] = path_len (кодированный байт; число прыжков в младших 6 битах)
+	pathLen := decodeMsgHops(data[5])
 	// data[6] = txt_type
 	timestampRaw := binary.LittleEndian.Uint32(data[7:11])
 
@@ -266,7 +268,7 @@ func (c *MeshCoreClient) parseChannelMessageV3(data []byte) {
 
 	c.logger.Info("Channel message V3 received",
 		"channel", channelIndex, "sender", senderName, "text", text,
-		"pathLen", displayHops(msg.PathLength), "path", pathHex(msg.PathBytes))
+		"pathLen", displayHops(msg.PathLength), "path", pathHex(msg.PathBytes, msg.PathLength))
 
 	// отправляем в канал входящих сообщений
 	select {
@@ -276,16 +278,44 @@ func (c *MeshCoreClient) parseChannelMessageV3(data []byte) {
 	}
 }
 
-// pathHex renders raw path hop bytes as hex for logging, or "n/a" when the path
-// is unavailable (e.g. a message synced from device history with no live packet).
-func pathHex(pathBytes []byte) string {
-	if len(pathBytes) == 0 {
-		return "n/a"
+// pathHashCount returns the number of hops encoded in a MeshCore path_len byte
+// (low 6 bits). See Packet.h getPathHashCount().
+func pathHashCount(pathLen byte) int { return int(pathLen & 0x3F) }
+
+// pathHashSize returns the bytes-per-hop encoded in a MeshCore path_len byte
+// (top 2 bits + 1 → 1, 2 or 3). See Packet.h getPathHashSize().
+func pathHashSize(pathLen byte) int { return int((pathLen>>6)&0x03) + 1 }
+
+// pathByteLen returns the number of meaningful path bytes for an encoded
+// path_len byte: hash_count × hash_size.
+func pathByteLen(pathLen byte) int { return pathHashCount(pathLen) * pathHashSize(pathLen) }
+
+// decodeMsgHops converts a companion message frame's path_len field to a hop
+// count. The field is 0xFF for direct delivery (kept as the direct sentinel) or
+// a flooded packet's encoded path_len byte, whose low 6 bits hold the hop count.
+func decodeMsgHops(pathLen byte) int {
+	if pathLen == pathLengthFlood {
+		return pathLengthFlood
 	}
-	return hexHops(pathBytes)
+	return pathHashCount(pathLen)
 }
 
-// displayHops normalizes a wire path length for logging: the 0xFF "direct
+// pathHex renders a routing path as colon-separated hop IDs for logging, or
+// "n/a" when the path is unavailable (e.g. a message synced from device history
+// with no live packet). hopCount lets it group multi-byte hops correctly; bytes
+// are grouped into len(path)/hopCount-byte hops, e.g. "8888:1cdb:619f:4444".
+func pathHex(path []byte, hopCount int) string {
+	if len(path) == 0 {
+		return "n/a"
+	}
+	hashSize := 1
+	if hopCount > 0 && hopCount != pathLengthFlood && len(path)%hopCount == 0 {
+		hashSize = len(path) / hopCount
+	}
+	return hopsHex(path, hashSize)
+}
+
+// displayHops normalizes a path hop count for logging: the 0xFF "direct
 // delivery" sentinel is shown as 0 hops, which reads more naturally in logs.
 func displayHops(pathLen int) int {
 	if pathLen == pathLengthFlood {
@@ -304,11 +334,17 @@ func shortKeyHex(pubKey []byte) string {
 	return h
 }
 
-// hexHops renders path bytes as colon-separated hex hop IDs, e.g. "db:58:79".
-func hexHops(b []byte) string {
-	parts := make([]string, len(b))
-	for i, by := range b {
-		parts[i] = fmt.Sprintf("%02x", by)
+// hopsHex renders path bytes as colon-separated hop IDs, grouping bytes into
+// hashSize-byte hops, e.g. "8888:1cdb" for hashSize=2 or "db:58:79" for
+// hashSize=1. Falls back to one group per byte when hashSize is invalid or does
+// not evenly divide the path.
+func hopsHex(path []byte, hashSize int) string {
+	if hashSize < 1 || len(path)%hashSize != 0 {
+		hashSize = 1
+	}
+	parts := make([]string, 0, len(path)/hashSize)
+	for i := 0; i < len(path); i += hashSize {
+		parts = append(parts, fmt.Sprintf("%x", path[i:i+hashSize]))
 	}
 	return strings.Join(parts, ":")
 }
@@ -357,12 +393,11 @@ func extractPathFromRaw(data []byte) (pathBytes []byte, hopCount int) {
 		return nil, 0
 	}
 	pathLenByte := data[headerLen-1]
-	hashCount := int(pathLenByte & 0x3F)
-	hashSize := int((pathLenByte>>6)&0x03) + 1
+	hashCount := pathHashCount(pathLenByte)
 	if hashCount == 0 {
 		return nil, 0
 	}
-	end := headerLen + hashCount*hashSize
+	end := headerLen + pathByteLen(pathLenByte)
 	if end > len(data) {
 		return nil, 0
 	}
@@ -385,8 +420,8 @@ func (c *MeshCoreClient) parseContactMessage(data []byte) {
 		return
 	}
 	prefix := data[1:7]
-	// data[7] = path_len (метаданные, без реальных байт пути)
-	pathLen := int(data[7])
+	// data[7] = path_len (кодированный байт; число прыжков в младших 6 битах)
+	pathLen := decodeMsgHops(data[7])
 	txtType := data[8]
 	timestampRaw := binary.LittleEndian.Uint32(data[9:13])
 
@@ -451,7 +486,7 @@ func (c *MeshCoreClient) parseContactMessage(data []byte) {
 	c.mu.Unlock()
 
 	c.logger.Debug("Received contact message", "sender", shortKeyHex(fullKey), "text", text,
-		"pathLen", displayHops(msg.PathLength), "path", pathHex(pathBytes))
+		"pathLen", displayHops(msg.PathLength), "path", pathHex(msg.PathBytes, msg.PathLength))
 
 	if c.onMessage != nil {
 		c.onMessage(msg)
@@ -481,8 +516,8 @@ func (c *MeshCoreClient) parseChannelMessage(data []byte) {
 		return
 	}
 	channelIndex := int(data[1])
-	// data[2] = path_len (метаданные)
-	pathLen := int(data[2])
+	// data[2] = path_len (кодированный байт; число прыжков в младших 6 битах)
+	pathLen := decodeMsgHops(data[2])
 	// data[3] = txt_type (для каналов всегда TXT_TYPE_PLAIN)
 	timestampRaw := binary.LittleEndian.Uint32(data[4:8])
 
@@ -571,7 +606,7 @@ func (c *MeshCoreClient) parseChannelMessage(data []byte) {
 
 	c.logger.Info("Channel message received (V1)",
 		"channel", channelIndex, "sender", fmt.Sprintf("%q", senderName), "text", fmt.Sprintf("%q", text),
-		"pathLen", displayHops(msg.PathLength), "path", pathHex(msg.PathBytes))
+		"pathLen", displayHops(msg.PathLength), "path", pathHex(msg.PathBytes, msg.PathLength))
 
 	// отправляем в канал входящих сообщений
 	select {
