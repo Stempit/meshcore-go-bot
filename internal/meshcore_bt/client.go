@@ -6,8 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"meshbot/internal/historylog"
-
 	"go.bug.st/serial"
 	"tinygo.org/x/bluetooth"
 )
@@ -117,7 +115,7 @@ type MeshCoreClient struct {
 
 	// Логгер
 	logger  *slog.Logger
-	histLog *historylog.Logger
+	histLog HistoryLogger
 
 	// dedupMu guards seenMsgs, a cache of recently received message keys used to
 	// drop protocol-level retransmissions. A MeshCore sender retransmits a DM or
@@ -180,8 +178,3 @@ func (c *MeshCoreClient) SetLogger(logger *slog.Logger) {
 	c.logger = logger
 }
 
-// SetHistoryLogger attaches a history logger that records every incoming and
-// outgoing message to per-conversation files.
-func (c *MeshCoreClient) SetHistoryLogger(h *historylog.Logger) {
-	c.histLog = h
-}
