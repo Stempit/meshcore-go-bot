@@ -122,7 +122,7 @@ func (c *MeshCoreClient) parseContactMessageV3(data []byte) {
 	c.mu.Unlock()
 
 	c.logger.Info("Received contact message V3", "sender", senderName, "key", shortKeyHex(fullKey), "text", text,
-		"pathLen", msg.PathLength, "path", pathHex(pathBytes))
+		"pathLen", displayHops(msg.PathLength), "path", pathHex(pathBytes))
 
 	if c.histLog != nil {
 		if err := c.histLog.LogDMIncoming(senderName, text, msg.Timestamp); err != nil {
@@ -266,7 +266,7 @@ func (c *MeshCoreClient) parseChannelMessageV3(data []byte) {
 
 	c.logger.Info("Channel message V3 received",
 		"channel", channelIndex, "sender", senderName, "text", text,
-		"pathLen", msg.PathLength, "path", pathHex(msg.PathBytes))
+		"pathLen", displayHops(msg.PathLength), "path", pathHex(msg.PathBytes))
 
 	// отправляем в канал входящих сообщений
 	select {
@@ -283,6 +283,15 @@ func pathHex(pathBytes []byte) string {
 		return "n/a"
 	}
 	return hexHops(pathBytes)
+}
+
+// displayHops normalizes a wire path length for logging: the 0xFF "direct
+// delivery" sentinel is shown as 0 hops, which reads more naturally in logs.
+func displayHops(pathLen int) int {
+	if pathLen == pathLengthFlood {
+		return 0
+	}
+	return pathLen
 }
 
 // shortKeyHex renders a public key as its first 8 hex characters (4 bytes) for
@@ -442,7 +451,7 @@ func (c *MeshCoreClient) parseContactMessage(data []byte) {
 	c.mu.Unlock()
 
 	c.logger.Debug("Received contact message", "sender", shortKeyHex(fullKey), "text", text,
-		"pathLen", msg.PathLength, "path", pathHex(pathBytes))
+		"pathLen", displayHops(msg.PathLength), "path", pathHex(pathBytes))
 
 	if c.onMessage != nil {
 		c.onMessage(msg)
@@ -562,7 +571,7 @@ func (c *MeshCoreClient) parseChannelMessage(data []byte) {
 
 	c.logger.Info("Channel message received (V1)",
 		"channel", channelIndex, "sender", fmt.Sprintf("%q", senderName), "text", fmt.Sprintf("%q", text),
-		"pathLen", msg.PathLength, "path", pathHex(msg.PathBytes))
+		"pathLen", displayHops(msg.PathLength), "path", pathHex(msg.PathBytes))
 
 	// отправляем в канал входящих сообщений
 	select {
