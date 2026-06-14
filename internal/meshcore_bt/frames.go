@@ -121,7 +121,7 @@ func (c *MeshCoreClient) parseContactMessageV3(data []byte) {
 	c.messages[key] = append(c.messages[key], msg)
 	c.mu.Unlock()
 
-	c.logger.Info("Received contact message V3", "sender", senderName, "key", key, "text", text,
+	c.logger.Info("Received contact message V3", "sender", senderName, "key", shortKeyHex(fullKey), "text", text,
 		"pathLen", msg.PathLength, "path", pathHex(pathBytes))
 
 	if c.histLog != nil {
@@ -285,6 +285,16 @@ func pathHex(pathBytes []byte) string {
 	return hexHops(pathBytes)
 }
 
+// shortKeyHex renders a public key as its first 8 hex characters (4 bytes) for
+// compact logging.
+func shortKeyHex(pubKey []byte) string {
+	h := fmt.Sprintf("%x", pubKey)
+	if len(h) > 8 {
+		return h[:8]
+	}
+	return h
+}
+
 // hexHops renders path bytes as colon-separated hex hop IDs, e.g. "db:58:79".
 func hexHops(b []byte) string {
 	parts := make([]string, len(b))
@@ -431,7 +441,7 @@ func (c *MeshCoreClient) parseContactMessage(data []byte) {
 	c.messages[key] = append(c.messages[key], msg)
 	c.mu.Unlock()
 
-	c.logger.Debug("Received contact message", "sender", key, "text", text,
+	c.logger.Debug("Received contact message", "sender", shortKeyHex(fullKey), "text", text,
 		"pathLen", msg.PathLength, "path", pathHex(pathBytes))
 
 	if c.onMessage != nil {

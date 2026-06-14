@@ -488,7 +488,7 @@ func processDM(m *meshcore.Message, client *meshcore.MeshCoreClient, outgoingCh 
 	}
 
 	// Look up the full contact record for the sender.
-	shortKey := fmt.Sprintf("%x", m.SenderKey[:6])
+	shortKey := fmt.Sprintf("%x", m.SenderKey[:4])
 	contact := client.FindContactByKeyPrefix(m.SenderKey[:6])
 	if contact == nil {
 		contact = &meshcore.Contact{
@@ -497,7 +497,7 @@ func processDM(m *meshcore.Message, client *meshcore.MeshCoreClient, outgoingCh 
 		}
 	}
 
-	slog.Info("Direct message received", "sender", shortKey, "text", m.Text)
+	slog.Info("Direct message received", "sender", contact.Name, "key", shortKey, "text", m.Text)
 
 	// One command in flight per sender: reply busy instead of queuing a second.
 	if !inflight.begin("dm:" + senderKeyHex) {

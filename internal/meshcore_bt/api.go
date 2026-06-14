@@ -138,7 +138,7 @@ func (c *MeshCoreClient) SendMessageWithRetry(contact *Contact, text string, wai
 	totalAttempts := savedPathTries + resetPathTries
 
 	c.logger.Info("Sending private message with retry",
-		"key", fmt.Sprintf("%x", contact.PublicKey), "name", contact.Name,
+		"key", shortKeyHex(contact.PublicKey), "name", contact.Name,
 		"text", text, "waitForDelivery", waitForDelivery,
 		"savedPathTries", savedPathTries, "resetPathTries", resetPathTries,
 		"pathLen", contact.PathLength, "path", formatPath(contact.PathLength, contact.Path))
