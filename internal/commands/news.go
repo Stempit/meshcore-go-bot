@@ -3,13 +3,10 @@ package commands
 import (
 	"bufio"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-
-	"meshbot/internal/config"
 )
 
 const newsDir = "log/news"
@@ -117,29 +114,13 @@ func readNews(feedName string, count, offset int) ([]string, error) {
 	}
 
 	selected := lines[start:end]
-	longTitle := config.Get().RSS.LongTitle
 
-	// return newest-first so the most recent message arrives last in chat
+	// Return newest-first so the most recent message arrives last in chat.
+	// Each line is a separate logical message; mesh-fit shrinking (incl. the
+	// "news" skip override for long titles) is applied at the send site.
 	result := make([]string, 0, len(selected))
 	for i := len(selected) - 1; i >= 0; i-- {
-		line := selected[i]
-		switch longTitle {
-		case "shrink":
-			shrunk, err := ShrinkText(line)
-			if err != nil {
-				slog.Warn("news: shrink error", "feed", feedName, "error", err)
-				result = append(result, line)
-			} else {
-				result = append(result, shrunk)
-			}
-		case "skip":
-			if len(line) > 120 {
-				continue
-			}
-			result = append(result, line)
-		default:
-			result = append(result, line)
-		}
+		result = append(result, selected[i])
 	}
 
 	if len(result) == 0 {

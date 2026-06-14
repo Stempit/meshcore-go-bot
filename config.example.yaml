@@ -55,10 +55,25 @@ LLM:
   system_prompt: >
     Ты - чатбот. Отвечай серьезно на серьезные вопросы, шутливо на шутливые. Отвечай на том же языке, на котором был задан вопрос. Нельзя использовать markdown или любое другое форматирование. Не задавай вопросов. Только отвечай. Коротко и по существу.
   system_temperature: 0.5
-  shrink_prompt: >
-    Сделай текст еще короче. Результат - не более 130 байт (около 60-70 символов). Ответ - не более 10 слов. Одной строчкой. Без форматирования. Одно предложение, до первой точки. Нельзя возвращать тот же текст, обязательно сократи и измени текст. Формат SMS.
-  shrink_temperature: 0.7
-  shrink_max_reties: 5
+
+# Shrink: how replies are fitted into the 140-byte mesh limit. See docs/SHRINK.md.
+Shrink:
+  default: llm            # variant for any name without an override: truncate|split|llm|skip
+  max_bytes: 140          # hard mesh limit
+  ellipsis: "…"           # appended by truncate
+  overrides:              # per-command/source variant override
+    news: skip            # drop news items that don't fit
+    last: truncate        # history lines: cut, don't LLM-shrink
+    claw: split           # picoclaw replies: numbered [i/N] parts
+    bbs: split            # BBS posts must stay verbatim
+    telegram: split       # bridged Telegram messages
+  llm:                    # the "llm" variant (uses a light model to compress)
+    # type: ollama        # optional; inherits LLM.type when empty
+    # model: phi4-mini:3.8b  # optional; inherits LLM.model when empty
+    prompt: >
+      Сделай текст еще короче. Результат - не более 130 байт (около 60-70 символов). Ответ - не более 10 слов. Одной строчкой. Без форматирования. Одно предложение, до первой точки. Нельзя возвращать тот же текст, обязательно сократи и измени текст. Формат SMS.
+    temperature: 0.7
+    max_retries: 5
 
 Telegram:
   enabled: true
@@ -68,12 +83,10 @@ Telegram:
     - type: channel
       chat_id: -1001234567890     # Telegram channel ID (negative)
       mesh_channel_name: "#tg1"
-      shrink: true
     - type: group_thread
       chat_id: -1001234567890     # public group ID (negative)
       thread_id: 2                # topic/thread ID (message_id of the topic root)
       mesh_channel_name: "#tg2"
-      shrink: true
   # targets: MeshCore → Telegram (forward mesh channel messages into Telegram)
   targets:
     - mesh_channel_name: "Public"   # meshcore channel name to listen on
@@ -84,7 +97,6 @@ Telegram:
 
 RSS:
   enabled: true
-  long_title: skip       # "skip" – drop titles >140 chars; "shrink" – compress via LLM
   seen_file: log/rss_seen.txt   # omit to use this default path
   feeds:
     - name: "habr"
@@ -113,7 +125,7 @@ Claw:
   token: "your-pico-token"            # from picoclaw dashboard → Pico channel token
   timeout_sec: 180
   bot_name: "Yorick 💀"               # mesh display name; @[bot_name] messages are routed to picoclaw
-  split: true                         # split long responses into numbered mesh messages [1/N] instead of LLM shrink
+  # mesh-fit variant for .claw replies is set in Shrink.overrides (default: split)
 
 Security:
   channels:

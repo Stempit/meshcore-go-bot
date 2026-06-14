@@ -28,10 +28,30 @@ type RSSFeedConfig struct {
 }
 
 type RSSConfig struct {
-	Enabled   bool            `yaml:"enabled"`
-	LongTitle string          `yaml:"long_title"` // "skip" or "shrink"
-	SeenDir   string          `yaml:"seen_dir"`   // defaults to "log/news"
-	Feeds     []RSSFeedConfig `yaml:"feeds"`
+	Enabled bool            `yaml:"enabled"`
+	SeenDir string          `yaml:"seen_dir"` // defaults to "log/news"
+	Feeds   []RSSFeedConfig `yaml:"feeds"`
+}
+
+// ShrinkLLMConfig configures the "llm" shrink variant. Type/Model are optional
+// overrides that inherit from the top-level LLM section when empty, so a light
+// model can shrink while a big model answers.
+type ShrinkLLMConfig struct {
+	Type        string  `yaml:"type"`
+	Model       string  `yaml:"model"`
+	Prompt      string  `yaml:"prompt"`
+	Temperature float64 `yaml:"temperature"`
+	MaxRetries  int     `yaml:"max_retries"`
+}
+
+// ShrinkConfig is the unified mesh-fit configuration. Default is the global
+// variant; Overrides selects a variant per command/source name.
+type ShrinkConfig struct {
+	Default   string            `yaml:"default"`   // truncate|split|llm|skip
+	MaxBytes  int               `yaml:"max_bytes"` // hard mesh limit, default 140
+	Ellipsis  string            `yaml:"ellipsis"`  // appended by truncate
+	Overrides map[string]string `yaml:"overrides"` // name -> variant
+	LLM       ShrinkLLMConfig   `yaml:"llm"`
 }
 
 type ConnectionConfig struct {
@@ -63,7 +83,7 @@ type WeatherConfig struct {
 }
 
 type StatsConfig struct {
-	URL         string `yaml:"url"`          // HTTP(S) URL or file:///path/to/stats.json
+	URL         string `yaml:"url"`           // HTTP(S) URL or file:///path/to/stats.json
 	CacheTTLSec int    `yaml:"cache_ttl_sec"` // default 300
 }
 
@@ -71,21 +91,19 @@ type Config struct {
 	Connection ConnectionConfig        `yaml:"Connection"`
 	Proxy      ProxyConfig             `yaml:"Proxy"`
 	MQTT       mqttbridge.MQTTConfig   `yaml:"MQTT"`
-	Telegram tgbridge.TelegramConfig `yaml:"Telegram"`
-	Trace    TraceConfig             `yaml:"Trace"`
-	Security SecurityConfig          `yaml:"Security"`
-	RSS      RSSConfig               `yaml:"RSS"`
-	Weather  WeatherConfig           `yaml:"Weather"`
-	Stats    StatsConfig             `yaml:"Stats"`
-	LLM      struct {
+	Telegram   tgbridge.TelegramConfig `yaml:"Telegram"`
+	Trace      TraceConfig             `yaml:"Trace"`
+	Security   SecurityConfig          `yaml:"Security"`
+	RSS        RSSConfig               `yaml:"RSS"`
+	Weather    WeatherConfig           `yaml:"Weather"`
+	Stats      StatsConfig             `yaml:"Stats"`
+	Shrink     ShrinkConfig            `yaml:"Shrink"`
+	LLM        struct {
 		Enabled           bool    `yaml:"enabled"`
 		Type              string  `yaml:"type"`
 		Model             string  `yaml:"model"`
 		SystemPrompt      string  `yaml:"system_prompt"`
 		SystemTemperature float64 `yaml:"system_temperature"`
-		ShrinkPrompt      string  `yaml:"shrink_prompt"`
-		ShrinkTemperature float64 `yaml:"shrink_temperature"`
-		ShrinkMaxRetries  int     `yaml:"shrink_max_retries"`
 	} `yaml:"LLM"`
 	Claw struct {
 		Enabled    bool   `yaml:"enabled"`
@@ -93,6 +111,5 @@ type Config struct {
 		Token      string `yaml:"token"`       // from picoclaw dashboard → Pico token
 		TimeoutSec int    `yaml:"timeout_sec"` // default 180
 		BotName    string `yaml:"bot_name"`    // mesh display name of the bot, e.g. "Yorick 💀"
-		Split      bool   `yaml:"split"`       // split long responses into multiple mesh messages instead of LLM shrink
 	} `yaml:"Claw"`
 }

@@ -54,14 +54,6 @@ func ProcessWeatherCommand(text string) ([]string, error) {
 
 	slog.Info("weather reply", "reply", reply, "bytes", len(reply))
 
-	if len(reply) > 130 {
-		reply, err = ShrinkText(reply)
-		if err != nil {
-			slog.Warn("weather shrink error", "error", err)
-			return []string{reply}, nil
-		}
-	}
-
 	return []string{reply}, nil
 }
 
@@ -117,7 +109,9 @@ type wttrDay struct {
 }
 
 type wttrNearestArea struct {
-	AreaName []struct{ Value string `json:"value"` } `json:"areaName"`
+	AreaName []struct {
+		Value string `json:"value"`
+	} `json:"areaName"`
 }
 
 type wttrResponse struct {
@@ -146,7 +140,6 @@ func wttrFetchJSON(location string) (*wttrResponse, []byte, error) {
 
 	return &data, body, nil
 }
-
 
 func fetchCurrentWeather(location, units string) (string, error) {
 	data, body, err := wttrFetchJSON(location)

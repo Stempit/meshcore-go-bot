@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -19,6 +18,7 @@ import (
 	meshcore "meshbot/internal/meshcore_bt"
 	"meshbot/internal/mqttbridge"
 	"meshbot/internal/proxy"
+	"meshbot/internal/shrink"
 	"meshbot/internal/tgbridge"
 )
 
@@ -43,6 +43,8 @@ func main() {
 	}
 
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
+	shrink.ValidateConfig()
 
 	proxyCfg := config.Get().Proxy
 	if err := proxy.Init(proxyCfg.Enabled, proxyCfg.URL); err != nil {
@@ -224,26 +226,16 @@ func main() {
 		if err != nil {
 			slog.Error("Failed to start Telegram bridge", "error", err)
 		} else {
-			tgb.OnMessage(func(meshChannelName, senderName, text string, shrink bool) {
+			tgb.OnMessage(func(meshChannelName, senderName, text string) {
 				tgChannel := client.GetChannelByName(meshChannelName)
 				if tgChannel == nil {
 					slog.Warn("Telegram bridge: meshcore channel not found", "name", meshChannelName)
 					return
 				}
+				// The "[TG:sender] " prefix lands on the first wire message only;
+				// the "telegram" variant (config) decides split vs llm shrink.
 				prefix := fmt.Sprintf("[TG:%s] ", senderName)
-				var parts []string
-				if shrink {
-					shrunk, shrinkErr := commands.ShrinkText(text)
-					if shrinkErr != nil {
-						slog.Warn("Telegram bridge: shrink failed, splitting instead", "error", shrinkErr)
-						parts = splitMeshMessage(prefix, text, 140)
-					} else {
-						parts = []string{prefix + shrunk}
-					}
-				} else {
-					parts = splitMeshMessage(prefix, text, 140)
-				}
-				for _, part := range parts {
+				for _, part := range shrink.Fit("telegram", prefix, []string{text}) {
 					outgoingCh <- outgoingMsg{channel: tgChannel, text: part, ack: false}
 				}
 			})
@@ -525,7 +517,7 @@ func processDM(m *meshcore.Message, client *meshcore.MeshCoreClient, outgoingCh 
 	pingMeta := buildPingMeta(m.PathLength, m.PathBytes, m.Timestamp, contact.Latitude, contact.Longitude, client.GetContacts())
 	setSelfCoords(pingMeta, client)
 
-	replies, err := commands.GenerateReplies(m.Text, "", pingMeta, string(contact.PublicKey), contact.Name)
+	replies, name, err := commands.GenerateReplies(m.Text, "", pingMeta, string(contact.PublicKey), contact.Name)
 	if err != nil {
 		slog.Error("Command error", "error", err)
 		return
@@ -535,7 +527,7 @@ func processDM(m *meshcore.Message, client *meshcore.MeshCoreClient, outgoingCh 
 		return
 	}
 
-	for _, reply := range replies {
+	for _, reply := range shrink.Fit(name, "", replies) {
 		outgoingCh <- outgoingMsg{contact: contact, text: reply, ack: true}
 	}
 }
@@ -610,7 +602,7 @@ func processChannelMessage(m *meshcore.ChannelMessage, client *meshcore.MeshCore
 	pingMeta := buildPingMeta(m.PathLength, m.PathBytes, m.Timestamp, senderLat, senderLon, client.GetContacts())
 	setSelfCoords(pingMeta, client)
 
-	replies, err := commands.GenerateReplies(m.Text, channel.Name, pingMeta, senderKeyHexCh, m.SenderName)
+	replies, name, err := commands.GenerateReplies(m.Text, channel.Name, pingMeta, senderKeyHexCh, m.SenderName)
 	if err != nil {
 		slog.Error("Command error", "error", err)
 		return
@@ -620,11 +612,10 @@ func processChannelMessage(m *meshcore.ChannelMessage, client *meshcore.MeshCore
 		return
 	}
 
-	for i, reply := range replies {
-		text := reply
-		if i == 0 {
-			text = fmt.Sprintf("@[%s] %s", m.SenderName, reply)
-		}
+	// The "@[sender] " prefix lands on the first wire message only; shrink.Fit
+	// reserves room for it and splits/shrinks per the configured variant.
+	prefix := fmt.Sprintf("@[%s] ", m.SenderName)
+	for i, text := range shrink.Fit(name, prefix, replies) {
 		outgoingCh <- outgoingMsg{channel: channel, text: text, ack: i == 0}
 		forwardBotReply(text)
 	}
@@ -674,32 +665,6 @@ func setSelfCoords(pingMeta *commands.PingMeta, client interface {
 
 // splitMeshMessage splits text into parts that each fit within maxLen bytes when prefixed.
 // The prefix is applied to every part. Splits on word boundaries where possible.
-func splitMeshMessage(prefix, text string, maxLen int) []string {
-	budget := maxLen - len(prefix)
-	if budget <= 0 {
-		return []string{prefix}
-	}
-	if len(prefix)+len(text) <= maxLen {
-		return []string{prefix + text}
-	}
-
-	var parts []string
-	for len(text) > 0 {
-		if len(text) <= budget {
-			parts = append(parts, prefix+text)
-			break
-		}
-		// find last space within budget
-		cut := budget
-		if i := strings.LastIndex(text[:cut], " "); i > 0 {
-			cut = i
-		}
-		parts = append(parts, prefix+text[:cut])
-		text = strings.TrimLeft(text[cut:], " ")
-	}
-	return parts
-}
-
 // resolveHopCoords resolves GPS coordinates for each intermediate hop in pathBytes.
 // bytesPerHop is 1 or 2; each hop's bytes are matched against contact public key prefixes.
 func resolveHopCoords(pathBytes []byte, hopCount, bytesPerHop int, contacts map[string]*meshcore.Contact) (coords [][2]float64, known []bool) {

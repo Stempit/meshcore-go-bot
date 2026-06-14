@@ -222,7 +222,8 @@ func bbsRead(text string) []string {
 		author := bbsAuthor(post.AuthorKey, post.AuthorName)
 		ago := bbsTimeAgo(post.CreatedAt)
 		header := fmt.Sprintf("Post #%d by %s (%s):", post.Num, author, ago)
-		msgs = append(msgs, bbsSplitPost(header, post.Text)...)
+		// One logical message per post; long posts are split at the send site.
+		msgs = append(msgs, header+"\n"+post.Text)
 	}
 
 	msgs = append(msgs, fmt.Sprintf("Reply: /rp %d|text", id))
@@ -348,29 +349,6 @@ func bbsPackLines(lines []string) []string {
 	}
 	if cur != "" {
 		result = append(result, cur)
-	}
-	return result
-}
-
-// bbsSplitPost splits a post header+text into mesh-sized messages.
-func bbsSplitPost(header, text string) []string {
-	full := header + "\n" + text
-	if len(full) <= bbsMsgMax {
-		return []string{full}
-	}
-	var result []string
-	result = append(result, header)
-	for len(text) > 0 {
-		if len(text) <= bbsMsgMax {
-			result = append(result, text)
-			break
-		}
-		cut := bbsMsgMax
-		if i := strings.LastIndex(text[:cut], " "); i > 0 {
-			cut = i
-		}
-		result = append(result, text[:cut])
-		text = strings.TrimLeft(text[cut:], " ")
 	}
 	return result
 }
