@@ -75,6 +75,16 @@ type StatsConfig struct {
 	CacheTTLSec int    `yaml:"cache_ttl_sec"` // default 300
 }
 
+// MigrationConfig controls the "switch to 2-byte hash" nudge: when a received
+// advert or public-channel message reveals a node still using 1-byte routing
+// hashes, the bot posts a reminder on the channel, at most once per CooldownSec
+// per node.
+type MigrationConfig struct {
+	Enabled     bool   `yaml:"enabled"`
+	Message     string `yaml:"message"`      // default "switch to 2-byte please"
+	CooldownSec int    `yaml:"cooldown_sec"` // default 86400 (24h)
+}
+
 type Config struct {
 	Connection ConnectionConfig        `yaml:"Connection"`
 	Proxy      ProxyConfig             `yaml:"Proxy"`
@@ -84,6 +94,7 @@ type Config struct {
 	Security   SecurityConfig          `yaml:"Security"`
 	Weather    WeatherConfig           `yaml:"Weather"`
 	Stats      StatsConfig             `yaml:"Stats"`
+	Migration  MigrationConfig         `yaml:"Migration"`
 	Shrink     ShrinkConfig            `yaml:"Shrink"`
 	LLM        struct {
 		Enabled           bool    `yaml:"enabled"`

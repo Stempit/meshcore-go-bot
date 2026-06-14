@@ -127,3 +127,12 @@ Stats:
   # Local file example: file:///home/pi/meshbot/stats.json
   url: ""
   cache_ttl_sec: 300  # refresh interval; 0 = use default 5 min
+
+Migration:
+  # Nudge nodes still routing with 1-byte path hashes to switch to 2-byte.
+  # When a received advert or public-channel message reveals 1-byte routing,
+  # the bot posts the reminder on that channel, at most once per cooldown per node.
+  # Detection needs real hops in the path; direct/flood packets carry no hash info.
+  enabled: false
+  message: "switch to 2-byte please"
+  cooldown_sec: 86400  # min gap between warnings to the same node; 0 = default 24h
