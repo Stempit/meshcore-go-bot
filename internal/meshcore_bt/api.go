@@ -137,12 +137,62 @@ func (c *MeshCoreClient) SendMessageWithRetry(contact *Contact, text string, wai
 	}
 	totalAttempts := savedPathTries + resetPathTries
 
+	// One timestamp shared by every attempt. The firmware embeds it in the
+	// message payload as the sender-side message identity, so reusing it makes
+	// all retransmissions the SAME logical message for receivers (and our own
+	// dedup), instead of N separate messages. Only the attempt byte differs
+	// between tries — that keeps each packet_hash unique so mesh repeaters
+	// re-flood the retry instead of suppressing it as a duplicate. This mirrors
+	// SendChannelMessageWithRetry, which reuses one timestamp for the same reason.
+	timestamp := uint32(time.Now().Unix())
+
 	c.logger.Info("Sending private message with retry",
 		"key", shortKeyHex(contact.PublicKey), "name", contact.Name,
 		"text", text, "waitForDelivery", waitForDelivery,
 		"savedPathTries", savedPathTries, "resetPathTries", resetPathTries,
 		"pathLen", contact.PathLength, "path", formatPath(contact.PathLength, contact.Path))
 
+	// A single confirmation channel for the WHOLE retry sequence. The companion
+	// device remembers the expected ACK of every attempt (its expected_ack_table),
+	// so a delivery push (pushCodeSendConfirmed) may arrive for ANY earlier try —
+	// during a later try's wait window or even after the last send. Keeping one
+	// registered channel for the entire sequence means a late ACK for any try is
+	// still counted as delivered instead of being dropped between attempts.
+	confirmCh := make(chan error, 1)
+	defer func() {
+		c.confirmMu.Lock()
+		if c.deliveredConfirmCh == confirmCh {
+			c.deliveredConfirmCh = nil
+		}
+		if c.sentConfirmCh == confirmCh {
+			c.sentConfirmCh = nil
+		}
+		c.confirmMu.Unlock()
+	}()
+
+	// arm (re)installs our shared confirmation slot; a previous attempt's device
+	// error consumes the slot, so we re-arm before each send.
+	arm := func() {
+		c.confirmMu.Lock()
+		if waitForDelivery {
+			c.deliveredConfirmCh = confirmCh
+		} else {
+			c.sentConfirmCh = confirmCh
+		}
+		c.confirmMu.Unlock()
+	}
+
+	confirmed := func() error {
+		if c.histLog != nil {
+			if err := c.histLog.LogDMOutgoing(contact.PublicKey, text, time.Now()); err != nil {
+				c.logger.Error("historylog: failed to log outgoing DM", "error", err)
+			}
+		}
+		c.publishTXDirectMessage(contact, text, timestamp)
+		return nil
+	}
+
+	rejections := 0
 	for attempt := 0; attempt < totalAttempts; attempt++ {
 		if attempt >= savedPathTries {
 			if contact.PathLength != pathLengthFlood {
@@ -158,64 +208,53 @@ func (c *MeshCoreClient) SendMessageWithRetry(contact *Contact, text string, wai
 			}
 		}
 
-		timestamp := uint32(time.Now().Unix())
-		_, err := c.sendTextMessage(contact.PublicKey, text, byte(attempt), timestamp)
-		if err != nil {
+		// Arm after the path-reset command (whose own reply must not land on our
+		// slot) and just before the send, so we cannot miss a fast response.
+		arm()
+
+		if _, err := c.sendTextMessage(contact.PublicKey, text, byte(attempt), timestamp); err != nil {
 			if attempt == totalAttempts-1 {
-				return fmt.Errorf("send failed after %d attempts: %w", totalAttempts, err)
+				break
 			}
 			time.Sleep(timeout)
 			continue
 		}
 
-		// Создаём канал для ожидания
-		confirmCh := make(chan error, 1)
-		c.confirmMu.Lock()
-		if waitForDelivery {
-			c.deliveredConfirmCh = confirmCh
-		} else {
-			c.sentConfirmCh = confirmCh
-		}
-		c.confirmMu.Unlock()
-
 		select {
 		case sendErr := <-confirmCh:
 			if sendErr != nil {
+				rejections++
 				c.logger.Warn("Device rejected message, retrying",
 					"error", sendErr, "attempt", attempt, "name", contact.Name)
-				if attempt == totalAttempts-1 {
-					return fmt.Errorf("%w after %d attempts: %v", ErrDeviceRejected, totalAttempts, sendErr)
-				}
 				time.Sleep(2 * time.Second)
 				continue
 			}
-			if c.histLog != nil {
-				if err := c.histLog.LogDMOutgoing(contact.PublicKey, text, time.Now()); err != nil {
-					c.logger.Error("historylog: failed to log outgoing DM", "error", err)
-				}
-			}
-			c.publishTXDirectMessage(contact, text, timestamp)
-			return nil
+			return confirmed()
 		case <-time.After(timeout):
-			c.confirmMu.Lock()
-			if waitForDelivery {
-				if c.deliveredConfirmCh == confirmCh {
-					c.deliveredConfirmCh = nil
-				}
-			} else {
-				if c.sentConfirmCh == confirmCh {
-					c.sentConfirmCh = nil
-				}
-			}
-			c.confirmMu.Unlock()
-			if attempt == totalAttempts-1 {
-				return fmt.Errorf("no %s confirmation after %d attempts (%d saved-path, %d reset-path)",
-					map[bool]string{true: "delivery", false: "sent"}[waitForDelivery],
-					totalAttempts, savedPathTries, resetPathTries)
-			}
+			// No confirmation yet. Leave the slot armed and send the next try; a
+			// late ACK for this try (or any earlier one) still lands on confirmCh.
 		}
 	}
-	return nil
+
+	// All tries sent without confirmation yet. Wait one more window for a late
+	// delivery push belonging to any of the attempts.
+	select {
+	case sendErr := <-confirmCh:
+		if sendErr == nil {
+			return confirmed()
+		}
+		rejections++
+	case <-time.After(timeout):
+	}
+
+	// Every attempt was rejected by the device (e.g. queue/table full): nothing
+	// was ever queued, so signal ErrDeviceRejected and skip a pointless fallback.
+	if rejections >= totalAttempts {
+		return fmt.Errorf("%w after %d attempts", ErrDeviceRejected, totalAttempts)
+	}
+	return fmt.Errorf("no %s confirmation after %d attempts (%d saved-path, %d reset-path)",
+		map[bool]string{true: "delivery", false: "sent"}[waitForDelivery],
+		totalAttempts, savedPathTries, resetPathTries)
 }
 
 // SendMessage отправляет личное сообщение (без ожидания подтверждения).
