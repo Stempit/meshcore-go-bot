@@ -12,7 +12,9 @@ import (
 const newsDir = "log/news"
 const defaultNewsCount = 5
 
-// ProcessNewsCommand handles the .news command variants:
+// ProcessNewsCommand handles the .news command variants. It reads the per-feed
+// files in log/news/ produced by the separate newswire poller:
+// https://github.com/Stempit/newswire
 //
 //	.news                        – list available feeds
 //	.news <feed>                 – last 5 items

@@ -64,7 +64,7 @@ log/
     channels/<name>.txt   – channel message history (used by .last)
     dm/<name>.txt         – direct-message history
   known.txt               – greeted node public keys (hex, one per line)
-  news/<feed>.txt         – RSS items written by the separate `newswire` app; read by .news
+  news/<feed>.txt         – RSS items written by the separate newswire app (https://github.com/Stempit/newswire); read by .news
 ```
 
 ## Packages that need care
@@ -81,7 +81,7 @@ log/
 | `.trace` | `commands.ProcessTraceMessage` | Haversine distance + hop IDs from `PingMeta` |
 | `.last [n] [channel]` | `commands.ProcessLastCommand` | Last *n* lines from `historylog` (max 7) |
 | `.llm <prompt>` | `commands.ProcessLLMMessage` | LLM query; auto-shrinks response to ≤130 chars |
-| `.news [feed] [n] [offset]` | `commands.ProcessNewsCommand` | Lists feeds or returns recent RSS items |
+| `.news [feed] [n] [offset]` | `commands.ProcessNewsCommand` | Lists feeds or returns recent RSS items from `log/news/`, populated by the [newswire](https://github.com/Stempit/newswire) poller |
 | `.claw <prompt>` | `commands.ProcessClawCommand` | Sends prompt to picoclaw AI agent via WebSocket; auto-shrinks response |
 
 New commands go in `internal/commands/` and must be wired into the `switch` in `commands_server.go`.
