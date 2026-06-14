@@ -190,7 +190,7 @@ func (c *MeshCoreClient) SendMessageWithRetry(contact *Contact, text string, wai
 				continue
 			}
 			if c.histLog != nil {
-				if err := c.histLog.LogDMOutgoing(contact.Name, text, time.Now()); err != nil {
+				if err := c.histLog.LogDMOutgoing(contact.PublicKey, text, time.Now()); err != nil {
 					c.logger.Error("historylog: failed to log outgoing DM", "error", err)
 				}
 			}

@@ -4,7 +4,11 @@
 // Layout:
 //
 //	<baseDir>/channels/<channel_name>.txt  – channel (group) messages
-//	<baseDir>/dm/<contact_name>.txt        – direct (private) messages
+//	<baseDir>/dm/<key_prefix>.txt          – direct (private) messages
+//
+// Direct-message files are named after the contact's public-key prefix (hex) so
+// that both incoming and outgoing messages for the same contact land in one file
+// regardless of whether the contact's name was resolved at the time.
 //
 // Each line is one message:
 //
@@ -13,6 +17,7 @@
 package historylog
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -23,6 +28,10 @@ import (
 	"time"
 	"unicode"
 )
+
+// keyPrefixLen is the number of public-key bytes used to name a DM log file.
+// It matches the prefix length used for contact lookup elsewhere in the bot.
+const keyPrefixLen = 6
 
 // Entry is a single parsed history record.
 type Entry struct {
@@ -105,16 +114,36 @@ func (l *Logger) LogChannelOutgoing(channelName, text string, t time.Time) error
 	return l.write(filepath.Join("channels", sanitize(channelName)), line)
 }
 
-// LogDMIncoming records a direct message received from a contact.
-func (l *Logger) LogDMIncoming(contactName, text string, t time.Time) error {
-	line := fmt.Sprintf("<< %s [%s]: %s\n", t.Format(timeLayout), contactName, text)
-	return l.write(filepath.Join("dm", sanitize(contactName)), line)
+// LogDMIncoming records a direct message received from a contact. The file is
+// named after contactKey's prefix; senderName is used only for display and falls
+// back to the key prefix when empty (e.g. an unresolved contact).
+func (l *Logger) LogDMIncoming(contactKey []byte, senderName, text string, t time.Time) error {
+	key := dmFileKey(contactKey)
+	if strings.TrimSpace(senderName) == "" {
+		senderName = key
+	}
+	line := fmt.Sprintf("<< %s [%s]: %s\n", t.Format(timeLayout), senderName, text)
+	return l.write(filepath.Join("dm", key), line)
 }
 
-// LogDMOutgoing records a direct message sent to a contact.
-func (l *Logger) LogDMOutgoing(contactName, text string, t time.Time) error {
+// LogDMOutgoing records a direct message sent to a contact. The file is named
+// after contactKey's prefix so it matches the corresponding incoming messages.
+func (l *Logger) LogDMOutgoing(contactKey []byte, text string, t time.Time) error {
 	line := fmt.Sprintf(">> %s [Me]: %s\n", t.Format(timeLayout), text)
-	return l.write(filepath.Join("dm", sanitize(contactName)), line)
+	return l.write(filepath.Join("dm", dmFileKey(contactKey)), line)
+}
+
+// dmFileKey returns the lowercase hex of the first keyPrefixLen bytes of key,
+// used as the per-contact DM log file name. Falls back to "unknown" for an
+// empty key so a write never targets a malformed path.
+func dmFileKey(key []byte) string {
+	if len(key) == 0 {
+		return "unknown"
+	}
+	if len(key) > keyPrefixLen {
+		key = key[:keyPrefixLen]
+	}
+	return hex.EncodeToString(key)
 }
 
 // Close flushes and closes all open file handles.

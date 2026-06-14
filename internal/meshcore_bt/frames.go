@@ -125,7 +125,7 @@ func (c *MeshCoreClient) parseContactMessageV3(data []byte) {
 		"pathLen", displayHops(msg.PathLength), "path", pathHex(pathBytes))
 
 	if c.histLog != nil {
-		if err := c.histLog.LogDMIncoming(senderName, text, msg.Timestamp); err != nil {
+		if err := c.histLog.LogDMIncoming(fullKey, senderName, text, msg.Timestamp); err != nil {
 			c.logger.Error("historylog: failed to log incoming DM", "error", err)
 		}
 	}
