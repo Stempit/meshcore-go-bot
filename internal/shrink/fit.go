@@ -4,7 +4,6 @@
 package shrink
 
 import (
-	"log/slog"
 	"strings"
 
 	"meshbot/internal/config"
@@ -122,11 +121,11 @@ func fitOne(v Variant, text string, max, head int) []string {
 func ValidateConfig() {
 	s := config.Get().Shrink
 	if s.Default != "" && !valid(s.Default) {
-		slog.Warn("shrink: unknown default variant, using truncate", "value", s.Default)
+		log().Warn("shrink: unknown default variant, using truncate", "value", s.Default)
 	}
 	for name, v := range s.Overrides {
 		if !valid(v) {
-			slog.Warn("shrink: unknown override variant, ignoring", "name", name, "value", v)
+			log().Warn("shrink: unknown override variant, ignoring", "name", name, "value", v)
 		}
 	}
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"time"
@@ -98,11 +97,11 @@ func Ask(ctx context.Context, wsURL, token, sessionID, text string) ([]string, e
 			continue
 		}
 
-		slog.Debug("picoclaw message", "type", msg.Type, "id", msg.ID)
+		log().Debug("picoclaw message", "type", msg.Type, "id", msg.ID)
 
 		switch msg.Type {
 		case "typing.start":
-			slog.Info("picoclaw typing started", "session", sessionID)
+			log().Info("picoclaw typing started", "session", sessionID)
 
 		case "message.create":
 			if isVisible(msg.Payload) {
@@ -114,12 +113,12 @@ func Ask(ctx context.Context, wsURL, token, sessionID, text string) ([]string, e
 				content, _ := msg.Payload["content"].(string)
 				msgContent[msgID] = content
 				msgOrder = append(msgOrder, msgID)
-				slog.Debug("picoclaw message.create", "msg_id", msgID, "content_len", len(content))
+				log().Debug("picoclaw message.create", "msg_id", msgID, "content_len", len(content))
 				if typingStopped && content != "" {
 					afterVisible()
 				}
 			} else {
-				slog.Debug("picoclaw message.create (invisible)", "kind", msg.Payload["kind"])
+				log().Debug("picoclaw message.create (invisible)", "kind", msg.Payload["kind"])
 				if typingStopped {
 					// Invisible message (tool call / thought) means the agent is still
 					// working. Extend the deadline to give the tool time to complete.
@@ -134,7 +133,7 @@ func Ask(ctx context.Context, wsURL, token, sessionID, text string) ([]string, e
 						msgOrder = append(msgOrder, msg.ID)
 					}
 					msgContent[msg.ID] = content
-					slog.Debug("picoclaw message.update", "msg_id", msg.ID, "content_len", len(content))
+					log().Debug("picoclaw message.update", "msg_id", msg.ID, "content_len", len(content))
 					if typingStopped {
 						afterVisible()
 					}
@@ -144,7 +143,7 @@ func Ask(ctx context.Context, wsURL, token, sessionID, text string) ([]string, e
 		case "typing.stop":
 			typingStopped = true
 			msgs := buildMessages(msgOrder, msgContent)
-			slog.Info("picoclaw typing stopped", "session", sessionID, "messages", len(msgs))
+			log().Info("picoclaw typing stopped", "session", sessionID, "messages", len(msgs))
 			if len(msgs) > 0 {
 				// Messages already arrived before typing.stop (normal ordering).
 				// Use a short drain window for any trailing messages.

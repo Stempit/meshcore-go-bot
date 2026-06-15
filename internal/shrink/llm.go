@@ -1,7 +1,6 @@
 package shrink
 
 import (
-	"log/slog"
 	"strings"
 
 	"meshbot/internal/config"
@@ -52,7 +51,7 @@ func llmShrink(text string, max, head int) []string {
 			return split(maybeCyrToLat(text), max, head)
 		}
 		if err != nil {
-			slog.Warn("shrink: llm error", "error", err)
+			log().Warn("shrink: llm error", "error", err)
 			return split(maybeCyrToLat(text), max, head)
 		}
 		resp = strings.TrimSpace(out)
@@ -60,10 +59,10 @@ func llmShrink(text string, max, head int) []string {
 		// checking the budget: the model compresses clean Cyrillic, then the
 		// homoglyph swap shaves the final bytes.
 		if squeezed := maybeCyrToLat(resp); len(squeezed) <= budget {
-			slog.Info("shrink: llm response", "length", len(squeezed), "try", i+1)
+			log().Info("shrink: llm response", "length", len(squeezed), "try", i+1)
 			return []string{squeezed}
 		}
-		slog.Info("shrink: llm response", "length", len(resp), "try", i+1)
+		log().Info("shrink: llm response", "length", len(resp), "try", i+1)
 	}
 	return split(maybeCyrToLat(text), max, head)
 }

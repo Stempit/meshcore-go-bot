@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"math"
 	"net/http"
 	"os"
@@ -88,7 +87,7 @@ func getStats() (*statsResponse, error) {
 	}
 	statsCache = &resp
 	statsExpiry = time.Now().Add(ttl)
-	slog.Info("stats cache refreshed", "nodes", len(resp.Nodes), "edges", len(resp.Edges))
+	log().Info("stats cache refreshed", "nodes", len(resp.Nodes), "edges", len(resp.Edges))
 	return &resp, nil
 }
 
@@ -418,7 +417,7 @@ func trySplits(stats *statsResponse, rawArgs []string) [][2]string {
 func ProcessPathCommand(text string) ([]string, error) {
 	stats, err := getStats()
 	if err != nil {
-		slog.Warn("path command: stats unavailable", "error", err)
+		log().Warn("path command: stats unavailable", "error", err)
 		return []string{"path: stats not available"}, nil
 	}
 

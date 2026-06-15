@@ -3,7 +3,6 @@ package llm
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -41,7 +40,7 @@ func GetLocalLLMResponse(model, systemPrompt string, temperature float64, reques
 		return nil
 	})
 	if err != nil {
-		slog.Error("LLM generate error", "error", err)
+		log().Error("LLM generate error", "error", err)
 		return "", err
 	}
 	return response, nil

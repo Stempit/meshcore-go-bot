@@ -3,7 +3,6 @@ package commands
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"meshbot/internal/config"
 	"meshbot/internal/picoclaw"
 	"strings"
@@ -31,10 +30,10 @@ func ProcessClawCommand(text, senderKey, channelName string) ([]string, error) {
 	sessionID := clawSessionID(senderKey, channelName)
 	parts, err := picoclaw.Ask(ctx, cfg.Claw.URL, cfg.Claw.Token, sessionID, prompt)
 	if err != nil {
-		slog.Warn("picoclaw request failed", "error", err)
+		log().Warn("picoclaw request failed", "error", err)
 		return []string{"ошибка соединения с picoclaw"}, nil
 	}
-	slog.Info("picoclaw response", "parts", len(parts))
+	log().Info("picoclaw response", "parts", len(parts))
 
 	// Each picoclaw part is a separate logical message; mesh-fit shrinking
 	// (the "claw" split override) is applied at the send site.
