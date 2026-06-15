@@ -1,7 +1,6 @@
 package commands
 
 import (
-	"log/slog"
 	"meshbot/internal/config"
 	"meshbot/internal/llm"
 	"strings"
@@ -22,10 +21,10 @@ func ProcessLLMMessage(text string) (response string, err error) {
 	}
 
 	if err != nil {
-		slog.Warn("Main LLM request error", "error", err)
+		log().Warn("Main LLM request error", "error", err)
 		return
 	}
-	slog.Info("Main LLM response", "response", response, "length", len(response))
+	log().Info("Main LLM response", "response", response, "length", len(response))
 
 	return response, nil
 }

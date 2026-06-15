@@ -2,7 +2,6 @@ package meshcore_bt
 
 import (
 	"fmt"
-	"log/slog"
 	"sync"
 	"time"
 )
@@ -20,14 +19,14 @@ func CreateSerialClient(portPath string, baud int) *MeshCoreClient {
 		notifyCh:    make(chan []byte, 100),
 		doneCh:      make(chan struct{}),
 		incomingCh:  make(chan interface{}, 100),
-		logger:      slog.Default(),
+		logger:      log(),
 	}
 
 	selfInfoReceived := make(chan struct{})
 	var selfInfoOnce sync.Once
 
 	client.OnSelfInfo(func(info *SelfInfo) {
-		slog.Info("Self info received",
+		log().Info("Self info received",
 			"name", info.Name,
 			"pubkey", fmt.Sprintf("%x", info.PublicKey),
 		)
@@ -36,29 +35,29 @@ func CreateSerialClient(portPath string, baud int) *MeshCoreClient {
 
 	client.OnChannel(func(ch *Channel) {
 		if ch.IsEmpty {
-			slog.Info("Channel empty", "index", ch.Index)
+			log().Info("Channel empty", "index", ch.Index)
 		} else {
-			slog.Info("Channel", "index", ch.Index, "name", ch.Name)
+			log().Info("Channel", "index", ch.Index, "name", ch.Name)
 		}
 	})
 
 	if err := client.ConnectSerial(portPath, baud); err != nil {
-		slog.Error("Failed to connect to serial device", "port", portPath, "error", err)
+		log().Error("Failed to connect to serial device", "port", portPath, "error", err)
 		panic(err)
 	}
 
-	slog.Info("Serial connected, waiting for self info...")
+	log().Info("Serial connected, waiting for self info...")
 
 	select {
 	case <-selfInfoReceived:
-		slog.Info("Self info ready, requesting channels...")
+		log().Info("Self info ready, requesting channels...")
 	case <-time.After(5 * time.Second):
-		slog.Warn("Timeout waiting for self info")
+		log().Warn("Timeout waiting for self info")
 	}
 
-	slog.Info("Requesting channels (count=8)")
+	log().Info("Requesting channels (count=8)")
 	if err := client.RequestChannels(8); err != nil {
-		slog.Error("Failed to request channels", "error", err)
+		log().Error("Failed to request channels", "error", err)
 		panic(err)
 	}
 
@@ -66,13 +65,13 @@ func CreateSerialClient(portPath string, baud int) *MeshCoreClient {
 
 	time.Sleep(2 * time.Second)
 
-	slog.Info("Requesting contacts (since=0)")
+	log().Info("Requesting contacts (since=0)")
 	if err := client.RequestContacts(0); err != nil {
-		slog.Error("RequestContacts error", "error", err)
+		log().Error("RequestContacts error", "error", err)
 	}
 
 	time.Sleep(3 * time.Second)
-	slog.Info("Serial client started")
+	log().Info("Serial client started")
 
 	return client
 }

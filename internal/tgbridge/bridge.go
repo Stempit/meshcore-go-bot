@@ -50,6 +50,7 @@ type Bridge struct {
 // New creates a Bridge and connects the Telegram bot. Call Start() to begin polling.
 // httpClient is used for all Telegram API requests; pass a proxy-aware client if needed.
 func New(cfg TelegramConfig, logger *slog.Logger, httpClient *http.Client) (*Bridge, error) {
+	logger = logger.With("module", "tgbridge")
 	// Long-poll timeout is 30s; the HTTP client must exceed it or it races.
 	pollClient := *httpClient
 	pollClient.Timeout = 60 * time.Second

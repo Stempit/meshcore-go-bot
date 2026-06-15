@@ -169,7 +169,7 @@ func NewMeshCoreClient(adapter *bluetooth.Adapter) *MeshCoreClient {
 		notifyCh:    make(chan []byte, 100),
 		doneCh:      make(chan struct{}),
 		incomingCh:  make(chan interface{}, 100),
-		logger:      slog.Default(),
+		logger:      log(),
 	}
 }
 

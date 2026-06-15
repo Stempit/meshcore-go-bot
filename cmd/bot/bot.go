@@ -15,12 +15,15 @@ import (
 	"meshbot/internal/commands"
 	"meshbot/internal/config"
 	"meshbot/internal/historylog"
+	"meshbot/internal/logging"
 	meshcore "meshbot/internal/meshcore_bt"
 	"meshbot/internal/mqttbridge"
 	"meshbot/internal/proxy"
 	"meshbot/internal/shrink"
 	"meshbot/internal/tgbridge"
 )
+
+var log = logging.For("bot")
 
 // processStoredMessages controls whether messages stored on the device before
 // bot startup are fed into the processing pipeline. Set to false to skip them.
@@ -58,18 +61,18 @@ func warnOldHash(outgoingCh chan<- outgoingMsg, ch *meshcore.Channel, pubKeyHex,
 		}
 	}
 	text := fmt.Sprintf("@[%s] %s", displayName, migrateNotifier.Message())
-	slog.Info("Queuing 1-byte hash migration warning", "node", displayName, "channel", ch.Name)
+	log().Info("Queuing 1-byte hash migration warning", "node", displayName, "channel", ch.Name)
 	select {
 	case outgoingCh <- outgoingMsg{channel: ch, text: text, ack: true}:
 	default:
-		slog.Warn("Outgoing channel full, dropping migration warning", "node", displayName)
+		log().Warn("Outgoing channel full, dropping migration warning", "node", displayName)
 	}
 }
 
 func main() {
 	// config
 	if err := config.Load("config.yaml"); err != nil {
-		slog.Error("Failed to load configuration", "error", err)
+		log().Error("Failed to load configuration", "error", err)
 		os.Exit(1)
 	}
 
@@ -79,11 +82,11 @@ func main() {
 
 	proxyCfg := config.Get().Proxy
 	if err := proxy.Init(proxyCfg.Enabled, proxyCfg.URL); err != nil {
-		slog.Error("Failed to initialize proxy", "error", err)
+		log().Error("Failed to initialize proxy", "error", err)
 		os.Exit(1)
 	}
 	if proxyCfg.Enabled {
-		slog.Info("Proxy enabled", "url", proxyCfg.URL)
+		log().Info("Proxy enabled", "url", proxyCfg.URL)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -100,7 +103,7 @@ func main() {
 	case "serial":
 		port := conn.SerialPort
 		if port == "" {
-			slog.Error("Connection.serial_port must be set when Connection.type is \"serial\"")
+			log().Error("Connection.serial_port must be set when Connection.type is \"serial\"")
 			os.Exit(1)
 		}
 		baud := conn.SerialBaud
@@ -153,9 +156,9 @@ func main() {
 					transmissions = 3 // default: up to 3 transmissions, stops early on mesh repeat
 				}
 				if err := client.SendChannelMessageWithRetry(msg.channel, msg.text, msg.ack, 1, transmissions, 3*time.Second); err != nil {
-					slog.Error("Failed to send channel reply", "channel", msg.channel.Name, "error", err)
+					log().Error("Failed to send channel reply", "channel", msg.channel.Name, "error", err)
 				} else {
-					slog.Info("Channel reply sent", "channel", msg.channel.Name)
+					log().Info("Channel reply sent", "channel", msg.channel.Name)
 				}
 			} else if msg.contact != nil {
 				err := client.SendMessageWithRetry(msg.contact, msg.text, true, 3, 3, 3*time.Second)
@@ -164,9 +167,9 @@ func main() {
 					err = client.SendMessageWithRetry(msg.contact, msg.text, false, 3, 3, 3*time.Second)
 				}
 				if err != nil {
-					slog.Error("Failed to send DM reply", "error", err)
+					log().Error("Failed to send DM reply", "error", err)
 				} else {
-					slog.Info("DM reply sent")
+					log().Info("DM reply sent")
 				}
 			}
 			lastSent = time.Now()
@@ -177,27 +180,27 @@ func main() {
 
 	knownKeys, err := commands.NewKnownKeys("log/known.txt")
 	if err != nil {
-		slog.Error("Failed to load known keys", "error", err)
+		log().Error("Failed to load known keys", "error", err)
 		os.Exit(1)
 	}
 
 	if err := commands.InitTicketStore("log/tickets.txt"); err != nil {
-		slog.Error("Failed to load ticket store", "error", err)
+		log().Error("Failed to load ticket store", "error", err)
 		os.Exit(1)
 	}
 
 	sendGreeting := func(contact *meshcore.Contact) {
 		pubCh := client.GetChannels()[0]
 		if pubCh == nil || pubCh.IsEmpty {
-			slog.Warn("Public channel 0 not available, skipping greeting")
+			log().Warn("Public channel 0 not available, skipping greeting")
 			return
 		}
 		msg := commands.GreetMessage(contact.Name, contact.PublicKey, contact.Type)
-		slog.Info("New node seen, queuing greeting", "name", contact.Name, "type", contact.Type)
+		log().Info("New node seen, queuing greeting", "name", contact.Name, "type", contact.Type)
 		select {
 		case outgoingCh <- outgoingMsg{channel: pubCh, text: msg, ack: true}:
 		default:
-			slog.Warn("Outgoing channel full, dropping greeting", "name", contact.Name)
+			log().Warn("Outgoing channel full, dropping greeting", "name", contact.Name)
 		}
 	}
 
@@ -231,7 +234,7 @@ func main() {
 
 		alreadyKnown, err := knownKeys.CheckAndAdd(contact.PublicKey, contact.Name)
 		if err != nil {
-			slog.Error("Failed to update known keys", "error", err)
+			log().Error("Failed to update known keys", "error", err)
 			return
 		}
 		if alreadyKnown {
@@ -241,12 +244,12 @@ func main() {
 			// Stub contact: type/name unknown yet. Request a contacts refresh and
 			// defer the greeting until the full record arrives via OnContact.
 			keyHex := fmt.Sprintf("%x", contact.PublicKey)
-			slog.Info("New node seen (stub), deferring greeting", "pub_key", keyHex)
+			log().Info("New node seen (stub), deferring greeting", "pub_key", keyHex)
 			pendingMu.Lock()
 			pendingGreets[keyHex] = struct{}{}
 			pendingMu.Unlock()
 			if err := client.RequestContacts(0); err != nil {
-				slog.Error("Failed to request contacts after stub advert", "error", err)
+				log().Error("Failed to request contacts after stub advert", "error", err)
 			}
 			return
 		}
@@ -276,12 +279,12 @@ func main() {
 	if tgCfg := config.Get().Telegram; tgCfg.Enabled {
 		tgb, err = tgbridge.New(tgCfg, slog.Default(), proxy.HTTPClient())
 		if err != nil {
-			slog.Error("Failed to start Telegram bridge", "error", err)
+			log().Error("Failed to start Telegram bridge", "error", err)
 		} else {
 			tgb.OnMessage(func(meshChannelName, senderName, text string) {
 				tgChannel := client.GetChannelByName(meshChannelName)
 				if tgChannel == nil {
-					slog.Warn("Telegram bridge: meshcore channel not found", "name", meshChannelName)
+					log().Warn("Telegram bridge: meshcore channel not found", "name", meshChannelName)
 					return
 				}
 				// The "[TG:sender] " prefix lands on the first wire message only;
@@ -333,15 +336,15 @@ func main() {
 	syncDone := make(chan struct{})
 	client.OnNoMoreMessages(func() { close(syncDone) })
 	if err := client.SyncNextMessage(); err != nil {
-		slog.Error("Failed to sync stored messages", "error", err)
+		log().Error("Failed to sync stored messages", "error", err)
 		close(syncDone)
 	}
 
 	select {
 	case <-syncDone:
-		slog.Info("Device sync complete")
+		log().Info("Device sync complete")
 	case <-time.After(15 * time.Second):
-		slog.Warn("Device sync timed out, proceeding with messages received so far")
+		log().Warn("Device sync timed out, proceeding with messages received so far")
 	}
 	// Replace callback so late "no more messages" responses during live
 	// operation don't panic on the already-closed syncDone channel.
@@ -364,13 +367,13 @@ drainLoop:
 
 	// Log and optionally process stored messages exactly once.
 	for _, m := range client.GetAllMessages() {
-		slog.Info("Stored DM", "sender", fmt.Sprintf("%x", m.SenderKey[:6]), "text", m.Text)
+		log().Info("Stored DM", "sender", fmt.Sprintf("%x", m.SenderKey[:6]), "text", m.Text)
 		if processStoredMessages {
 			incomingCh <- m
 		}
 	}
 	for _, m := range client.GetAllChannelMessages() {
-		slog.Info("Stored channel message", "channel", m.ChannelIndex, "sender", m.SenderName, "text", m.Text)
+		log().Info("Stored channel message", "channel", m.ChannelIndex, "sender", m.SenderName, "text", m.Text)
 		if processStoredMessages {
 			incomingCh <- m
 		}
@@ -388,7 +391,7 @@ drainLoop:
 	// ─── Initial stats ────────────────────────────────────────────────────────
 
 	if err := client.RequestAllStats(); err != nil {
-		slog.Error("Failed to request initial stats", "error", err)
+		log().Error("Failed to request initial stats", "error", err)
 	} else {
 		time.Sleep(500 * time.Millisecond)
 		fmt.Println(client.FormatStats())
@@ -403,14 +406,14 @@ drainLoop:
 			select {
 			case <-ticker.C:
 				if err := client.RequestAllStats(); err != nil {
-					slog.Error("Failed to request periodic stats", "error", err)
+					log().Error("Failed to request periodic stats", "error", err)
 					if !client.IsConnected() {
-						slog.Warn("BLE connection lost, reconnecting...")
+						log().Warn("BLE connection lost, reconnecting...")
 						time.Sleep(5 * time.Second)
 						if err := client.Reconnect(); err != nil {
-							slog.Error("Reconnect failed", "error", err)
+							log().Error("Reconnect failed", "error", err)
 						} else {
-							slog.Info("Reconnected to device")
+							log().Info("Reconnected to device")
 						}
 					}
 				}
@@ -420,9 +423,9 @@ drainLoop:
 		}
 	}()
 
-	slog.Info("Bot running. Press Ctrl+C to exit.")
+	log().Info("Bot running. Press Ctrl+C to exit.")
 	<-ctx.Done()
-	slog.Info("Shutting down...")
+	log().Info("Shutting down...")
 }
 
 // startMQTTBridge constructs the MQTT bridge, wires device-info/stats forwarding,
@@ -432,11 +435,11 @@ func startMQTTBridge(client *meshcore.MeshCoreClient, cfg *mqttbridge.MQTTConfig
 	bridge := mqttbridge.NewMQTTBridge(cfg)
 	bridge.SetLogger(slog.Default())
 	bridge.SetCallbacks(mqttbridge.MQTTCallbacks{
-		OnConnected:    func(broker string) { slog.Info("MQTT connected", "broker", broker) },
-		OnDisconnected: func(broker string) { slog.Info("MQTT disconnected", "broker", broker) },
+		OnConnected:    func(broker string) { log().Info("MQTT connected", "broker", broker) },
+		OnDisconnected: func(broker string) { log().Info("MQTT disconnected", "broker", broker) },
 	})
 	if err := bridge.Start(); err != nil {
-		slog.Error("Failed to start MQTT bridge", "error", err)
+		log().Error("Failed to start MQTT bridge", "error", err)
 		return nil
 	}
 
@@ -527,7 +530,7 @@ var inflight = &inflightSet{m: make(map[string]struct{})}
 func processDM(m *meshcore.Message, client *meshcore.MeshCoreClient, outgoingCh chan<- outgoingMsg) {
 	senderKeyHex := fmt.Sprintf("%x", m.SenderKey)
 	if !config.Get().Security.Direct.IsAllowed(senderKeyHex) {
-		slog.Info("Direct message filtered by security policy", "sender", senderKeyHex[:12])
+		log().Info("Direct message filtered by security policy", "sender", senderKeyHex[:12])
 		return
 	}
 
@@ -541,25 +544,25 @@ func processDM(m *meshcore.Message, client *meshcore.MeshCoreClient, outgoingCh 
 		}
 	}
 
-	slog.Info("Direct message received", "sender", contact.Name, "key", shortKey, "text", m.Text)
+	log().Info("Direct message received", "sender", contact.Name, "key", shortKey, "text", m.Text)
 
 	// One command in flight per sender: reply busy instead of queuing a second.
 	if !inflight.begin("dm:" + senderKeyHex) {
-		slog.Info("Sender busy, replying busy", "sender", contact.Name)
+		log().Info("Sender busy, replying busy", "sender", contact.Name)
 		select {
 		case outgoingCh <- outgoingMsg{contact: contact, text: "busy, try again", ack: true}:
 		default:
-			slog.Warn("Outgoing channel full, dropping busy reply", "sender", contact.Name)
+			log().Warn("Outgoing channel full, dropping busy reply", "sender", contact.Name)
 		}
 		return
 	}
 	defer inflight.done("dm:" + senderKeyHex)
 
 	if flood, ok := commands.ParseAdvertCommand(m.Text); ok {
-		slog.Info("Sending advert", "flood", flood)
+		log().Info("Sending advert", "flood", flood)
 		reply := "success"
 		if err := client.SendSelfAdvert(flood); err != nil {
-			slog.Error("SendSelfAdvert failed", "error", err)
+			log().Error("SendSelfAdvert failed", "error", err)
 			reply = "error: " + err.Error()
 		}
 		outgoingCh <- outgoingMsg{contact: contact, text: reply, ack: true}
@@ -571,11 +574,11 @@ func processDM(m *meshcore.Message, client *meshcore.MeshCoreClient, outgoingCh 
 
 	replies, name, err := commands.GenerateReplies(m.Text, "", pingMeta, string(contact.PublicKey), contact.Name)
 	if err != nil {
-		slog.Error("Command error", "error", err)
+		log().Error("Command error", "error", err)
 		return
 	}
 	if len(replies) == 0 {
-		slog.Debug("No reply generated, skipping", "text", m.Text)
+		log().Debug("No reply generated, skipping", "text", m.Text)
 		return
 	}
 
@@ -585,17 +588,17 @@ func processDM(m *meshcore.Message, client *meshcore.MeshCoreClient, outgoingCh 
 }
 
 func processChannelMessage(m *meshcore.ChannelMessage, client *meshcore.MeshCoreClient, tgb *tgbridge.Bridge, outgoingCh chan<- outgoingMsg) {
-	slog.Info("Channel message received", "channel", m.ChannelIndex, "sender", m.SenderName, "text", m.Text)
+	log().Info("Channel message received", "channel", m.ChannelIndex, "sender", m.SenderName, "text", m.Text)
 
 	channels := client.GetChannels()
 	channel, ok := channels[m.ChannelIndex]
 	if !ok || channel.IsEmpty {
-		slog.Warn("Channel not found or empty", "channel", m.ChannelIndex)
+		log().Warn("Channel not found or empty", "channel", m.ChannelIndex)
 		return
 	}
 
 	if !config.Get().Security.Channels.IsAllowed(channel.Name) {
-		slog.Info("Channel message filtered by security policy", "channel", channel.Name)
+		log().Info("Channel message filtered by security policy", "channel", channel.Name)
 		return
 	}
 
@@ -638,23 +641,23 @@ func processChannelMessage(m *meshcore.ChannelMessage, client *meshcore.MeshCore
 
 	// One command in flight per sender: reply busy instead of queuing a second.
 	if !inflight.begin("ch:" + m.SenderName) {
-		slog.Info("Sender busy, replying busy", "channel", channel.Name, "sender", m.SenderName)
+		log().Info("Sender busy, replying busy", "channel", channel.Name, "sender", m.SenderName)
 		text := fmt.Sprintf("@[%s] busy, try again", m.SenderName)
 		select {
 		case outgoingCh <- outgoingMsg{channel: channel, text: text, ack: true}:
 			forwardBotReply(text)
 		default:
-			slog.Warn("Outgoing channel full, dropping busy reply", "channel", channel.Name)
+			log().Warn("Outgoing channel full, dropping busy reply", "channel", channel.Name)
 		}
 		return
 	}
 	defer inflight.done("ch:" + m.SenderName)
 
 	if flood, ok := commands.ParseAdvertCommand(m.Text); ok {
-		slog.Info("Sending advert", "flood", flood)
+		log().Info("Sending advert", "flood", flood)
 		reply := "success"
 		if err := client.SendSelfAdvert(flood); err != nil {
-			slog.Error("SendSelfAdvert failed", "error", err)
+			log().Error("SendSelfAdvert failed", "error", err)
 			reply = "error: " + err.Error()
 		}
 		text := fmt.Sprintf("@[%s] %s", m.SenderName, reply)
@@ -668,11 +671,11 @@ func processChannelMessage(m *meshcore.ChannelMessage, client *meshcore.MeshCore
 
 	replies, name, err := commands.GenerateReplies(m.Text, channel.Name, pingMeta, senderKeyHexCh, m.SenderName)
 	if err != nil {
-		slog.Error("Command error", "error", err)
+		log().Error("Command error", "error", err)
 		return
 	}
 	if len(replies) == 0 {
-		slog.Debug("No reply generated, skipping", "text", m.Text)
+		log().Debug("No reply generated, skipping", "text", m.Text)
 		return
 	}
 

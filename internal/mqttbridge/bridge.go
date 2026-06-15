@@ -147,7 +147,7 @@ func NewMQTTBridge(config *MQTTConfig) *MQTTBridge {
 
 	bridge := &MQTTBridge{
 		config:            config,
-		logger:            slog.Default(),
+		logger:            slog.Default().With("module", "mqttbridge"),
 		reconnectAttempts: make(map[string]uint8),
 		reconnectDelay:    make(map[string]time.Duration),
 		lastReconnect:     make(map[string]time.Time),
@@ -166,7 +166,7 @@ func NewMQTTBridge(config *MQTTConfig) *MQTTBridge {
 
 // SetLogger sets a custom logger
 func (b *MQTTBridge) SetLogger(logger *slog.Logger) {
-	b.logger = logger
+	b.logger = logger.With("module", "mqttbridge")
 }
 
 // SetDeviceInfo sets device info for MQTT topics

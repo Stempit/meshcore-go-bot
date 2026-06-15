@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"meshbot/internal/config"
 	"meshbot/internal/proxy"
 	"net/http"
@@ -48,11 +47,11 @@ func ProcessWeatherCommand(text string) ([]string, error) {
 		reply, err = fetchTomorrowWeather(location, cfg.Weather.Units)
 	}
 	if err != nil {
-		slog.Warn("weather fetch error", "error", err, "location", location)
+		log().Warn("weather fetch error", "error", err, "location", location)
 		return []string{"погода: сервис недоступен"}, nil
 	}
 
-	slog.Info("weather reply", "reply", reply, "bytes", len(reply))
+	log().Info("weather reply", "reply", reply, "bytes", len(reply))
 
 	return []string{reply}, nil
 }
@@ -146,7 +145,7 @@ func fetchCurrentWeather(location, units string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	slog.Debug("wttr.in current response", "body", string(body))
+	log().Debug("wttr.in current response", "body", string(body))
 
 	if len(data.CurrentCondition) == 0 {
 		return "", fmt.Errorf("no current_condition in response")
@@ -166,7 +165,7 @@ func fetchTomorrowWeather(location, units string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	slog.Debug("wttr.in tomorrow response", "body", string(body))
+	log().Debug("wttr.in tomorrow response", "body", string(body))
 
 	if len(data.Weather) < 2 {
 		return "", fmt.Errorf("weather array too short (%d elements)", len(data.Weather))

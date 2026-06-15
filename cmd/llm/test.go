@@ -2,10 +2,9 @@ package main
 
 import (
 	"fmt"
-	"log"
-	"log/slog"
-	"meshbot/internal/commands"
+	"os"
 
+	"meshbot/internal/commands"
 	"meshbot/internal/config"
 )
 
@@ -15,8 +14,8 @@ func main() {
 	err := config.Load("config.yaml")
 	if err != nil {
 		// Обрабатываем ошибку: можно завершить приложение с подробным сообщением
-		slog.Error("Failed to load configuration", "error", err)
-		log.Fatal("Cannot start application: configuration error")
+		log().Error("Failed to load configuration", "error", err)
+		os.Exit(1)
 	}
 
 	fmt.Println(commands.ProcessLLMMessage(".llm круче Кант или Гегель?"))
