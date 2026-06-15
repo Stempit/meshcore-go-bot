@@ -172,3 +172,76 @@ func TestSkippedFirstItemMovesPrefixToNext(t *testing.T) {
 		t.Fatalf("prefix should move to first emitted msg, got %v", out)
 	}
 }
+
+// withCyrToLat toggles the lossless transform via the config pointer and
+// restores it after fn. config.Get() returns a pointer, so the flag is mutable
+// in tests without re-running Load (which is sync.Once-guarded).
+func withCyrToLat(t *testing.T, on bool, fn func()) {
+	t.Helper()
+	s := &config.Get().Shrink
+	prev := s.CyrToLat
+	s.CyrToLat = on
+	defer func() { s.CyrToLat = prev }()
+	fn()
+}
+
+func TestCyrToLatMappingAndByteSavings(t *testing.T) {
+	// All-mapped letters: "соре" → "cope", 4 Cyrillic (8 B) → 4 ASCII (4 B).
+	in := "соре"
+	got := cyrToLat(in)
+	if got != "cope" {
+		t.Fatalf("cyrToLat(%q) = %q, want %q", in, got, "cope")
+	}
+	if saved := len(in) - len(got); saved != 4 {
+		t.Errorf("expected 4 bytes saved, got %d", saved)
+	}
+}
+
+func TestCyrToLatLeavesNonMappedRunes(t *testing.T) {
+	// ж and lowercase к/м/т are not in the conservative set; keep them as-is.
+	in := "жкмт"
+	got := cyrToLat(in)
+	if got != in {
+		t.Errorf("non-mapped runes changed: %q -> %q", in, got)
+	}
+	if !utf8.ValidString(got) {
+		t.Errorf("output not valid UTF-8: %q", got)
+	}
+}
+
+func TestCyrToLatDisabledLeavesOriginal(t *testing.T) {
+	withCyrToLat(t, false, func() {
+		out := Fit("tr", "", []string{"соре"})
+		if len(out) != 1 || out[0] != "соре" {
+			t.Errorf("disabled transform should keep original, got %v", out)
+		}
+	})
+}
+
+func TestCyrToLatAvoidsSplit(t *testing.T) {
+	// A Cyrillic message just over the limit that fits once squeezed must come
+	// back as a single part with no [i/N] marker.
+	text := longCyrillic(150) // > 140 bytes, all mapped letters
+	if len(text) <= max {
+		t.Fatalf("test setup: text should exceed max, got %d", len(text))
+	}
+	withCyrToLat(t, true, func() {
+		out := Fit("sp", "", []string{text})
+		checkAllFit(t, out, "")
+		if len(out) != 1 {
+			t.Fatalf("expected 1 part after squeeze, got %d: %v", len(out), out)
+		}
+		if markerRe.MatchString(out[0]) {
+			t.Errorf("unexpected split marker: %q", out[0])
+		}
+	})
+}
+
+func TestCyrToLatPrefixSqueezedAndFits(t *testing.T) {
+	prefix := "@[Сорес] " // mapped Cyrillic in the prefix
+	withCyrToLat(t, true, func() {
+		out := Fit("sp", prefix, []string{longASCII(400)})
+		// Prefix is transliterated, so check against the squeezed form.
+		checkAllFit(t, out, cyrToLat(prefix))
+	})
+}

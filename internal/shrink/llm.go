@@ -20,7 +20,7 @@ func llmShrink(text string, max, head int) []string {
 	}
 
 	if !cfg.LLM.Enabled {
-		return split(text, max, head)
+		return split(maybeCyrToLat(text), max, head)
 	}
 
 	sc := cfg.Shrink.LLM
@@ -49,17 +49,21 @@ func llmShrink(text string, max, head int) []string {
 		case "ollama":
 			out, err = llm.GetLocalLLMResponse(model, sc.Prompt, sc.Temperature, resp)
 		default:
-			return split(text, max, head)
+			return split(maybeCyrToLat(text), max, head)
 		}
 		if err != nil {
 			slog.Warn("shrink: llm error", "error", err)
-			return split(text, max, head)
+			return split(maybeCyrToLat(text), max, head)
 		}
 		resp = strings.TrimSpace(out)
-		slog.Info("shrink: llm response", "length", len(resp), "try", i+1)
-		if len(resp) <= budget {
-			return []string{resp}
+		// Apply the lossless squeeze to the LLM output (not its input) before
+		// checking the budget: the model compresses clean Cyrillic, then the
+		// homoglyph swap shaves the final bytes.
+		if squeezed := maybeCyrToLat(resp); len(squeezed) <= budget {
+			slog.Info("shrink: llm response", "length", len(squeezed), "try", i+1)
+			return []string{squeezed}
 		}
+		slog.Info("shrink: llm response", "length", len(resp), "try", i+1)
 	}
-	return split(text, max, head)
+	return split(maybeCyrToLat(text), max, head)
 }

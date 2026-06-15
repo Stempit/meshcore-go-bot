@@ -61,6 +61,9 @@ func resolveVariant(name string) Variant {
 func Fit(name, prefix string, msgs []string) []string {
 	v := resolveVariant(name)
 	max := maxBytes()
+	// The prefix is part of the wire bytes, so squeeze it too (visually
+	// identical) and account for its post-transform length.
+	prefix = maybeCyrToLat(prefix)
 	head := len(prefix)
 
 	var out []string
@@ -94,18 +97,23 @@ func fitOne(v Variant, text string, max, head int) []string {
 	if budget < 1 {
 		budget = 1
 	}
-	if len(text) <= budget {
-		return []string{text}
+	// Lossless pre-transform: the squeezed text drives the fit decision and the
+	// truncate/split/skip variants. The LLM variant is the exception — it gets
+	// the original Cyrillic so its input is clean, and squeezes its output
+	// itself (see llmShrink).
+	transformed := maybeCyrToLat(text)
+	if len(transformed) <= budget {
+		return []string{transformed}
 	}
 	switch v {
 	case Skip:
 		return nil
 	case Split:
-		return split(text, max, head)
+		return split(transformed, max, head)
 	case LLM:
 		return llmShrink(text, max, head)
 	default: // Truncate and any fallthrough
-		return []string{truncate(text, budget)}
+		return []string{truncate(transformed, budget)}
 	}
 }
 

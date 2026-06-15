@@ -74,6 +74,44 @@ If the text can't fit in 9 parts, the 9th is truncated (with the ellipsis) so th
 series never exceeds 9. The cap is **per fitted message**, never across a reply
 set — a 20-item news list is legitimately 20+ wire messages.
 
+## Lossless pre-transforms
+
+Before any variant runs, `Fit` can apply **lossless** byte reductions — squeezes
+that change bytes but not the rendered text. They run *in front of* the variant
+pipeline, so a message often drops under the limit without any cutting.
+
+### Cyrillic → Latin homoglyphs (`cyr_to_lat`)
+
+Many Cyrillic letters are pixel-identical to a Latin (ASCII) letter. Each
+Cyrillic rune is 2 bytes in UTF-8; its ASCII twin is 1 byte, so every
+substitution saves exactly one byte with no visual change. The set is
+deliberately **conservative** — only glyphs identical in virtually every font:
+
+```
+lower: а→a  е→e  ё→e  о→o  с→c  р→p  у→y  х→x
+UPPER: А→A  В→B  Е→E  Ё→E  К→K  М→M  Н→H  О→O  Р→P  С→C  Т→T  У→Y  Х→X
+```
+
+Lowercase `к м т н` (and similar near-misses) are **excluded**: they only
+resemble their Latin counterparts.
+
+Placement matters because of the **LLM** variant:
+
+- For `truncate` / `split` / `skip` and the initial "does it already fit?" check,
+  the transform is applied to the **input** before the budget is computed. If the
+  squeezed text fits, `Fit` returns it directly — for the `llm` variant this means
+  the LLM is never called.
+- For the `llm` variant the LLM receives the **original** Cyrillic (clean input →
+  good compression); the transform is then applied to each candidate **response**
+  before the budget check, and to the text handed to the `split` fallback. Feeding
+  the model pre-substituted mixed-script text would corrupt its input, so the
+  squeeze stays on the output side.
+
+The reply **prefix** (`@[sender] `, `[TG:sender] `) is squeezed too, and its
+post-transform length is what the first message's budget accounts for.
+
+Controlled by a single global `Shrink.cyr_to_lat` bool (no per-name override).
+
 ## The one function
 
 ```go
@@ -123,6 +161,7 @@ Shrink:
   default: llm          # global default variant
   max_bytes: 140        # hard mesh limit
   ellipsis: "…"
+  cyr_to_lat: true      # lossless Cyrillic→Latin homoglyph squeeze (1 byte/char)
   overrides:            # per-name override of `default`
     claw: split
     news: skip
@@ -198,6 +237,7 @@ internal/shrink/
   split.go     – rune/space-aware splitter (cap 9), marker helpers
   truncate.go  – rune-safe truncate with ellipsis
   llm.go       – LLM variant (wraps internal/llm), Split fallback
+  cyrlat.go    – lossless Cyrillic→Latin homoglyph pre-transform
 ```
 
 `shrink` imports only `internal/config` and `internal/llm`. It is imported by

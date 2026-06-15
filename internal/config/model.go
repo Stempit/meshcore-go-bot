@@ -35,10 +35,11 @@ type ShrinkLLMConfig struct {
 // ShrinkConfig is the unified mesh-fit configuration. Default is the global
 // variant; Overrides selects a variant per command/source name.
 type ShrinkConfig struct {
-	Default   string            `yaml:"default"`   // truncate|split|llm|skip
-	MaxBytes  int               `yaml:"max_bytes"` // hard mesh limit, default 140
-	Ellipsis  string            `yaml:"ellipsis"`  // appended by truncate
-	Overrides map[string]string `yaml:"overrides"` // name -> variant
+	Default   string            `yaml:"default"`    // truncate|split|llm|skip
+	MaxBytes  int               `yaml:"max_bytes"`  // hard mesh limit, default 140
+	Ellipsis  string            `yaml:"ellipsis"`   // appended by truncate
+	CyrToLat  bool              `yaml:"cyr_to_lat"` // lossless Cyrillic→Latin homoglyph squeeze
+	Overrides map[string]string `yaml:"overrides"`  // name -> variant
 	LLM       ShrinkLLMConfig   `yaml:"llm"`
 }
 
