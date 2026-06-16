@@ -241,17 +241,17 @@ func (c *MeshCoreClient) parseChannelMessageV3(data []byte) {
 	snr := float64(int8(data[1])) / 4.0
 	rssi := 0.0 // V3 frame does not carry RSSI; use pending raw value if found
 
-	// Find the oldest pending raw packet (0x88 arrives before 0x11, so oldest first).
-	var rawData []byte
-	for i := 0; i < len(c.pendingRaw); i++ {
-		p := c.pendingRaw[i]
-		if time.Since(p.arrivedAt) <= pendingRawTTL {
-			rawData = p.rawData
-			rssi = p.rssi
-			// Remove the matched entry so it is not published again.
-			c.pendingRaw = append(c.pendingRaw[:i], c.pendingRaw[i+1:]...)
-			break
-		}
+	// Correlate this message with its own 0x88 raw frame, matching on the GRP_TXT
+	// type and channel hash rather than mere arrival order. A wrong match would
+	// stamp this message with another packet's path; better to report no path than
+	// the path of an unrelated packet.
+	var psk []byte
+	if ch != nil {
+		psk = ch.PSK
+	}
+	rawData, rawRSSI := c.takeChannelRaw(psk)
+	if rawData != nil {
+		rssi = rawRSSI
 	}
 
 	if publisher != nil {
@@ -370,6 +370,29 @@ func (c *MeshCoreClient) takePendingRawPath() (pathBytes []byte, hopCount int) {
 			c.pendingRaw = append(c.pendingRaw[:i], c.pendingRaw[i+1:]...)
 			return extractPathFromRaw(p.rawData)
 		}
+	}
+	return nil, 0
+}
+
+// takeChannelRaw finds and removes the oldest still-valid pending raw frame that
+// belongs to the channel message being decoded. Matching on the GRP_TXT payload
+// type and channel hash (when the PSK is known) stops an unrelated packet —
+// advert, ACK, a different channel — that merely arrived within pendingRawTTL
+// from lending its path to this message. Returns nil when no matching live raw
+// is available (e.g. a message synced from device history). Must be called from
+// the frameHandler goroutine, the only writer of c.pendingRaw.
+func (c *MeshCoreClient) takeChannelRaw(psk []byte) (rawData []byte, rssi float64) {
+	wantHash, haveHash := channelHashByte(psk)
+	for i := 0; i < len(c.pendingRaw); i++ {
+		p := c.pendingRaw[i]
+		if time.Since(p.arrivedAt) > pendingRawTTL {
+			continue
+		}
+		if !rawIsChannelMsg(p.rawData, wantHash, haveHash) {
+			continue
+		}
+		c.pendingRaw = append(c.pendingRaw[:i], c.pendingRaw[i+1:]...)
+		return p.rawData, p.rssi
 	}
 	return nil, 0
 }

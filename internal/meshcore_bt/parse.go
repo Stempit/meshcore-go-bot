@@ -647,6 +647,35 @@ func rawFramePayload(raw []byte) (byte, []byte, bool) {
 	return payloadType, raw[i:], true
 }
 
+// channelHashByte returns the 1-byte channel hash (SHA256(PSK)[0]) the firmware
+// writes at the start of a GRP_TXT payload. ok is false when the channel has no
+// usable PSK, in which case the hash cannot be checked.
+func channelHashByte(psk []byte) (hash byte, ok bool) {
+	if len(psk) < 16 {
+		return 0, false
+	}
+	sum := sha256.Sum256(psk[:16])
+	return sum[0], true
+}
+
+// rawIsChannelMsg reports whether a raw RF frame is a GRP_TXT channel message
+// and, when wantHash is supplied, whether its channel hash matches. It is used
+// to correlate a decoded channel-message frame with the right 0x88 raw frame
+// instead of trusting arrival order alone: adverts, ACKs, DMs and other
+// channels' traffic all share the pending-raw queue and would otherwise lend
+// their path to an unrelated message.
+func rawIsChannelMsg(raw []byte, wantHash byte, haveHash bool) bool {
+	ptype, payload, ok := rawFramePayload(raw)
+	if !ok || ptype != payloadTypeGrpTxt {
+		return false
+	}
+	if !haveHash {
+		return true
+	}
+	// GRP_TXT payload wire format: [channel_hash(1)][mac(2)][ciphertext…].
+	return len(payload) > 0 && payload[0] == wantHash
+}
+
 // armRepeatWatch starts watching incoming raw frames for a rebroadcast of the
 // packet identified by hash, returning a channel that receives once a match is
 // heard. Call disarmRepeatWatch when done.
