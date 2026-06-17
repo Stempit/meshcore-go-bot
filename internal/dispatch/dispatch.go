@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"meshbot/internal/config"
-	"meshbot/internal/greeter"
 	"meshbot/internal/logging"
 	meshcore "meshbot/internal/meshcore_bt"
 	"meshbot/internal/tgbridge"
@@ -28,14 +27,23 @@ type Outgoing struct {
 	Ack     bool
 }
 
+// Observer reacts to received messages before command processing — used by
+// subsystems that watch traffic rather than answer commands (e.g. the migrator).
+// The dispatcher resolves the contact (DM) or channel before notifying, so
+// observers don't repeat the lookup. Implementations must not block.
+type Observer interface {
+	OnDirectMessage(*meshcore.Message, *meshcore.Contact)
+	OnChannelMessage(*meshcore.ChannelMessage, *meshcore.Channel)
+}
+
 // Dispatcher routes incoming mesh messages to command handlers and serializes
 // outgoing replies. Construct with New, wire optional subsystems with the
 // setters, then call Run.
 type Dispatcher struct {
-	client   *meshcore.MeshCoreClient
-	tgb      *tgbridge.Bridge
-	greeter  *greeter.Greeter
-	inflight *inflightSet
+	client    *meshcore.MeshCoreClient
+	tgb       *tgbridge.Bridge
+	observers []Observer
+	inflight  *inflightSet
 
 	incoming chan any
 	outgoing chan Outgoing
@@ -55,9 +63,8 @@ func New(client *meshcore.MeshCoreClient) *Dispatcher {
 // (the default) disables forwarding.
 func (d *Dispatcher) SetTelegram(tgb *tgbridge.Bridge) { d.tgb = tgb }
 
-// SetGreeter attaches the greeter so channel messages can trigger 1-byte hash
-// migration warnings.
-func (d *Dispatcher) SetGreeter(g *greeter.Greeter) { d.greeter = g }
+// AddObserver registers o to be notified of received messages. Call before Run.
+func (d *Dispatcher) AddObserver(o Observer) { d.observers = append(d.observers, o) }
 
 // Enqueue queues a reply for transmission. It is safe for concurrent use.
 func (d *Dispatcher) Enqueue(msg Outgoing) { d.outgoing <- msg }
@@ -147,13 +154,19 @@ func (d *Dispatcher) runWorkers() {
 	}
 }
 
-// enqueueChannel adapts Enqueue to the greeter.Sender signature.
-func (d *Dispatcher) enqueueChannel(ch *meshcore.Channel, text string, ack bool) {
+// SendChannelMessage queues text on channel ch, dropping it if the outgoing
+// queue is full. It is a delivery callback for subsystems (greeter, migrator)
+// that emit channel messages without depending on the dispatcher's types.
+func (d *Dispatcher) SendChannelMessage(ch *meshcore.Channel, text string, ack bool) {
 	if !d.TryEnqueue(Outgoing{Channel: ch, Text: text, Ack: ack}) {
-		log().Warn("Outgoing channel full, dropping greeter message", "channel", ch.Name)
+		log().Warn("Outgoing queue full, dropping channel message", "channel", ch.Name)
 	}
 }
 
-// GreeterSender returns a greeter.Sender backed by this dispatcher's outgoing
-// queue, for use when constructing the greeter.
-func (d *Dispatcher) GreeterSender() greeter.Sender { return d.enqueueChannel }
+// SendDirectMessage queues text to contact, dropping it if the outgoing queue is
+// full. It is a delivery callback for subsystems that reply directly.
+func (d *Dispatcher) SendDirectMessage(contact *meshcore.Contact, text string, ack bool) {
+	if !d.TryEnqueue(Outgoing{Contact: contact, Text: text, Ack: ack}) {
+		log().Warn("Outgoing queue full, dropping direct message", "node", contact.Name)
+	}
+}

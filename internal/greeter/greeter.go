@@ -1,8 +1,7 @@
-// Package greeter handles two related courtesy behaviours that fire from the
-// device's advert/contact stream: greeting newly seen nodes on the public
-// channel, and nudging nodes still routing with 1-byte hashes to switch to
-// 2-byte. Both emit channel messages through a caller-supplied Sender, so this
-// package has no dependency on the outgoing-message pipeline.
+// Package greeter greets newly seen nodes on the public channel as they appear
+// in the device's advert/contact stream. It emits channel messages through a
+// caller-supplied Sender, so this package has no dependency on the
+// outgoing-message pipeline.
 package greeter
 
 import (
@@ -20,13 +19,12 @@ var log = logging.For("greeter")
 // acknowledgement. Implementations must not block.
 type Sender func(ch *meshcore.Channel, text string, ack bool)
 
-// Greeter greets new nodes and posts 1-byte→2-byte hash migration reminders.
-// It is constructed once and Register installs the device observers.
+// Greeter greets new nodes on the public channel. It is constructed once and
+// Register installs the device observers.
 type Greeter struct {
-	client   *meshcore.MeshCoreClient
-	known    *commands.KnownKeys
-	notifier *commands.MigrationNotifier
-	send     Sender
+	client *meshcore.MeshCoreClient
+	known  *commands.KnownKeys
+	send   Sender
 
 	// pendingGreets holds public-key hex strings of nodes whose advert arrived
 	// before their contact record was in the cache. They are greeted once the
@@ -35,15 +33,14 @@ type Greeter struct {
 	pending map[string]struct{}
 }
 
-// New returns a Greeter. known tracks already-greeted nodes, notifier decides
-// when to post migration reminders, and send queues outgoing channel messages.
-func New(client *meshcore.MeshCoreClient, known *commands.KnownKeys, notifier *commands.MigrationNotifier, send Sender) *Greeter {
+// New returns a Greeter. known tracks already-greeted nodes and send queues
+// outgoing channel messages.
+func New(client *meshcore.MeshCoreClient, known *commands.KnownKeys, send Sender) *Greeter {
 	return &Greeter{
-		client:   client,
-		known:    known,
-		notifier: notifier,
-		send:     send,
-		pending:  make(map[string]struct{}),
+		client:  client,
+		known:   known,
+		send:    send,
+		pending: make(map[string]struct{}),
 	}
 }
 
@@ -53,36 +50,13 @@ func (g *Greeter) Register() {
 	g.client.OnContact(g.onContact)
 }
 
-// WarnOldHash posts the migration reminder on channel ch for a node still using
-// 1-byte routing hashes, subject to the per-node cooldown. hashSize is the
-// node's bytes-per-hop (<=0 = unknown, skipped). displayName is the @[…] mention;
-// pubKeyHex keys the cooldown.
-func (g *Greeter) WarnOldHash(ch *meshcore.Channel, pubKeyHex, displayName string, hashSize int) {
-	if ch == nil || ch.IsEmpty {
-		return
-	}
-	if !g.notifier.ShouldWarn(pubKeyHex, hashSize) {
-		return
-	}
-	if displayName == "" {
-		displayName = pubKeyHex
-		if len(displayName) > 8 {
-			displayName = displayName[:8]
-		}
-	}
-	text := fmt.Sprintf("@[%s] %s", displayName, g.notifier.Message())
-	log().Info("Queuing 1-byte hash migration warning", "node", displayName, "channel", ch.Name)
-	g.send(ch, text, true)
-}
-
 func (g *Greeter) onAdvert(contact *meshcore.Contact) {
-	// NOTE: migration warnings are NOT raised here. The advert push frame carries
-	// only the public key, so we fall back to the cached contact's out_path_len —
-	// but that is OUR outbound route to the node, not the node's advert hash size,
-	// and the firmware never refreshes it on advert reception. A node that switched
-	// from 1-byte to 2-byte keeps a stale 1-byte out_path, producing endless false
-	// warnings. The real, current hash size is only known from received messages,
-	// so the nudge lives in the dispatcher's per-message path instead.
+	// NOTE: 1-byte hash migration warnings are deliberately NOT raised from
+	// adverts (that lives in the migrator package, off received messages). The
+	// advert push frame carries only the public key, so the only hash-size signal
+	// here is the cached contact's out_path_len — but that is OUR outbound route
+	// to the node, not the node's advert hash size, and the firmware never
+	// refreshes it on advert reception, so it produces false warnings.
 
 	alreadyKnown, err := g.known.CheckAndAdd(contact.PublicKey, contact.Name)
 	if err != nil {

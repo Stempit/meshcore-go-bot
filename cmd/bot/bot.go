@@ -16,6 +16,7 @@ import (
 	"meshbot/internal/historylog"
 	"meshbot/internal/logging"
 	meshcore "meshbot/internal/meshcore_bt"
+	"meshbot/internal/migrator"
 	"meshbot/internal/mqttbridge"
 	"meshbot/internal/proxy"
 	"meshbot/internal/shrink"
@@ -114,11 +115,13 @@ func main() {
 	if migCooldown <= 0 {
 		migCooldown = 24 * time.Hour
 	}
-	notifier := commands.NewMigrationNotifier(migCfg.Enabled, migMsg, migCooldown)
+	notifier := migrator.NewNotifier(migCfg.Enabled, migMsg, migCooldown)
 
-	g := greeter.New(client, knownKeys, notifier, d.GreeterSender())
+	g := greeter.New(client, knownKeys, d.SendChannelMessage)
 	g.Register()
-	d.SetGreeter(g)
+
+	mig := migrator.New(notifier, client, d.SendChannelMessage, d.SendDirectMessage)
+	d.AddObserver(mig)
 
 	// ─── Telegram bridge ──────────────────────────────────────────────────────
 
