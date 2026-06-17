@@ -89,6 +89,10 @@ func GenerateReplies(text, channelName string, pingMeta *PingMeta, senderKey, se
 		replies, err := ProcessPathCommand(trimmed)
 		return replies, "path", err
 
+	case strings.HasPrefix(lower, ".8ball"):
+		replies, err := ProcessEightBallCommand(text)
+		return replies, "8ball", err
+
 	default:
 		return nil, "", nil
 	}
