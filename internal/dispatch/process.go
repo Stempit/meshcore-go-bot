@@ -56,6 +56,13 @@ func (d *Dispatcher) processDM(m *meshcore.Message) {
 
 	log().Info("Direct message received", "sender", contact.Name, "key", shortKey, "text", m.Text)
 
+	// Notify observers (e.g. the migrator) of the received DM. Done before the
+	// per-sender in-flight guard so it fires for any DM, not just commands, and
+	// never consumes a command slot.
+	for _, o := range d.observers {
+		o.OnDirectMessage(m, contact)
+	}
+
 	// One command in flight per sender: reply busy instead of queuing a second.
 	if !d.inflight.begin("dm:" + senderKeyHex) {
 		log().Info("Sender busy, replying busy", "sender", contact.Name)
@@ -114,6 +121,13 @@ func (d *Dispatcher) processChannelMessage(m *meshcore.ChannelMessage) {
 		d.tgb.Forward(channel.Name, m.SenderName, m.Text)
 	}
 
+	// Notify observers (e.g. the migrator) of the received channel message. Done
+	// before the per-sender in-flight guard so it fires for any message, not just
+	// commands, and never consumes a command slot.
+	for _, o := range d.observers {
+		o.OnChannelMessage(m, channel)
+	}
+
 	// Resolve sender coordinates and public key for commands.
 	var senderLat, senderLon *float64
 	var senderKeyHexCh string
@@ -121,18 +135,6 @@ func (d *Dispatcher) processChannelMessage(m *meshcore.ChannelMessage) {
 		senderLat = c.Latitude
 		senderLon = c.Longitude
 		senderKeyHexCh = fmt.Sprintf("%x", c.PublicKey)
-	}
-
-	// Nudge senders still routing with 1-byte hashes. m.PathBytes/m.PathLength
-	// (meaningful path bytes + hop count) are populated for live messages; their
-	// ratio is the bytes-per-hop. Done before the per-sender in-flight guard so it
-	// fires for any message, not just commands, and never consumes a command slot.
-	if hops := m.PathLength; d.greeter != nil && hops > 0 && len(m.PathBytes) > 0 && len(m.PathBytes)%hops == 0 {
-		warnKey := senderKeyHexCh
-		if warnKey == "" {
-			warnKey = "name:" + m.SenderName
-		}
-		d.greeter.WarnOldHash(channel, warnKey, m.SenderName, len(m.PathBytes)/hops)
 	}
 
 	// forwardBotReply sends a bot reply to Telegram only when this mesh channel
