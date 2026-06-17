@@ -86,6 +86,12 @@ type MigrationConfig struct {
 	CooldownSec int    `yaml:"cooldown_sec"` // default 86400 (24h)
 }
 
+// TopConfig controls the ".top" command: how many of the most recent channel
+// messages are scanned to rank authors by message count.
+type TopConfig struct {
+	ScanCount int `yaml:"scan_count"` // recent messages to scan, default 100
+}
+
 type Config struct {
 	Connection ConnectionConfig        `yaml:"Connection"`
 	Proxy      ProxyConfig             `yaml:"Proxy"`
@@ -96,6 +102,7 @@ type Config struct {
 	Weather    WeatherConfig           `yaml:"Weather"`
 	Stats      StatsConfig             `yaml:"Stats"`
 	Migration  MigrationConfig         `yaml:"Migration"`
+	Top        TopConfig               `yaml:"Top"`
 	Shrink     ShrinkConfig            `yaml:"Shrink"`
 	LLM        struct {
 		Enabled           bool    `yaml:"enabled"`
