@@ -137,3 +137,9 @@ Migration:
   enabled: false
   message: "switch to 2-byte please"
   cooldown_sec: 86400  # min gap between warnings to the same node; 0 = default 24h
+
+Top:
+  # ".top" ranks the most active authors in the channel where it was called.
+  # scan_count is how many of the most recent (non-bot) channel messages are
+  # scanned before tallying authors; 0 or unset = default 100.
+  scan_count: 100

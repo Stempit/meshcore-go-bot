@@ -83,5 +83,7 @@ log/
 | `.llm <prompt>` | `commands.ProcessLLMMessage` | LLM query; auto-shrinks response to ≤130 chars |
 | `.news [feed] [n] [offset]` | `commands.ProcessNewsCommand` | Lists feeds or returns recent RSS items from `log/news/`, populated by the [newswire](https://github.com/Stempit/newswire) poller |
 | `.claw <prompt>` | `commands.ProcessClawCommand` | Sends prompt to picoclaw AI agent via WebSocket; auto-shrinks response |
+| `.8ball <question>` | `commands.ProcessEightBallCommand` | Magic 8-Ball; random Russian yes/no/maybe answer |
+| `.top` | `commands.ProcessTopCommand` | Top-5 channel authors by message count (scans last `Top.scan_count`, default 100); channels only, "not available" in DMs |
 
 New commands go in `internal/commands/` and must be wired into the `switch` in `commands_server.go`.

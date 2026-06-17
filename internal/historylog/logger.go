@@ -82,6 +82,29 @@ func ReadLastChannel(baseDir, channelName string, n int) ([]Entry, error) {
 	return entries[len(entries)-n:], nil
 }
 
+// ReadAllChannel returns every parsed entry from the named channel log under
+// baseDir, oldest first. Returns nil, nil if the log file does not exist yet.
+func ReadAllChannel(baseDir, channelName string) ([]Entry, error) {
+	path := filepath.Join(baseDir, "channels", sanitize(channelName)+".txt")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("historylog: read %s: %w", path, err)
+	}
+
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+
+	var entries []Entry
+	for _, line := range lines {
+		if e, ok := parseLine(line); ok {
+			entries = append(entries, e)
+		}
+	}
+	return entries, nil
+}
+
 const timeLayout = "2006-01-02 15:04:05"
 
 // Logger writes conversation history to files. It is safe for concurrent use.
