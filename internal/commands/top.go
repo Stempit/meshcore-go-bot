@@ -72,7 +72,7 @@ func ProcessTopCommand(currentChannel string) ([]string, error) {
 	}
 
 	var b strings.Builder
-	b.WriteString("🏆 Топ авторов:")
+	b.WriteString("🏆 Toп aвтopoв:")
 	for i, name := range ranked {
 		var place string
 		if i < len(topMedals) {
