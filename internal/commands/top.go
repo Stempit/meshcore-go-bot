@@ -2,7 +2,9 @@ package commands
 
 import (
 	"fmt"
+	"math"
 	"sort"
+	"strconv"
 	"strings"
 
 	"meshbot/internal/config"
@@ -13,6 +15,8 @@ const (
 	defaultTopScanCount = 100 // recent messages scanned when Top.scan_count is unset
 	topAuthorsShown     = 3   // how many ranked authors to return
 	topNameMaxRunes     = 12  // author names are clipped to fit the 140-byte mesh limit
+	topBarMax           = 5   // blocks in the longest bar (the leader)
+	topBarChar          = "▇" // bar block; the leader gets topBarMax of these
 )
 
 // topMedals decorates the first three places; lower places fall back to a number.
@@ -71,18 +75,39 @@ func ProcessTopCommand(currentChannel string) ([]string, error) {
 		ranked = ranked[:topAuthorsShown]
 	}
 
+	leader := counts[ranked[0]]             // ranked is sorted desc, so the first is the max
+	countWidth := len(strconv.Itoa(leader)) // right-align counts into a column
+
 	var b strings.Builder
-	b.WriteString("🏆 Toп aвтopoв:")
+	fmt.Fprintf(&b, "🏆 Топ за %d сообщ:", len(msgs))
 	for i, name := range ranked {
 		var place string
 		if i < len(topMedals) {
 			place = topMedals[i]
 		} else {
-			place = fmt.Sprintf("%d.", i+1)
+			place = fmt.Sprintf("%d", i+1)
 		}
-		fmt.Fprintf(&b, "\n%s %s — %d", place, clipName(name), counts[name])
+		c := counts[name]
+		blocks := barLen(c, leader)
+		// Lead with a fixed-width bar so bars and counts form columns; the
+		// variable-length name trails where its length no longer matters.
+		bar := strings.Repeat(topBarChar, blocks) + strings.Repeat(" ", topBarMax-blocks)
+		fmt.Fprintf(&b, "\n%s %s %*d %s", place, bar, countWidth, c, clipName(name))
 	}
 	return []string{b.String()}, nil
+}
+
+// barLen scales a count to a bar of 1..topBarMax blocks, relative to the
+// leader's count. Any nonzero count gets at least one block so it stays visible.
+func barLen(count, leader int) int {
+	if leader <= 0 {
+		return 0
+	}
+	n := int(math.Round(float64(count) / float64(leader) * topBarMax))
+	if n < 1 {
+		n = 1
+	}
+	return n
 }
 
 // clipName shortens an author name to topNameMaxRunes runes (adding an ellipsis)
