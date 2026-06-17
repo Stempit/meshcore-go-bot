@@ -56,6 +56,17 @@ func (d *Dispatcher) processDM(m *meshcore.Message) {
 
 	log().Info("Direct message received", "sender", contact.Name, "key", shortKey, "text", m.Text)
 
+	// Nudge senders still routing with 1-byte hashes. m.PathBytes/m.PathLength
+	// (meaningful path bytes + hop count) reflect the real path this message
+	// travelled, so their ratio is the true bytes-per-hop. The warning lands on
+	// the public channel. Done before the per-sender in-flight guard so it fires
+	// for any DM, not just commands, and never consumes a command slot.
+	if hops := m.PathLength; d.greeter != nil && hops > 0 && len(m.PathBytes) > 0 && len(m.PathBytes)%hops == 0 {
+		if pub := d.client.GetChannels()[0]; pub != nil {
+			d.greeter.WarnOldHash(pub, senderKeyHex, contact.Name, len(m.PathBytes)/hops)
+		}
+	}
+
 	// One command in flight per sender: reply busy instead of queuing a second.
 	if !d.inflight.begin("dm:" + senderKeyHex) {
 		log().Info("Sender busy, replying busy", "sender", contact.Name)

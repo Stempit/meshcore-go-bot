@@ -76,13 +76,13 @@ func (g *Greeter) WarnOldHash(ch *meshcore.Channel, pubKeyHex, displayName strin
 }
 
 func (g *Greeter) onAdvert(contact *meshcore.Contact) {
-	// Detect a node still routing with 1-byte hashes. Contact.PathLength is the
-	// firmware-encoded out_path byte (0xFF = flood/unknown); only paths with real
-	// hops reveal the hash size.
-	if pl := contact.PathLength; pl != 0xFF && meshcore.PathHashCount(byte(pl)) > 0 {
-		g.WarnOldHash(g.client.GetChannels()[0], fmt.Sprintf("%x", contact.PublicKey),
-			contact.Name, meshcore.PathHashSize(byte(pl)))
-	}
+	// NOTE: migration warnings are NOT raised here. The advert push frame carries
+	// only the public key, so we fall back to the cached contact's out_path_len —
+	// but that is OUR outbound route to the node, not the node's advert hash size,
+	// and the firmware never refreshes it on advert reception. A node that switched
+	// from 1-byte to 2-byte keeps a stale 1-byte out_path, producing endless false
+	// warnings. The real, current hash size is only known from received messages,
+	// so the nudge lives in the dispatcher's per-message path instead.
 
 	alreadyKnown, err := g.known.CheckAndAdd(contact.PublicKey, contact.Name)
 	if err != nil {
