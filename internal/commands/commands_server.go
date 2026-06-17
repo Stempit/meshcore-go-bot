@@ -97,6 +97,10 @@ func GenerateReplies(text, channelName string, pingMeta *PingMeta, senderKey, se
 		replies, err := ProcessTopCommand(channelName)
 		return replies, "top", err
 
+	case lower == ".stat":
+		replies, err := ProcessStatCommand(channelName)
+		return replies, "stat", err
+
 	default:
 		return nil, "", nil
 	}

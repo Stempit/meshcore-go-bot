@@ -85,5 +85,6 @@ log/
 | `.claw <prompt>` | `commands.ProcessClawCommand` | Sends prompt to picoclaw AI agent via WebSocket; auto-shrinks response |
 | `.8ball <question>` | `commands.ProcessEightBallCommand` | Magic 8-Ball; random Russian yes/no/maybe answer |
 | `.top` | `commands.ProcessTopCommand` | Top-5 channel authors by message count (scans last `Top.scan_count`, default 100); channels only, "not available" in DMs |
+| `.stat` | `commands.ProcessStatCommand` | Channel traffic in last 24h: message count, peak hour, unique users; channels only, "not available" in DMs |
 
 New commands go in `internal/commands/` and must be wired into the `switch` in `commands_server.go`.
