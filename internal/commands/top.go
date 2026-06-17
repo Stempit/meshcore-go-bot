@@ -11,7 +11,7 @@ import (
 
 const (
 	defaultTopScanCount = 100 // recent messages scanned when Top.scan_count is unset
-	topAuthorsShown     = 5   // how many ranked authors to return
+	topAuthorsShown     = 3   // how many ranked authors to return
 	topNameMaxRunes     = 12  // author names are clipped to fit the 140-byte mesh limit
 )
 
