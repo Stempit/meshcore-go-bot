@@ -2,6 +2,7 @@ package commands
 
 import (
 	"meshbot/internal/config"
+	"meshbot/internal/games"
 	"strings"
 )
 
@@ -94,8 +95,16 @@ func GenerateReplies(text, channelName string, pingMeta *PingMeta, senderKey, se
 		return replies, "8ball", err
 
 	case lower == ".dice", strings.HasPrefix(lower, ".dice "):
-		replies, err := ProcessDiceCommand(text, senderName, channelName)
+		replies, err := games.ProcessDiceCommand(text, senderName, channelName)
 		return replies, "dice", err
+
+	case lower == ".num", strings.HasPrefix(lower, ".num "):
+		replies, err := games.ProcessNumCommand(text, senderKey, senderName, channelName)
+		return replies, "num", err
+
+	case lower == ".hang", strings.HasPrefix(lower, ".hang "):
+		replies, err := games.ProcessHangCommand(text, senderKey, senderName, channelName)
+		return replies, "hang", err
 
 	case lower == ".top":
 		replies, err := ProcessTopCommand(channelName)
