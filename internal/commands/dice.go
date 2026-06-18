@@ -11,23 +11,22 @@ import (
 )
 
 const (
-	diceMaxCount   = 10              // max number of dice in one roll
-	diceMinSides   = 2               // a die needs at least two faces
-	diceMaxSides   = 1000            // upper bound on faces
-	diceDefaultN   = 1               // default dice count when none given
-	diceDefSides   = 6               // default faces (a d6)
-	diceRoundTTL   = 5 * time.Minute // a roll-off auto-expires after this idle time
-	diceWinnersMax = 4               // ranked players listed in the result (mesh size)
+	diceMaxCount   = 10   // max number of dice in one roll
+	diceMinSides   = 2    // a die needs at least two faces
+	diceMaxSides   = 1000 // upper bound on faces
+	diceDefaultN   = 1    // default dice count when none given
+	diceDefSides   = 6    // default faces (a d6)
+	diceWinnersMax = 4    // ranked players listed in the result (mesh size)
 )
 
 // diceSession is an open roll-off round in a single channel. All players roll
 // the same NdM; rolls are collected into a map keyed by player name so delivery
 // order does not matter and a re-delivered message cannot change the outcome.
+// A round stays open until someone runs ".dice end".
 type diceSession struct {
 	notation string         // human form, e.g. "2d6"
 	n, sides int            // parsed dice count and faces
 	rolls    map[string]int // playerName -> total
-	deadline time.Time      // lazy expiry; refreshed on each roll
 }
 
 var (
@@ -156,7 +155,6 @@ func diceStart(spec, channelName string) ([]string, error) {
 
 	diceMu.Lock()
 	defer diceMu.Unlock()
-	diceExpireLocked(channelName)
 
 	if s := diceSessions[channelName]; s != nil {
 		return []string{fmt.Sprintf("Раунд %s уже идёт. .dice roll", s.notation)}, nil
@@ -168,7 +166,6 @@ func diceStart(spec, channelName string) ([]string, error) {
 		n:        n,
 		sides:    sides,
 		rolls:    map[string]int{},
-		deadline: time.Now().Add(diceRoundTTL),
 	}
 	return []string{fmt.Sprintf("🎲 Раунд открыт: %s. Бросай: .dice roll", notation)}, nil
 }
@@ -181,7 +178,6 @@ func diceRoll(senderName, channelName string) ([]string, error) {
 
 	diceMu.Lock()
 	defer diceMu.Unlock()
-	diceExpireLocked(channelName)
 
 	s := diceSessions[channelName]
 	if s == nil {
@@ -195,7 +191,6 @@ func diceRoll(senderName, channelName string) ([]string, error) {
 
 	_, total := rollDice(s.n, s.sides)
 	s.rolls[who] = total
-	s.deadline = time.Now().Add(diceRoundTTL)
 	// Name omitted: the send layer prepends "@[SenderName]" on channel replies.
 	return []string{fmt.Sprintf("🎲 : %d", total)}, nil
 }
@@ -208,7 +203,6 @@ func diceEnd(channelName string) ([]string, error) {
 
 	diceMu.Lock()
 	defer diceMu.Unlock()
-	diceExpireLocked(channelName)
 
 	s := diceSessions[channelName]
 	if s == nil {
@@ -230,7 +224,6 @@ func diceStatus(channelName string) ([]string, error) {
 
 	diceMu.Lock()
 	defer diceMu.Unlock()
-	diceExpireLocked(channelName)
 
 	s := diceSessions[channelName]
 	if s == nil {
@@ -286,13 +279,6 @@ func diceResult(s *diceSession) string {
 		head += " (" + strings.Join(others, ", ") + ")"
 	}
 	return head
-}
-
-// diceExpireLocked drops an open round once its deadline passes. Caller holds diceMu.
-func diceExpireLocked(channelName string) {
-	if s := diceSessions[channelName]; s != nil && time.Now().After(s.deadline) {
-		delete(diceSessions, channelName)
-	}
 }
 
 // diceWho returns a usable player label, falling back when the name is empty.
