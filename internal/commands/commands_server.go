@@ -93,6 +93,10 @@ func GenerateReplies(text, channelName string, pingMeta *PingMeta, senderKey, se
 		replies, err := ProcessEightBallCommand(text)
 		return replies, "8ball", err
 
+	case lower == ".dice", strings.HasPrefix(lower, ".dice "):
+		replies, err := ProcessDiceCommand(text, senderName, channelName)
+		return replies, "dice", err
+
 	case lower == ".top":
 		replies, err := ProcessTopCommand(channelName)
 		return replies, "top", err

@@ -86,5 +86,6 @@ log/
 | `.8ball <question>` | `commands.ProcessEightBallCommand` | Magic 8-Ball; random Russian yes/no/maybe answer |
 | `.top` | `commands.ProcessTopCommand` | Top-5 channel authors by message count (scans last `Top.scan_count`, default 100); channels only, "not available" in DMs |
 | `.stat` | `commands.ProcessStatCommand` | Channel traffic in last 24h: message count, peak hour, unique users; channels only, "not available" in DMs |
+| `.dice [NdM]` | `commands.ProcessDiceCommand` | Roll dice (`NdM`/`M`, default `1d6`). Sub-verbs `start`/`roll`/`end`/`status` run a per-channel roll-off (highest total wins; one roll per player; stays open until anyone runs `.dice end`); session verbs channel-only |
 
 New commands go in `internal/commands/` and must be wired into the `switch` in `commands_server.go`.
