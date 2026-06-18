@@ -131,16 +131,17 @@ func dicePlainRoll(spec, senderName string) ([]string, error) {
 		return []string{diceUsage}, nil
 	}
 	results, total := rollDice(n, sides)
-	who := diceWho(senderName)
 
+	// The send layer prefixes channel replies with "@[SenderName]", so the
+	// roller's own name is not repeated here.
 	if n == 1 {
-		return []string{fmt.Sprintf("🎲 %s: %d", who, total)}, nil
+		return []string{fmt.Sprintf("🎲 : %d", total)}, nil
 	}
 	parts := make([]string, len(results))
 	for i, v := range results {
 		parts[i] = strconv.Itoa(v)
 	}
-	return []string{fmt.Sprintf("🎲 %s: %s = %d", who, strings.Join(parts, "+"), total)}, nil
+	return []string{fmt.Sprintf("🎲 : %s = %d", strings.Join(parts, "+"), total)}, nil
 }
 
 // diceStart opens a roll-off round in the channel.
@@ -195,7 +196,8 @@ func diceRoll(senderName, channelName string) ([]string, error) {
 	_, total := rollDice(s.n, s.sides)
 	s.rolls[who] = total
 	s.deadline = time.Now().Add(diceRoundTTL)
-	return []string{fmt.Sprintf("🎲 %s: %d", who, total)}, nil
+	// Name omitted: the send layer prepends "@[SenderName]" on channel replies.
+	return []string{fmt.Sprintf("🎲 : %d", total)}, nil
 }
 
 // diceEnd closes the round and announces the winner. Anyone may end it.
