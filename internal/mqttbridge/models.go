@@ -71,13 +71,6 @@ type MQTTConfig struct {
 	RawEnabled     bool `yaml:"raw_enabled"`     // Enable raw messages
 	TxEnabled      bool `yaml:"tx_enabled"`      // Enable TX packet messages
 
-	// Application message settings (adverts, messages, channels, delivery)
-	AdvertsEnabled     bool `yaml:"adverts_enabled"`      // Enable advertisement/contact messages
-	MessagesEnabled    bool `yaml:"messages_enabled"`     // Enable direct/private messages
-	ChannelMsgsEnabled bool `yaml:"channel_msgs_enabled"` // Enable channel/group messages
-	DeliveryEnabled    bool `yaml:"delivery_enabled"`     // Enable delivery receipts
-	PathUpdatesEnabled bool `yaml:"path_updates_enabled"` // Enable path update notifications
-
 	// Status interval (milliseconds)
 	StatusInterval int `yaml:"status_interval"` // Status publish interval
 
@@ -108,12 +101,6 @@ func DefaultMQTTConfig() *MQTTConfig {
 		AnalyzerUS:     true,
 		AnalyzerEU:     true,
 		Port:           1883,
-		// Enable all message types by default
-		AdvertsEnabled:     true,
-		MessagesEnabled:    true,
-		ChannelMsgsEnabled: true,
-		DeliveryEnabled:    true,
-		PathUpdatesEnabled: true,
 	}
 }
 
@@ -202,101 +189,6 @@ type MQTTRaw struct {
 	Data      string `json:"data"`      // Raw packet data (hex)
 }
 
-// MQTTAdvert represents an advertisement/contact for MQTT publishing.
-// Published to meshcore/{IATA}/{DEVICE_ID}/adverts (retained).
-type MQTTAdvert struct {
-	Origin    string `json:"origin"`         // Device name that received this advert
-	OriginID  string `json:"origin_id"`      // Device public key (64 hex)
-	Timestamp string `json:"timestamp"`      // ISO 8601 with microseconds
-	Type      string `json:"type"`           // "ADVERT"
-	Direction string `json:"direction"`      // "rx" (received advert)
-	SNR       string `json:"snr,omitempty"`  // Signal-to-noise ratio (dB)
-	RSSI      string `json:"rssi,omitempty"` // Received signal strength (dBm)
-
-	// Contact information from advert
-	SenderID    string  `json:"sender_id"`     // Sender public key (64 hex)
-	SenderName  string  `json:"sender_name"`   // Sender display name
-	ContactType int     `json:"contact_type"`  // 1=Chat, 2=Repeater, 3=Room, 4=Sensor
-	Flags       int     `json:"flags"`         // Contact flags (favorite, telemetry)
-	Lat         float64 `json:"lat,omitempty"` // GPS latitude (omitted when 0)
-	Lon         float64 `json:"lon,omitempty"` // GPS longitude (omitted when 0)
-	PathLength  int     `json:"path_length"`   // Hops to sender (0 = direct)
-	LastSeen    string  `json:"last_seen"`     // Last advertisement timestamp
-	Raw         string  `json:"raw,omitempty"` // Raw advert data (hex)
-}
-
-// MQTTContactMessage represents a direct/private message for MQTT publishing.
-// Published to meshcore/{IATA}/{DEVICE_ID}/messages (not retained).
-type MQTTContactMessage struct {
-	Origin        string `json:"origin"`              // Device name
-	OriginID      string `json:"origin_id"`           // Device public key (64 hex)
-	Timestamp     string `json:"timestamp"`           // ISO 8601 with microseconds (message time)
-	ReceivedAt    string `json:"received_at"`         // ISO 8601 when we received it
-	Type          string `json:"type"`                // "MESSAGE"
-	Direction     string `json:"direction"`           // "rx" (received) or "tx" (sent)
-	MessageID     string `json:"message_id"`          // Unique message ID
-	SenderID      string `json:"sender_id"`           // Sender public key (64 hex)
-	SenderName    string `json:"sender_name"`         // Sender display name
-	RecipientID   string `json:"recipient_id"`        // Recipient public key (64 hex)
-	RecipientName string `json:"recipient_name"`      // Recipient display name
-	Text          string `json:"text"`                // Message text content
-	PathLength    int    `json:"path_length"`         // Hops from sender
-	Status        string `json:"status"`              // "pending", "sent", "delivered", "failed"
-	ACK           bool   `json:"ack,omitempty"`       // Acknowledgment requested
-	Encrypted     bool   `json:"encrypted,omitempty"` // Encryption indicator
-	SNR           string `json:"snr,omitempty"`       // Signal-to-noise ratio (dB)
-	RSSI          string `json:"rssi,omitempty"`      // Received signal strength (dBm)
-	Raw           string `json:"raw,omitempty"`       // Raw message data (hex)
-}
-
-// MQTTChannelMessage represents a channel/group message for MQTT publishing.
-// Published to meshcore/{IATA}/{DEVICE_ID}/channels/{CHANNEL_INDEX} (not retained).
-type MQTTChannelMessage struct {
-	Origin       string `json:"origin"`         // Device name
-	OriginID     string `json:"origin_id"`      // Device public key (64 hex)
-	Timestamp    string `json:"timestamp"`      // ISO 8601 with microseconds (message time)
-	ReceivedAt   string `json:"received_at"`    // ISO 8601 when we received it
-	Type         string `json:"type"`           // "CHANNEL_MESSAGE"
-	Direction    string `json:"direction"`      // "rx" or "tx"
-	ChannelIndex int    `json:"channel_index"`  // Channel index (0-255)
-	ChannelName  string `json:"channel_name"`   // Channel name (if known)
-	MessageID    string `json:"message_id"`     // Unique message ID
-	SenderID     string `json:"sender_id"`      // Sender public key (64 hex)
-	SenderName   string `json:"sender_name"`    // Sender display name
-	Text         string `json:"text"`           // Message text content
-	PathLength   int    `json:"path_length"`    // Hops from sender
-	Status       string `json:"status"`         // "pending", "sent", "delivered", "failed"
-	SNR          string `json:"snr,omitempty"`  // Signal-to-noise ratio (dB)
-	RSSI         string `json:"rssi,omitempty"` // Received signal strength (dBm)
-	Raw          string `json:"raw,omitempty"`  // Raw message data (hex)
-}
-
-// MQTTDeliveryReceipt represents a send confirmation for MQTT publishing.
-// Published to meshcore/{IATA}/{DEVICE_ID}/delivery (not retained).
-type MQTTDeliveryReceipt struct {
-	Origin        string `json:"origin"`         // Device name
-	OriginID      string `json:"origin_id"`      // Device public key (64 hex)
-	Timestamp     string `json:"timestamp"`      // ISO 8601 with microseconds
-	Type          string `json:"type"`           // "DELIVERY"
-	MessageID     string `json:"message_id"`     // Original message ID
-	RecipientID   string `json:"recipient_id"`   // Recipient public key (hex)
-	RecipientName string `json:"recipient_name"` // Recipient display name
-	Status        string `json:"status"`         // "sent" (to radio) or "delivered" (to recipient)
-}
-
-// MQTTPathUpdate represents a routing path update for MQTT publishing.
-// Published to meshcore/{IATA}/{DEVICE_ID}/paths (not retained).
-type MQTTPathUpdate struct {
-	Origin      string `json:"origin"`       // Device name
-	OriginID    string `json:"origin_id"`    // Device public key (64 hex)
-	Timestamp   string `json:"timestamp"`    // ISO 8601 with microseconds
-	Type        string `json:"type"`         // "PATH_UPDATE"
-	ContactID   string `json:"contact_id"`   // Contact public key (hex)
-	ContactName string `json:"contact_name"` // Contact display name
-	PathLength  int    `json:"path_length"`  // New path length (0 = direct/no route)
-	Direction   string `json:"direction"`    // "increase", "decrease", "reset", "new"
-}
-
 // QueuedPacket represents a packet queued for MQTT publishing
 type QueuedPacket struct {
 	RawData   []byte    // Raw packet data (hex encoded)
@@ -316,44 +208,8 @@ type QueuedPacket struct {
 	ChannelKey       string // hex-encoded 16-byte PSK; lets the analyzer server decrypt without config
 }
 
-// ConnectionState represents MQTT connection state
-type ConnectionState int
-
-const (
-	MQTTStateDisconnected ConnectionState = iota
-	MQTTStateConnecting
-	MQTTStateConnected
-	MQTTStateReconnecting
-)
-
-// String returns the string representation of ConnectionState
-func (s ConnectionState) String() string {
-	switch s {
-	case MQTTStateDisconnected:
-		return "disconnected"
-	case MQTTStateConnecting:
-		return "connecting"
-	case MQTTStateConnected:
-		return "connected"
-	case MQTTStateReconnecting:
-		return "reconnecting"
-	default:
-		return "unknown"
-	}
-}
-
-// BrokerInfo holds information about a connected broker
-type BrokerInfo struct {
-	Name      string // "custom", "us", "eu"
-	Connected bool
-	URL       string
-}
-
 // MQTTCallbacks holds callback functions for MQTT events
 type MQTTCallbacks struct {
-	OnStatus       func(*MQTTStatus)
-	OnPacket       func(*MQTTPacket)
-	OnRaw          func(*MQTTRaw)
 	OnConnected    func(string) // broker name
 	OnDisconnected func(string) // broker name
 }

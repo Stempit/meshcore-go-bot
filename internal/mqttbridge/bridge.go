@@ -48,11 +48,9 @@ func sanitizeClientID(id string) string {
 // Constants
 const (
 	// Default MQTT settings
-	defaultKeepAlive        = 45
-	defaultConnectTimeout   = 30
-	defaultReconnectDelay   = 5
-	maxQueuedPackets        = 100
-	defaultStatusIntervalMs = 300000 // 5 minutes
+	defaultKeepAlive      = 45
+	defaultConnectTimeout = 30
+	maxQueuedPackets      = 100
 
 	// Let's Mesh Analyzer servers
 	analyzerUSURL = "wss://mqtt-us-v1.letsmesh.net:443/mqtt"
@@ -93,31 +91,48 @@ vKAIiFDg0A4HnVWX+mYAMMLo1VKQaFfYwcfMFjPrPB37y0PBjBsHqWQ=
 // One *broker per endpoint lives in MQTTBridge.brokers; that map is built once in
 // NewMQTTBridge and never has keys added or removed afterwards, so reads of it are
 // safe without a lock. Field-level locking:
-//   - connected is an atomic, read/written lock-free everywhere.
-//   - client and the reconnect bookkeeping (attempts/delay/lastReconnect) are
-//     guarded by MQTTBridge.clientMu.
-//   - authToken/tokenExpires (analyzer only) are guarded by MQTTBridge.mu.
+//   - connected is an atomic, set in handleConnect/handleConnectionLost (and on
+//     forced teardown) and read lock-free everywhere else.
+//   - client and the reconnect bookkeeping (baseDelay/reconnectDelay/lastReconnect)
+//     are guarded by MQTTBridge.clientMu.
+//   - authToken/tokenExpires (analyzer only) are touched only by the single
+//     connectionManager goroutine (connect → getAuthToken → renewAuthToken), so
+//     they need no lock.
 type broker struct {
 	name      string
 	connected atomic.Bool
 
 	// Guarded by MQTTBridge.clientMu.
-	client            mqtt.Client
-	reconnectAttempts uint8
-	reconnectDelay    time.Duration
-	lastReconnect     time.Time
+	client         mqtt.Client
+	baseDelay      time.Duration // first backoff delay / floor after a successful connect
+	reconnectDelay time.Duration // current backoff window; doubles up to maxReconnectDelay
+	lastReconnect  time.Time
 
-	// Analyzer JWT (unused for custom). Only ever read/written by the single
-	// connectionManager goroutine (connect → getAuthToken → renewAuthToken), so
-	// no lock is needed.
+	// Analyzer JWT (unused for custom). Touched only by the connectionManager
+	// goroutine, so no lock is needed.
 	authToken    string
 	tokenExpires time.Time
 }
 
+// maxReconnectDelay caps the exponential reconnect backoff.
+const maxReconnectDelay = 300 * time.Second
+
+// newBroker creates a broker whose reconnect backoff starts (and refloors after a
+// successful connect) at baseDelay.
+func newBroker(name string, baseDelay time.Duration) *broker {
+	return &broker{name: name, baseDelay: baseDelay, reconnectDelay: baseDelay}
+}
+
 // MQTTBridge handles MQTT connectivity for MeshCore
 type MQTTBridge struct {
-	config     *MQTTConfig
-	logger     *slog.Logger
+	// config is set once in NewMQTTBridge and treated as immutable thereafter, so
+	// it is read without a lock. statusInterval is derived from it, also once.
+	config *MQTTConfig
+	logger *slog.Logger
+
+	// deviceInfo, stats and analyzerUsername are mutated by the Set* methods as
+	// self-info/stats arrive from the device, and read on other goroutines; all
+	// access is guarded by b.mu.
 	deviceInfo *DeviceInfo
 	stats      *DeviceStats
 
@@ -150,9 +165,6 @@ type MQTTBridge struct {
 	analyzerUsername string
 
 	// Callbacks
-	onStatus       func(*MQTTStatus)
-	onPacket       func(*MQTTPacket)
-	onRaw          func(*MQTTRaw)
 	onConnected    func(string) // broker name
 	onDisconnected func(string)
 
@@ -178,11 +190,12 @@ func NewMQTTBridge(config *MQTTConfig) *MQTTBridge {
 		notifyCh:       make(chan struct{}, 1),
 	}
 
-	// Seed the three endpoints with their default reconnect delays. These keys
-	// are the only ones ever present in the map.
-	bridge.brokers["custom"] = &broker{name: "custom", reconnectDelay: 15 * time.Second}
-	bridge.brokers["us"] = &broker{name: "us", reconnectDelay: 60 * time.Second}
-	bridge.brokers["eu"] = &broker{name: "eu", reconnectDelay: 60 * time.Second}
+	// Seed the three endpoints with their base reconnect delays. These keys are
+	// the only ones ever present in the map. The custom TCP broker retries more
+	// aggressively (15s) than the analyzer WebSocket endpoints (60s).
+	bridge.brokers["custom"] = newBroker("custom", 15*time.Second)
+	bridge.brokers["us"] = newBroker("us", 60*time.Second)
+	bridge.brokers["eu"] = newBroker("eu", 60*time.Second)
 
 	return bridge
 }
@@ -211,6 +224,14 @@ func (b *MQTTBridge) SetDeviceInfo(info *DeviceInfo) {
 	}
 }
 
+// analyzerUser returns the analyzer auth identity ("v1_{PUBKEY}"). It is guarded
+// by b.mu because SetDeviceInfo may (re)compute it as device self-info arrives.
+func (b *MQTTBridge) analyzerUser() string {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.analyzerUsername
+}
+
 // SetDeviceStats sets radio statistics for status messages
 func (b *MQTTBridge) SetDeviceStats(stats *DeviceStats) {
 	b.mu.Lock()
@@ -220,9 +241,6 @@ func (b *MQTTBridge) SetDeviceStats(stats *DeviceStats) {
 
 // SetCallbacks sets event callbacks
 func (b *MQTTBridge) SetCallbacks(callbacks MQTTCallbacks) {
-	b.onStatus = callbacks.OnStatus
-	b.onPacket = callbacks.OnPacket
-	b.onRaw = callbacks.OnRaw
 	b.onConnected = callbacks.OnConnected
 	b.onDisconnected = callbacks.OnDisconnected
 }
@@ -290,11 +308,7 @@ func (b *MQTTBridge) connectionManager() {
 		}
 
 		// Connect to Let's Mesh Analyzer servers
-		b.mu.RLock()
-		ownerEmail := b.config.OwnerEmail
-		b.mu.RUnlock()
-
-		if ownerEmail != "" {
+		if b.config.OwnerEmail != "" {
 			if b.config.AnalyzerUS {
 				b.connectToAnalyzer("us", analyzerUSURL)
 			}
@@ -337,21 +351,8 @@ func (b *MQTTBridge) connectToCustomBroker() {
 	if br.connected.Load() {
 		return
 	}
-
-	// Check the reconnect delay and detach any existing client under the lock.
-	// Disconnect and discard the old client before creating a new one to avoid
-	// two clients with the same ID competing on the broker (infinite kick loop).
-	b.clientMu.Lock()
-	if !b.canReconnect(br) {
-		b.clientMu.Unlock()
+	if !b.beginReconnect(br) {
 		return
-	}
-	old := br.client
-	br.client = nil
-	b.clientMu.Unlock()
-
-	if old != nil {
-		old.Disconnect(250)
 	}
 
 	b.logger.Info("Connecting to custom MQTT broker",
@@ -395,21 +396,8 @@ func (b *MQTTBridge) connectToAnalyzer(region, brokerURL string) {
 	if br.connected.Load() {
 		return
 	}
-
-	// Check the reconnect delay and detach any existing client under the lock.
-	// Disconnect and discard the old client before creating a new one to avoid
-	// two clients with the same ID competing on the broker (same fix as custom).
-	b.clientMu.Lock()
-	if !b.canReconnect(br) {
-		b.clientMu.Unlock()
+	if !b.beginReconnect(br) {
 		return
-	}
-	old := br.client
-	br.client = nil
-	b.clientMu.Unlock()
-
-	if old != nil {
-		old.Disconnect(250)
 	}
 
 	b.logger.Info("Connecting to Let's Mesh Analyzer", "region", region, "url", brokerURL)
@@ -427,10 +415,11 @@ func (b *MQTTBridge) connectToAnalyzer(region, brokerURL string) {
 	// Client ID must be unique per device; use region + first 8 chars of public key.
 	// Using a fixed ID like "mc-us" would cause the broker to kick the previous
 	// connection every time any other device using this software connects.
+	username := b.analyzerUser()
 	clientID := region
-	if b.analyzerUsername != "" {
+	if username != "" {
 		// analyzerUsername is "v1_{PUBKEY}" — take 8 chars of pubkey for uniqueness
-		parts := strings.SplitN(b.analyzerUsername, "_", 2)
+		parts := strings.SplitN(username, "_", 2)
 		if len(parts) == 2 && len(parts[1]) >= 8 {
 			clientID = fmt.Sprintf("%s-%s", region, strings.ToLower(parts[1][:8]))
 		}
@@ -438,7 +427,7 @@ func (b *MQTTBridge) connectToAnalyzer(region, brokerURL string) {
 
 	var newClient mqtt.Client
 	newClient, err := b.createMQTTClient(region, clientID, brokerURL,
-		b.analyzerUsername, password,
+		username, password,
 		true, gtsRootR4Cert, "", "", true, true) // Always use TLS for analyzer; paho reconnect OK for WS
 
 	if err != nil {
@@ -560,8 +549,8 @@ func (b *MQTTBridge) handleConnect(brokerID string) {
 
 	br.connected.Store(true)
 	b.clientMu.Lock()
-	br.reconnectAttempts = 0
-	br.reconnectDelay = 15 * time.Second
+	// Successful connect: refloor the backoff to this endpoint's base delay.
+	br.reconnectDelay = br.baseDelay
 	b.clientMu.Unlock()
 
 	if b.onConnected != nil {
@@ -585,43 +574,50 @@ func (b *MQTTBridge) handleConnectionLost(brokerID string, err error) {
 	}
 }
 
-// canReconnect checks if enough time has passed to attempt reconnection.
-// Caller must hold b.clientMu (it reads the reconnect bookkeeping fields).
-func (b *MQTTBridge) canReconnect(br *broker) bool {
-	delay := br.reconnectDelay
-	if delay == 0 {
-		delay = 5 * time.Second
-	}
-
-	if !br.lastReconnect.IsZero() && time.Since(br.lastReconnect) < delay {
+// beginReconnect gates a connection attempt by the backoff window and detaches
+// any existing client so a fresh one can be created without two clients sharing a
+// client ID (which would make the broker kick them in an infinite loop). It
+// returns false if the backoff window has not yet elapsed, in which case the
+// caller should skip this attempt. The old client is disconnected outside the
+// lock because Disconnect blocks.
+func (b *MQTTBridge) beginReconnect(br *broker) bool {
+	b.clientMu.Lock()
+	if !b.canReconnect(br) {
+		b.clientMu.Unlock()
 		return false
 	}
+	old := br.client
+	br.client = nil
+	b.clientMu.Unlock()
 
+	if old != nil {
+		old.Disconnect(250)
+	}
 	return true
 }
 
-// scheduleReconnect schedules a reconnection attempt with exponential backoff.
+// canReconnect checks if enough time has passed to attempt reconnection.
+// Caller must hold b.clientMu (it reads the reconnect bookkeeping fields).
+func (b *MQTTBridge) canReconnect(br *broker) bool {
+	if !br.lastReconnect.IsZero() && time.Since(br.lastReconnect) < br.reconnectDelay {
+		return false
+	}
+	return true
+}
+
+// scheduleReconnect arms the next reconnect attempt with exponential backoff:
+// the current delay doubles on each failure, floored at the broker's base delay
+// and capped at maxReconnectDelay. handleConnect refloors it on success.
 // Caller must hold b.clientMu (it mutates the reconnect bookkeeping fields).
 func (b *MQTTBridge) scheduleReconnect(br *broker) {
 	br.lastReconnect = time.Now()
 
-	// Exponential backoff: 15s, 30s, 60s, 120s, 300s
-	if br.reconnectAttempts < 5 {
-		br.reconnectAttempts++
+	delay := br.reconnectDelay * 2
+	if delay < br.baseDelay {
+		delay = br.baseDelay
 	}
-
-	var delay time.Duration
-	switch br.reconnectAttempts {
-	case 0:
-		delay = 15 * time.Second
-	case 1:
-		delay = 30 * time.Second
-	case 2:
-		delay = 60 * time.Second
-	case 3:
-		delay = 120 * time.Second
-	default:
-		delay = 300 * time.Second
+	if delay > maxReconnectDelay {
+		delay = maxReconnectDelay
 	}
 
 	br.reconnectDelay = delay
@@ -687,30 +683,14 @@ func (b *MQTTBridge) disconnectAll() {
 
 // QueuePacket adds a packet to the queue for publishing
 func (b *MQTTBridge) QueuePacket(rawData []byte, isTX bool, snr, rssi float64) {
-	b.queueMu.Lock()
-	defer b.queueMu.Unlock()
-
-	// Check queue size limit
-	if len(b.queue) >= maxQueuedPackets {
-		// Drop oldest packet
-		b.queue = b.queue[1:]
-		b.logger.Warn("Packet queue full, dropping oldest")
-	}
-
-	hash := calculatePacketHash(rawData)
-
-	packet := QueuedPacket{
+	b.enqueue(QueuedPacket{
 		RawData:   rawData,
 		Timestamp: time.Now(),
 		IsTX:      isTX,
 		SNR:       snr,
 		RSSI:      rssi,
-		Hash:      hash,
-	}
-
-	b.queue = append(b.queue, packet)
-	b.logger.Debug("Packet queued", "hash", hash, "queue_len", len(b.queue))
-	b.signalQueue()
+		Hash:      calculatePacketHash(rawData),
+	})
 }
 
 // QueueChannelPacket queues a raw RF packet that has been correlated with a
@@ -718,31 +698,40 @@ func (b *MQTTBridge) QueuePacket(rawData []byte, isTX bool, snr, rssi float64) {
 // name, message text) are embedded in the published JSON so the web UI can
 // display them without needing to parse or decrypt the raw bytes.
 func (b *MQTTBridge) QueueChannelPacket(rawData []byte, isTX bool, snr, rssi float64, channelIndex int, channelName, senderName, text, channelKeyHex string) {
-	b.queueMu.Lock()
-	defer b.queueMu.Unlock()
-
-	if len(b.queue) >= maxQueuedPackets {
-		b.queue = b.queue[1:]
-		b.logger.Warn("Packet queue full, dropping oldest")
-	}
-
-	hash := calculatePacketHash(rawData)
-	packet := QueuedPacket{
+	b.enqueue(QueuedPacket{
 		RawData:          rawData,
 		Timestamp:        time.Now(),
 		IsTX:             isTX,
 		SNR:              snr,
 		RSSI:             rssi,
-		Hash:             hash,
+		Hash:             calculatePacketHash(rawData),
 		IsChannelMessage: true,
 		ChannelIndex:     channelIndex,
 		ChannelName:      channelName,
 		SenderName:       senderName,
 		Text:             text,
 		ChannelKey:       channelKeyHex,
+	})
+}
+
+// enqueue appends a fully-built packet to the publish queue, evicting the oldest
+// entry when the queue is full, then wakes the publisher goroutine.
+func (b *MQTTBridge) enqueue(packet QueuedPacket) {
+	b.queueMu.Lock()
+	if len(b.queue) >= maxQueuedPackets {
+		b.queue = b.queue[1:]
+		b.logger.Warn("Packet queue full, dropping oldest")
 	}
 	b.queue = append(b.queue, packet)
-	b.logger.Debug("Channel packet queued", "channel", channelIndex, "sender", senderName, "isTX", isTX, "queue_len", len(b.queue))
+	queueLen := len(b.queue)
+	b.queueMu.Unlock()
+
+	if packet.IsChannelMessage {
+		b.logger.Debug("Channel packet queued", "channel", packet.ChannelIndex,
+			"sender", packet.SenderName, "isTX", packet.IsTX, "queue_len", queueLen)
+	} else {
+		b.logger.Debug("Packet queued", "hash", packet.Hash, "queue_len", queueLen)
+	}
 	b.signalQueue()
 }
 
@@ -764,42 +753,58 @@ func calculatePacketHash(data []byte) string {
 	return hex.EncodeToString(sum[:8]) // MAX_HASH_SIZE = 8
 }
 
-// extractPayload returns the payload slice from a raw packet.
-func extractPayload(data []byte) []byte {
+// pathLenOffset returns the index of the path_len byte in a raw packet, or -1 if
+// the packet is too short to contain a header. TRANSPORT routes (route type 0x00
+// or 0x03) carry an extra 4-byte transport_codes field before path_len.
+func pathLenOffset(data []byte) int {
 	if len(data) < 2 {
-		return nil
+		return -1
 	}
-	routeType := data[0] & 0x03
 	headerLen := 2
-	if routeType == 0x00 || routeType == 0x03 { // TRANSPORT routes: +4 transport_codes
+	if routeType := data[0] & 0x03; routeType == 0x00 || routeType == 0x03 {
 		headerLen = 6
 	}
 	if len(data) < headerLen {
-		return nil
+		return -1
 	}
-	pathLenByte := data[headerLen-1]
+	return headerLen - 1
+}
+
+// payloadOffset returns the index at which the payload begins (after the header
+// and the variable-length path), or -1 if the packet is malformed or carries no
+// payload. The path_len byte encodes hash_count (bits 0-5) and bytes-per-hop
+// (bits 6-7, +1 → 1/2/3); the path occupies hash_count * bytes-per-hop bytes.
+func payloadOffset(data []byte) int {
+	i := pathLenOffset(data)
+	if i < 0 {
+		return -1
+	}
+	pathLenByte := data[i]
 	hashCount := int(pathLenByte & 0x3F)
 	hashSize := int((pathLenByte>>6)&0x03) + 1
-	offset := headerLen + hashCount*hashSize
+	offset := i + 1 + hashCount*hashSize
 	if offset >= len(data) {
+		return -1
+	}
+	return offset
+}
+
+// extractPayload returns the payload slice from a raw packet.
+func extractPayload(data []byte) []byte {
+	off := payloadOffset(data)
+	if off < 0 {
 		return nil
 	}
-	return data[offset:]
+	return data[off:]
 }
 
 // getPathLenByte returns the path_len byte from a raw packet.
 func getPathLenByte(data []byte) uint8 {
-	if len(data) < 2 {
+	i := pathLenOffset(data)
+	if i < 0 {
 		return 0
 	}
-	routeType := data[0] & 0x03
-	if routeType == 0x00 || routeType == 0x03 {
-		if len(data) < 6 {
-			return 0
-		}
-		return data[5]
-	}
-	return data[1]
+	return data[i]
 }
 
 // signalQueue wakes the publisher goroutine. It never blocks: notifyCh is
@@ -938,7 +943,7 @@ func (b *MQTTBridge) publishPacket(packet *QueuedPacket) {
 	}()
 	go func() {
 		defer wg.Done()
-		b.publishToAnalyzers(topic, jsonData)
+		b.publishAnalyzers(topic, jsonData, false)
 	}()
 	wg.Wait()
 
@@ -965,40 +970,30 @@ func (b *MQTTBridge) publishRawPacket(packet *QueuedPacket, originID, origin, ia
 		return
 	}
 
-	b.publishToAnalyzers(topic, jsonData)
-}
-
-// publishToAnalyzers publishes non-retained data to Let's Mesh Analyzer servers.
-// Uses IsConnected() as the primary truth source (same pattern as publishStatus)
-// to avoid silent drops when the connected atomic flag lags behind paho state.
-func (b *MQTTBridge) publishToAnalyzers(topic string, data []byte) {
-	b.publishAnalyzers(topic, data, false)
+	b.publishAnalyzers(topic, jsonData, false)
 }
 
 // publishAnalyzers publishes a payload to both analyzer servers concurrently.
 // retained controls the MQTT retained flag (true for status, false for packets).
+// It uses paho's IsConnected() as the source of truth at publish time so a broker
+// whose atomic flag lags behind the live connection is not skipped.
 func (b *MQTTBridge) publishAnalyzers(topic string, data []byte, retained bool) {
 	b.clientMu.Lock()
-	usBr, euBr := b.brokers["us"], b.brokers["eu"]
-	us := usBr.client
-	eu := euBr.client
+	us := b.brokers["us"].client
+	eu := b.brokers["eu"].client
 	b.clientMu.Unlock()
 
 	var wg sync.WaitGroup
 
 	for _, t := range []struct {
-		br     *broker
 		client mqtt.Client
 		label  string
 	}{
-		{usBr, us, "US"},
-		{euBr, eu, "EU"},
+		{us, "US"},
+		{eu, "EU"},
 	} {
 		if t.client == nil || !t.client.IsConnected() {
 			continue
-		}
-		if !t.br.connected.Load() {
-			t.br.connected.Store(true)
 		}
 		wg.Add(1)
 		go func(client mqtt.Client, label string) {
@@ -1024,9 +1019,6 @@ func (b *MQTTBridge) publishCustomOne(topic string, data []byte, retained bool) 
 
 	if custom == nil || !custom.IsConnected() {
 		return false
-	}
-	if !br.connected.Load() {
-		br.connected.Store(true)
 	}
 
 	token := custom.Publish(topic, 1, retained, data)
@@ -1111,38 +1103,12 @@ func getRouteType(data []byte) string {
 // Wire format (from Packet.cpp writeTo()):
 //
 //	[header(1)] [transport_codes(4) — only for TRANSPORT routes] [path_len(1)] [path...] [payload...]
-//
-// path_len byte encoding is identical for ALL route types (from Packet.h):
-//
-//	hash_count = path_len & 0x3F   (bits 0-5)
-//	hash_size  = (path_len >> 6) + 1  (bits 6-7 → 1/2/3 bytes per hop; 4 is reserved/invalid)
-//	path bytes = hash_count * hash_size
 func getPayloadLen(data []byte) int {
-	if len(data) < 2 {
+	off := payloadOffset(data)
+	if off < 0 {
 		return 0
 	}
-	routeType := data[0] & 0x03
-	hasTransportCodes := routeType == 0x00 || routeType == 0x03 // TRANSPORT_FLOOD or TRANSPORT_DIRECT
-
-	// header(1) + optional transport_codes(4) + path_len(1)
-	headerLen := 2
-	if hasTransportCodes {
-		headerLen = 6
-	}
-	if len(data) < headerLen {
-		return 0
-	}
-
-	pathLenByte := data[headerLen-1]
-	hashCount := int(pathLenByte & 0x3F)
-	hashSize := int((pathLenByte>>6)&0x03) + 1 // 1, 2, or 3 bytes per hop
-	pathBytes := hashCount * hashSize
-
-	offset := headerLen + pathBytes
-	if offset >= len(data) {
-		return 0
-	}
-	return len(data) - offset
+	return len(data) - off
 }
 
 // ============================================================================
@@ -1256,9 +1222,10 @@ func (b *MQTTBridge) publishStatus() {
 		return
 	}
 
-	// Publish to custom broker (retained) and to the analyzer servers.
+	// Publish to custom broker and to the analyzer servers, all retained so newly
+	// connected subscribers immediately receive the latest state.
 	b.publishCustomOne(topic, jsonData, true)
-	b.publishStatusToAnalyzers(topic, jsonData)
+	b.publishAnalyzers(topic, jsonData, true)
 
 	b.lastStatusPublish = time.Now()
 	b.logger.Info("Status published", "topic", topic,
@@ -1331,12 +1298,6 @@ func buildMQTTStats(stats *DeviceStats) *MQTTStats {
 	return s
 }
 
-// publishStatusToAnalyzers publishes retained status to Let's Mesh Analyzer
-// servers, fanning out to US and EU concurrently.
-func (b *MQTTBridge) publishStatusToAnalyzers(topic string, data []byte) {
-	b.publishAnalyzers(topic, data, true)
-}
-
 // ============================================================================
 // Authentication
 // ============================================================================
@@ -1405,7 +1366,7 @@ func (b *MQTTBridge) renewAuthToken(region string) {
 	}
 
 	b.logger.Info("Auth token generated", "region", region, "expires", expiresAt,
-		"username", b.analyzerUsername)
+		"username", b.analyzerUser())
 }
 
 // createSignedJWT creates a JWT token signed with Ed25519 for Let's Mesh Analyzer auth.
@@ -1444,10 +1405,7 @@ func (b *MQTTBridge) createSignedJWT(publicKey []byte, privateKeyHex, email, ser
 		"iat":       iat,
 		"publicKey": hexPubKey,
 	}
-	b.mu.RLock()
-	ownerPubKey := b.config.OwnerPublicKey
-	b.mu.RUnlock()
-	if ownerPubKey != "" {
+	if ownerPubKey := b.config.OwnerPublicKey; ownerPubKey != "" {
 		claims["owner"] = strings.ToUpper(ownerPubKey)
 	}
 	payloadJSON, _ := json.Marshal(claims)
@@ -1559,23 +1517,6 @@ func (b *MQTTBridge) signWithOrlpKey(message, expandedPrivKey, pubKey []byte) ([
 	return sig, nil
 }
 
-// CreateAuthToken generates a JWT token for Let's Mesh Analyzer (public API).
-func (b *MQTTBridge) CreateAuthToken(serverName string, expiresInSeconds int) (string, error) {
-	b.mu.RLock()
-	deviceInfo := b.deviceInfo
-	privKey := b.config.DevicePrivKey
-	email := b.config.OwnerEmail
-	b.mu.RUnlock()
-
-	if deviceInfo == nil || len(deviceInfo.PublicKey) < 32 {
-		return "", fmt.Errorf("no device info available")
-	}
-	if privKey == "" {
-		return "", fmt.Errorf("DevicePrivKey not configured")
-	}
-	return b.createSignedJWT(deviceInfo.PublicKey, privKey, email, serverName, expiresInSeconds)
-}
-
 // ============================================================================
 // Utility Methods
 // ============================================================================
@@ -1587,140 +1528,12 @@ func (b *MQTTBridge) isAnyConnected() bool {
 		b.brokers["eu"].connected.Load()
 }
 
-// GetConnectionState returns the connection state of all brokers
-func (b *MQTTBridge) GetConnectionState() []BrokerInfo {
-	return []BrokerInfo{
-		{
-			Name:      "custom",
-			Connected: b.brokers["custom"].connected.Load(),
-			URL:       fmt.Sprintf("%s:%d", b.config.Server, b.config.Port),
-		},
-		{
-			Name:      "us",
-			Connected: b.brokers["us"].connected.Load(),
-			URL:       analyzerUSURL,
-		},
-		{
-			Name:      "eu",
-			Connected: b.brokers["eu"].connected.Load(),
-			URL:       analyzerEUURL,
-		},
-	}
-}
-
-// GetQueueSize returns the current packet queue size
-func (b *MQTTBridge) GetQueueSize() int {
-	b.queueMu.Lock()
-	defer b.queueMu.Unlock()
-	return len(b.queue)
-}
-
-// IsConfigValid checks if MQTT configuration is valid
-func (b *MQTTBridge) IsConfigValid() bool {
-	hasCustom := b.isCustomBrokerConfigured()
-	hasAnalyzer := b.config.AnalyzerUS || b.config.AnalyzerEU
-
-	if !hasCustom && !hasAnalyzer {
-		return false
-	}
-
-	if b.config.PacketsEnabled && b.config.IATA == "" {
-		return false
-	}
-
-	return true
-}
-
-// SetConfig updates the MQTT configuration
-func (b *MQTTBridge) SetConfig(config *MQTTConfig) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.config = config
-	b.statusInterval = time.Duration(config.StatusInterval) * time.Millisecond
-}
-
-// GetConfig returns the current MQTT configuration
-func (b *MQTTBridge) GetConfig() *MQTTConfig {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	return b.config
-}
-
 // DevicePrivKey returns the configured device private key (hex), or "" if unset.
 // It lets the bridge satisfy the meshcore_bt.PacketPublisher interface without
 // exposing the whole config.
 func (b *MQTTBridge) DevicePrivKey() string {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
 	if b.config == nil {
 		return ""
 	}
 	return b.config.DevicePrivKey
-}
-
-// ============================================================================
-// Packet Handling
-// ============================================================================
-
-// OnPacketReceived handles incoming mesh packets for MQTT publishing
-func (b *MQTTBridge) OnPacketReceived(rawData []byte, snr, rssi float64) {
-	if !b.config.PacketsEnabled {
-		return
-	}
-
-	if !b.IsConfigValid() {
-		b.logger.Warn("MQTT config not valid, queuing packet")
-	}
-
-	b.QueuePacket(rawData, false, snr, rssi)
-}
-
-// OnPacketSent handles transmitted packets for MQTT publishing
-func (b *MQTTBridge) OnPacketSent(rawData []byte) {
-	if !b.config.PacketsEnabled || !b.config.TxEnabled {
-		return
-	}
-
-	b.QueuePacket(rawData, true, 0, 0)
-}
-
-// ============================================================================
-// Configuration Access (for compatibility with C++ API)
-// ============================================================================
-
-// FormatStatusReply returns a formatted status string
-func (b *MQTTBridge) FormatStatusReply() string {
-	customStatus := "disconnected"
-	if b.brokers["custom"].connected.Load() {
-		customStatus = "connected"
-	}
-	if !b.isCustomBrokerConfigured() {
-		customStatus = "n/a"
-	}
-
-	usStatus := "off"
-	if b.config.AnalyzerUS {
-		if b.brokers["us"].connected.Load() {
-			usStatus = "connected"
-		} else {
-			usStatus = "disconnected"
-		}
-	}
-
-	euStatus := "off"
-	if b.config.AnalyzerEU {
-		if b.brokers["eu"].connected.Load() {
-			euStatus = "connected"
-		} else {
-			euStatus = "disconnected"
-		}
-	}
-
-	msgs := "on"
-	if !b.config.StatusEnabled {
-		msgs = "off"
-	}
-
-	return fmt.Sprintf("msgs: %s, broker: %s, us: %s, eu: %s, queue: %d",
-		msgs, customStatus, usStatus, euStatus, b.GetQueueSize())
 }
