@@ -5,10 +5,12 @@
 All incoming messages flow through `GenerateReplies` in [internal/commands/commands_server.go](internal/commands/commands_server.go):
 
 ```go
-func GenerateReplies(text, channelName string, pingMeta *PingMeta, senderKey, senderName string) ([]string, error)
+func GenerateReplies(text, channelName string, pingMeta *PingMeta, senderKey, senderName string) ([]string, string, error)
 ```
 
-The function normalizes text to lowercase, then routes to handler functions via a `switch` statement using `strings.HasPrefix`. Returning `nil, nil` means "no match, send nothing."
+The function normalizes text to lowercase, then routes to handler functions via a `switch` statement using `strings.HasPrefix`. It returns the reply messages, the **command name** (used by the send layer to pick a mesh-fit variant), and an error. Returning `nil, "", nil` means "no match, send nothing."
+
+Handler functions themselves return `([]string, error)`; the dispatcher adds the command-name string when it returns.
 
 Both DM and channel messages go through this same function. `channelName` is empty for DMs.
 
@@ -47,10 +49,11 @@ Add a case in the `switch` block in [internal/commands/commands_server.go](inter
 
 ```go
 case strings.HasPrefix(lower, ".mycmd"):
-    return ProcessMyCommand(text)
+    replies, err := ProcessMyCommand(text)
+    return replies, "mycmd", err
 ```
 
-Place it before the final `default` or `return nil, nil`. Use exact equality (`lower == ".mycmd"`) for commands that take no arguments.
+Place it before the final `default` (which returns `nil, "", nil`). Use exact equality (`lower == ".mycmd"`) for commands that take no arguments.
 
 ---
 
@@ -73,12 +76,24 @@ Access it anywhere with `config.Get().MyCmd.SomeOption`. Document new keys in `c
 
 ## Return value semantics
 
+A handler returns `([]string, error)`; the dispatcher returns `([]string, string, error)` (the middle value is the command name).
+
+**Handler return value:**
+
 | Return value | Meaning |
 |---|---|
 | `[]string{"reply"}, nil` | Send reply to sender |
 | `[]string{"a", "b"}, nil` | Send two separate messages |
-| `nil, nil` | No match — send nothing |
+| `nil, nil` | Nothing to send |
 | `nil, err` | Log error, send nothing |
+
+**Dispatcher return value** (what the matching `case` returns):
+
+| Return value | Meaning |
+|---|---|
+| `replies, "mycmd", nil` | Send replies; `"mycmd"` selects the mesh-fit variant |
+| `nil, "", nil` | No match — send nothing |
+| `nil, "", err` | Log error, send nothing |
 
 The bot prefixes channel replies with `@[SenderName]` automatically; DM replies are sent as-is.
 
@@ -90,7 +105,8 @@ The bot prefixes channel replies with `@[SenderName]` automatically; DM replies 
 
 ```go
 case strings.HasPrefix(lower, ".mycmd"):
-    return ProcessMyCommand(text, pingMeta)
+    replies, err := ProcessMyCommand(text, pingMeta)
+    return replies, "mycmd", err
 ```
 
 ```go
@@ -120,7 +136,7 @@ entries, err := historylog.ReadLastChannel(baseDir, channelName, n)
 // entries[i].Time, entries[i].Sender, entries[i].Text
 ```
 
-`baseDir` comes from `config.Get().LogDir` (or similar — check `config/model.go`).
+`baseDir` is the package constant `historyBaseDir` (`"log/history"`) defined in [internal/commands/last.go](internal/commands/last.go); reuse it rather than re-deriving the path.
 
 ---
 
@@ -137,7 +153,7 @@ const myCmdHelp = ".mycmd <arg>\nwhat it does"
 **2. Add the command name to `helpList`** (the list shown by bare `.help`):
 
 ```go
-const helpList = ".ping .trace .last .llm .news .w .2ch .mycmd\n\".help <cmd>\" for details"
+const helpList = ".ping .trace .last .llm .news .w .path .2ch .claw .8ball .top .stat .dice .num .hang .mycmd\n\".help <cmd>\" for details"
 ```
 
 **3. Add a case to `ProcessHelpCommand`:**

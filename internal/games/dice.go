@@ -1,4 +1,4 @@
-package commands
+package games
 
 import (
 	"fmt"

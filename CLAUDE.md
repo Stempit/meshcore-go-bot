@@ -24,6 +24,7 @@ cmd/bot/bot.go          – main entry point; wires everything together
 internal/
   meshcore_bt/          – BLE protocol driver (client.go is the main type)
   commands/             – command handlers: ping, trace, last, news, llm, greet
+  games/                – text games: dice, num (guess-the-number), hang (hangman)
   config/               – YAML config loader (singleton via sync.Once)
   historylog/           – per-conversation append-only log files
   llm/                  – Ollama and OpenRouter LLM providers
@@ -86,6 +87,10 @@ log/
 | `.8ball <question>` | `commands.ProcessEightBallCommand` | Magic 8-Ball; random Russian yes/no/maybe answer |
 | `.top` | `commands.ProcessTopCommand` | Top-5 channel authors by message count (scans last `Top.scan_count`, default 100); channels only, "not available" in DMs |
 | `.stat` | `commands.ProcessStatCommand` | Channel traffic in last 24h: message count, peak hour, unique users; channels only, "not available" in DMs |
-| `.dice [NdM]` | `commands.ProcessDiceCommand` | Roll dice (`NdM`/`M`, default `1d6`). Sub-verbs `start`/`roll`/`end`/`status` run a per-channel roll-off (highest total wins; one roll per player; stays open until anyone runs `.dice end`); session verbs channel-only |
+| `.dice [NdM]` | `games.ProcessDiceCommand` | Roll dice (`NdM`/`M`, default `1d6`). Sub-verbs `start`/`roll`/`end`/`status` run a per-channel roll-off (highest total wins; one roll per player; stays open until anyone runs `.dice end`); session verbs channel-only |
+| `.num [start/<n>/status/end/top]` | `games.ProcessNumCommand` | Guess-the-number (bot picks 1..max, default 100; `больше`/`меньше` hints). Works in channels (shared) and DMs (private); `.num top` is a 30-day win leaderboard. See [docs/games/NUM.md](docs/games/NUM.md) |
+| `.hang [start/<буква>/<слово>/status/end/top]` | `games.ProcessHangCommand` | Hangman in Russian from an embedded word bank (`words_ru.txt`, ё→е, 6 lives). Channels are collaborative, DMs solo; `.hang top` is a 30-day leaderboard. See [docs/games/HANG.md](docs/games/HANG.md) |
 
-New commands go in `internal/commands/` and must be wired into the `switch` in `commands_server.go`.
+New commands go in `internal/commands/` (or `internal/games/` for games) and must be wired into the `switch` in `commands_server.go`.
+
+The `games` package keeps game logic separate from the command dispatcher; `commands` imports it. Win records and leaderboards (`.num top` / `.hang top`) reuse the `historylog` package under `log/games/<game>/`, keyed by game scope — see [docs/games/](docs/games/).

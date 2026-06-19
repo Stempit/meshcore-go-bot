@@ -2,7 +2,7 @@ package commands
 
 import "strings"
 
-const helpList = ".ping .trace .last .llm .news .w .path .2ch .claw .8ball .top .stat .dice\n\".help <cmd>\" for details"
+const helpList = ".ping .trace .last .llm .news .w .path .2ch .claw .8ball .top .stat .dice .num .hang\n\".help <cmd>\" for details"
 
 const pingHelp = ".ping — random pong\nalso: ping, пинг"
 const traceHelp = ".trace — hop count & distance from last ping"
@@ -17,6 +17,8 @@ const eightBallHelp = ".8ball <вопрос>\nмагический шар отв
 const topHelp = ".top — топ-5 авторов канала по числу сообщений"
 const statHelp = ".stat — трафик канала за 24ч: сообщений, пик, участники"
 const diceHelp = ".dice [NdM] — кинуть кости (def 1d6)\n.dice start [NdM] / roll / end — раунд в канале"
+const numHelp = ".num <число> — угадай число (1–100)\n.num start [max] / status / end / top"
+const hangHelp = ".hang <буква> — виселица\n.hang start / <слово> / status / end / top"
 
 func ProcessHelpCommand(text string) (string, error) {
 	arg := strings.TrimSpace(strings.TrimPrefix(strings.ToLower(text), ".help"))
@@ -47,6 +49,10 @@ func ProcessHelpCommand(text string) (string, error) {
 		return statHelp, nil
 	case "dice":
 		return diceHelp, nil
+	case "num":
+		return numHelp, nil
+	case "hang":
+		return hangHelp, nil
 	default:
 		return helpList, nil
 	}
