@@ -115,6 +115,19 @@ type MQTTBridge struct {
 	queue   []QueuedPacket
 	queueMu sync.Mutex
 
+	// notifyCh wakes the publisher goroutine when a packet is enqueued.
+	// Buffered to depth 1: a single pending signal coalesces a burst of
+	// enqueues into one drain pass.
+	notifyCh chan struct{}
+
+	// clientMu guards the three mqtt.Client pointers below and the reconnect
+	// bookkeeping maps. These are touched by the connectionManager goroutine,
+	// the publisher goroutine (on publish failure), and paho's own callback
+	// goroutines (handleConnect/handleConnectionLost), so every access must
+	// hold this lock. Never hold it across a blocking network call
+	// (Connect/Publish/Disconnect) — snapshot the pointer, release, then call.
+	clientMu sync.Mutex
+
 	// Status publishing
 	lastStatusPublish time.Time
 	statusInterval    time.Duration
@@ -154,6 +167,7 @@ func NewMQTTBridge(config *MQTTConfig) *MQTTBridge {
 		queue:             make([]QueuedPacket, 0, maxQueuedPackets),
 		statusInterval:    time.Duration(config.StatusInterval) * time.Millisecond,
 		done:              make(chan struct{}),
+		notifyCh:          make(chan struct{}, 1),
 	}
 
 	// Set default reconnect delays
@@ -205,10 +219,14 @@ func (b *MQTTBridge) Start() error {
 	if b.done == nil {
 		b.done = make(chan struct{})
 	}
+	if b.notifyCh == nil {
+		b.notifyCh = make(chan struct{}, 1)
+	}
 	b.mu.Unlock()
 
-	b.wg.Add(1)
+	b.wg.Add(2)
 	go b.connectionManager()
+	go b.publisher()
 
 	return nil
 }
@@ -276,8 +294,11 @@ func (b *MQTTBridge) connectionManager() {
 			}
 		}
 
-		// Process packet queue periodically
-		b.processQueue()
+		// Packet publishing is owned by the publisher goroutine; the
+		// connection manager only handles connect/reconnect and status.
+		// Nudge the publisher in case packets are queued and a broker has
+		// just (re)connected.
+		b.signalQueue()
 
 		// Publish status periodically
 		b.publishStatusIfNeeded()
@@ -302,17 +323,20 @@ func (b *MQTTBridge) connectToCustomBroker() {
 		return
 	}
 
-	// Check reconnect delay
+	// Check the reconnect delay and detach any existing client under the lock.
+	// Disconnect and discard the old client before creating a new one to avoid
+	// two clients with the same ID competing on the broker (infinite kick loop).
+	b.clientMu.Lock()
 	if !b.canReconnect("custom") {
+		b.clientMu.Unlock()
 		return
 	}
+	old := b.customClient
+	b.customClient = nil
+	b.clientMu.Unlock()
 
-	// Disconnect and discard any existing client before creating a new one.
-	// This prevents two clients with the same ID competing on the broker,
-	// which would trigger an infinite kick-reconnect loop.
-	if b.customClient != nil {
-		b.customClient.Disconnect(250)
-		b.customClient = nil
+	if old != nil {
+		old.Disconnect(250)
 	}
 
 	b.logger.Info("Connecting to custom MQTT broker",
@@ -325,21 +349,26 @@ func (b *MQTTBridge) connectToCustomBroker() {
 	// broker. Paho auto-reconnect must be off to prevent it from internally
 	// queuing QoS-1 messages and "completing" their tokens without actual PUBACK
 	// from the broker, which caused silent publish failures on every 2nd+ update.
+	// createMQTTClient blocks on Connect(), so it must run without clientMu held.
 	client, err := b.createMQTTClient("custom", "custom", brokerURL,
 		b.config.Username, b.config.Password,
 		b.config.UseTLS, "", "", "", false, false)
 
 	if err != nil {
 		b.logger.Error("Failed to create custom MQTT client", "error", err)
+		b.clientMu.Lock()
 		b.scheduleReconnect("custom")
+		b.clientMu.Unlock()
 		return
 	}
 
+	b.clientMu.Lock()
 	b.customClient = client
 	// Record the connection attempt time so that connectionManager does not
 	// immediately spin up another client on the next 5-second tick if the
 	// OnConnect callback hasn't fired yet.
 	b.lastReconnect["custom"] = time.Now()
+	b.clientMu.Unlock()
 }
 
 // connectToAnalyzer establishes connection to Let's Mesh Analyzer server
@@ -357,25 +386,27 @@ func (b *MQTTBridge) connectToAnalyzer(region, brokerURL string) {
 		return
 	}
 
-	// Check reconnect delay
+	// Check the reconnect delay and detach any existing client under the lock.
+	// Disconnect and discard the old client before creating a new one to avoid
+	// two clients with the same ID competing on the broker (same fix as custom).
+	b.clientMu.Lock()
 	if !b.canReconnect(region) {
+		b.clientMu.Unlock()
 		return
 	}
-
-	// Disconnect and discard any existing client before creating a new one.
-	// This prevents two clients with the same ID competing on the broker,
-	// which would trigger an infinite kick-reconnect loop (same fix as custom broker).
+	var old mqtt.Client
 	switch region {
 	case "us":
-		if b.analyzerUSClient != nil {
-			b.analyzerUSClient.Disconnect(250)
-			b.analyzerUSClient = nil
-		}
+		old = b.analyzerUSClient
+		b.analyzerUSClient = nil
 	case "eu":
-		if b.analyzerEUClient != nil {
-			b.analyzerEUClient.Disconnect(250)
-			b.analyzerEUClient = nil
-		}
+		old = b.analyzerEUClient
+		b.analyzerEUClient = nil
+	}
+	b.clientMu.Unlock()
+
+	if old != nil {
+		old.Disconnect(250)
 	}
 
 	b.logger.Info("Connecting to Let's Mesh Analyzer", "region", region, "url", brokerURL)
@@ -384,7 +415,9 @@ func (b *MQTTBridge) connectToAnalyzer(region, brokerURL string) {
 	password := b.getAuthToken(region)
 	if password == "" {
 		b.logger.Warn("No auth token available for analyzer", "region", region)
+		b.clientMu.Lock()
 		b.scheduleReconnect(region)
+		b.clientMu.Unlock()
 		return
 	}
 
@@ -407,10 +440,13 @@ func (b *MQTTBridge) connectToAnalyzer(region, brokerURL string) {
 
 	if err != nil {
 		b.logger.Error("Failed to create analyzer MQTT client", "error", err, "region", region)
+		b.clientMu.Lock()
 		b.scheduleReconnect(region)
+		b.clientMu.Unlock()
 		return
 	}
 
+	b.clientMu.Lock()
 	// Record the connection attempt time so connectionManager does not immediately
 	// spin up another client on the next 5-second tick before OnConnect fires.
 	b.lastReconnect[region] = time.Now()
@@ -421,6 +457,7 @@ func (b *MQTTBridge) connectToAnalyzer(region, brokerURL string) {
 	case "eu":
 		b.analyzerEUClient = newClient
 	}
+	b.clientMu.Unlock()
 }
 
 // buildBrokerURL constructs the broker URL from components
@@ -532,8 +569,10 @@ func (b *MQTTBridge) handleConnect(brokerID string) {
 	}
 
 	connected.Store(true)
+	b.clientMu.Lock()
 	b.reconnectAttempts[brokerID] = 0
 	b.reconnectDelay[brokerID] = 15 * time.Second
+	b.clientMu.Unlock()
 
 	if b.onConnected != nil {
 		b.onConnected(brokerID)
@@ -563,7 +602,8 @@ func (b *MQTTBridge) handleConnectionLost(brokerID string, err error) {
 	}
 }
 
-// canReconnect checks if enough time has passed to attempt reconnection
+// canReconnect checks if enough time has passed to attempt reconnection.
+// Caller must hold b.clientMu (it reads the reconnect bookkeeping maps).
 func (b *MQTTBridge) canReconnect(brokerID string) bool {
 	delay := b.reconnectDelay[brokerID]
 	lastTime := b.lastReconnect[brokerID]
@@ -579,7 +619,8 @@ func (b *MQTTBridge) canReconnect(brokerID string) bool {
 	return true
 }
 
-// scheduleReconnect schedules a reconnection attempt with exponential backoff
+// scheduleReconnect schedules a reconnection attempt with exponential backoff.
+// Caller must hold b.clientMu (it mutates the reconnect bookkeeping maps).
 func (b *MQTTBridge) scheduleReconnect(brokerID string) {
 	b.lastReconnect[brokerID] = time.Now()
 
@@ -610,13 +651,27 @@ func (b *MQTTBridge) scheduleReconnect(brokerID string) {
 // resetCustomConnection tears down the custom broker client and clears all
 // related state so that connectionManager will immediately attempt to reconnect
 // on the next 5-second tick. Call this whenever a publish fails or times out.
-func (b *MQTTBridge) resetCustomConnection() {
+//
+// failed is the client the caller was publishing on. If the connection manager
+// has already swapped in a newer client, the reset is skipped so a stale publish
+// error cannot tear down a freshly established connection. Pass nil to force a
+// reset of whatever client is current.
+func (b *MQTTBridge) resetCustomConnection(failed mqtt.Client) {
 	b.customConnected.Store(false)
+
+	b.clientMu.Lock()
+	if failed != nil && b.customClient != failed {
+		// A newer client already replaced the failed one; leave it alone.
+		b.clientMu.Unlock()
+		return
+	}
 	// Zero out lastReconnect so canReconnect() allows an immediate retry.
 	b.lastReconnect["custom"] = time.Time{}
-	if b.customClient != nil {
-		old := b.customClient
-		b.customClient = nil
+	old := b.customClient
+	b.customClient = nil
+	b.clientMu.Unlock()
+
+	if old != nil {
 		// Best-effort graceful disconnect; don't block the caller.
 		go old.Disconnect(250)
 	}
@@ -625,14 +680,22 @@ func (b *MQTTBridge) resetCustomConnection() {
 
 // disconnectAll disconnects all MQTT clients
 func (b *MQTTBridge) disconnectAll() {
-	if b.customClient != nil && b.customClient.IsConnected() {
-		b.customClient.Disconnect(1000)
+	// Snapshot the client pointers under the lock, then disconnect outside it
+	// (Disconnect blocks for up to its quiesce timeout).
+	b.clientMu.Lock()
+	custom := b.customClient
+	us := b.analyzerUSClient
+	eu := b.analyzerEUClient
+	b.clientMu.Unlock()
+
+	if custom != nil && custom.IsConnected() {
+		custom.Disconnect(1000)
 	}
-	if b.analyzerUSClient != nil && b.analyzerUSClient.IsConnected() {
-		b.analyzerUSClient.Disconnect(1000)
+	if us != nil && us.IsConnected() {
+		us.Disconnect(1000)
 	}
-	if b.analyzerEUClient != nil && b.analyzerEUClient.IsConnected() {
-		b.analyzerEUClient.Disconnect(1000)
+	if eu != nil && eu.IsConnected() {
+		eu.Disconnect(1000)
 	}
 
 	b.customConnected.Store(false)
@@ -669,6 +732,7 @@ func (b *MQTTBridge) QueuePacket(rawData []byte, isTX bool, snr, rssi float64) {
 
 	b.queue = append(b.queue, packet)
 	b.logger.Debug("Packet queued", "hash", hash, "queue_len", len(b.queue))
+	b.signalQueue()
 }
 
 // QueueChannelPacket queues a raw RF packet that has been correlated with a
@@ -701,6 +765,7 @@ func (b *MQTTBridge) QueueChannelPacket(rawData []byte, isTX bool, snr, rssi flo
 	}
 	b.queue = append(b.queue, packet)
 	b.logger.Debug("Channel packet queued", "channel", channelIndex, "sender", senderName, "isTX", isTX, "queue_len", len(b.queue))
+	b.signalQueue()
 }
 
 // calculatePacketHash mirrors MeshCore's Packet::calculatePacketHash:
@@ -759,26 +824,66 @@ func getPathLenByte(data []byte) uint8 {
 	return data[1]
 }
 
-// processQueue processes queued packets for publishing
-func (b *MQTTBridge) processQueue() {
-	b.queueMu.Lock()
-	if len(b.queue) == 0 {
-		b.queueMu.Unlock()
-		return
+// signalQueue wakes the publisher goroutine. It never blocks: notifyCh is
+// buffered to depth 1, so if a wake-up is already pending this is a no-op and
+// the enqueuing caller (the BLE receive path) is never stalled on MQTT.
+func (b *MQTTBridge) signalQueue() {
+	select {
+	case b.notifyCh <- struct{}{}:
+	default:
 	}
+}
 
-	// Check if any broker is connected
-	if !b.isAnyConnected() {
-		b.queueMu.Unlock()
-		return
+// publisher owns packet publishing. It runs independently of the
+// connectionManager's 5-second connect/reconnect cadence so a slow connect or
+// reconnect backoff never delays draining the queue. It wakes on enqueue
+// (notifyCh) and on a short ticker that retries packets left queued while no
+// broker was connected.
+func (b *MQTTBridge) publisher() {
+	defer b.wg.Done()
+
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-b.done:
+			return
+		case <-b.notifyCh:
+		case <-ticker.C:
+		}
+		b.drainQueue()
 	}
+}
 
-	// Process one packet at a time for responsiveness
-	packet := b.queue[0]
-	b.queue = b.queue[1:]
-	b.queueMu.Unlock()
+// drainQueue publishes queued packets until the queue is empty or no broker is
+// connected. Each packet is fanned out to all brokers in parallel inside
+// publishPacket, so one slow broker does not hold up the others.
+func (b *MQTTBridge) drainQueue() {
+	for {
+		select {
+		case <-b.done:
+			return
+		default:
+		}
 
-	b.publishPacket(&packet)
+		// Leave packets queued while disconnected; the ticker retries them
+		// once a broker comes back.
+		if !b.isAnyConnected() {
+			return
+		}
+
+		b.queueMu.Lock()
+		if len(b.queue) == 0 {
+			b.queueMu.Unlock()
+			return
+		}
+		packet := b.queue[0]
+		b.queue = b.queue[1:]
+		b.queueMu.Unlock()
+
+		b.publishPacket(&packet)
+	}
 }
 
 // publishPacket publishes a single packet to all connected brokers
@@ -844,25 +949,40 @@ func (b *MQTTBridge) publishPacket(packet *QueuedPacket) {
 		return
 	}
 
-	// Publish to custom broker
-	if b.customConnected.Load() && b.customClient != nil {
-		if !b.customClient.IsConnected() {
-			b.logger.Warn("Custom broker reports not connected during packet publish, resetting")
-			b.resetCustomConnection()
-		} else {
-			token := b.customClient.Publish(topic, 1, false, jsonData)
+	// Fan out to every connected broker in parallel so a slow or dead broker
+	// cannot stall publishing to the others.
+	b.clientMu.Lock()
+	custom := b.customClient
+	b.clientMu.Unlock()
+
+	var wg sync.WaitGroup
+
+	if custom != nil && custom.IsConnected() {
+		if !b.customConnected.Load() {
+			b.customConnected.Store(true)
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			token := custom.Publish(topic, 1, false, jsonData)
 			if !token.WaitTimeout(15 * time.Second) {
 				b.logger.Warn("Packet publish to custom broker timed out, resetting connection")
-				b.resetCustomConnection()
+				b.resetCustomConnection(custom)
 			} else if token.Error() != nil {
 				b.logger.Error("Failed to publish packet to custom broker", "error", token.Error())
-				b.resetCustomConnection()
+				b.resetCustomConnection(custom)
 			}
-		}
+		}()
 	}
 
-	// Publish to analyzer servers
-	b.publishToAnalyzers(topic, jsonData)
+	// Analyzer servers (US/EU) are published concurrently inside publishToAnalyzers.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		b.publishToAnalyzers(topic, jsonData)
+	}()
+
+	wg.Wait()
 
 	// Publish raw if enabled
 	if b.config.RawEnabled {
@@ -890,36 +1010,59 @@ func (b *MQTTBridge) publishRawPacket(packet *QueuedPacket, originID, origin, ia
 	b.publishToAnalyzers(topic, jsonData)
 }
 
-// publishToAnalyzers publishes data to Let's Mesh Analyzer servers.
+// publishToAnalyzers publishes non-retained data to Let's Mesh Analyzer servers.
 // Uses IsConnected() as the primary truth source (same pattern as publishStatus)
 // to avoid silent drops when the connected atomic flag lags behind paho state.
-// WaitTimeout prevents blocking forever when connection drops mid-publish
-// (paho autoReconnect would otherwise keep the token pending across reconnects).
 func (b *MQTTBridge) publishToAnalyzers(topic string, data []byte) {
-	const analyzerPublishTimeout = 15 * time.Second
+	b.publishAnalyzers(topic, data, false)
+}
 
-	if b.analyzerUSClient != nil && b.analyzerUSClient.IsConnected() {
+// publishAnalyzers publishes a payload to both analyzer servers concurrently.
+// retained controls the MQTT retained flag (true for status, false for packets).
+func (b *MQTTBridge) publishAnalyzers(topic string, data []byte, retained bool) {
+	b.clientMu.Lock()
+	us := b.analyzerUSClient
+	eu := b.analyzerEUClient
+	b.clientMu.Unlock()
+
+	var wg sync.WaitGroup
+
+	if us != nil && us.IsConnected() {
 		if !b.analyzerUSConnected.Load() {
 			b.analyzerUSConnected.Store(true)
 		}
-		token := b.analyzerUSClient.Publish(topic, 1, false, data)
-		if !token.WaitTimeout(analyzerPublishTimeout) {
-			b.logger.Warn("Publish to US analyzer timed out", "topic", topic)
-		} else if token.Error() != nil {
-			b.logger.Error("Failed to publish to US analyzer", "error", token.Error(), "topic", topic)
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			b.publishAnalyzerOne(us, "US", topic, data, retained)
+		}()
 	}
 
-	if b.analyzerEUClient != nil && b.analyzerEUClient.IsConnected() {
+	if eu != nil && eu.IsConnected() {
 		if !b.analyzerEUConnected.Load() {
 			b.analyzerEUConnected.Store(true)
 		}
-		token := b.analyzerEUClient.Publish(topic, 1, false, data)
-		if !token.WaitTimeout(analyzerPublishTimeout) {
-			b.logger.Warn("Publish to EU analyzer timed out", "topic", topic)
-		} else if token.Error() != nil {
-			b.logger.Error("Failed to publish to EU analyzer", "error", token.Error(), "topic", topic)
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			b.publishAnalyzerOne(eu, "EU", topic, data, retained)
+		}()
+	}
+
+	wg.Wait()
+}
+
+// publishAnalyzerOne publishes a single payload to one analyzer broker and
+// logs the outcome. WaitTimeout prevents blocking forever when the connection
+// drops mid-publish (paho autoReconnect would otherwise keep the token pending
+// across reconnects).
+func (b *MQTTBridge) publishAnalyzerOne(client mqtt.Client, label, topic string, data []byte, retained bool) {
+	const analyzerPublishTimeout = 15 * time.Second
+	token := client.Publish(topic, 1, retained, data)
+	if !token.WaitTimeout(analyzerPublishTimeout) {
+		b.logger.Warn("Publish to analyzer timed out", "broker", label, "topic", topic)
+	} else if token.Error() != nil {
+		b.logger.Error("Failed to publish to analyzer", "broker", label, "error", token.Error(), "topic", topic)
 	}
 }
 
@@ -1021,23 +1164,27 @@ func getPayloadLen(data []byte) int {
 // publishToAllBrokers publishes data to all connected MQTT brokers.
 // retained: true for persistent data (status), false for transient data (packets).
 func (b *MQTTBridge) publishToAllBrokers(topic string, data []byte, retained bool) {
+	b.clientMu.Lock()
+	custom := b.customClient
+	b.clientMu.Unlock()
+
 	// Log the intent
 	b.logger.Debug("publishToAllBrokers",
 		"topic", topic,
 		"data_len", len(data),
 		"retained", retained,
 		"custom_connected_flag", b.customConnected.Load(),
-		"custom_client_nil", b.customClient == nil,
+		"custom_client_nil", custom == nil,
 		"any_connected", b.isAnyConnected())
 
 	// Publish to custom broker
-	if b.customClient != nil && b.customClient.IsConnected() {
+	if custom != nil && custom.IsConnected() {
 		// Ensure atomic flag reflects actual connection state
 		if !b.customConnected.Load() {
 			b.logger.Debug("publishToAllBrokers: flag out-of-sync, updating")
 			b.customConnected.Store(true)
 		}
-		token := b.customClient.Publish(topic, 1, retained, data)
+		token := custom.Publish(topic, 1, retained, data)
 		b.logger.Debug("publishToAllBrokers: custom broker publish started",
 			"topic", topic,
 			"qos", 1,
@@ -1046,19 +1193,19 @@ func (b *MQTTBridge) publishToAllBrokers(topic string, data []byte, retained boo
 		if !token.WaitTimeout(15 * time.Second) {
 			b.logger.Error("publishToAllBrokers: custom broker publish timed out (no PUBACK)",
 				"topic", topic)
-			b.resetCustomConnection()
+			b.resetCustomConnection(custom)
 		} else if token.Error() != nil {
 			b.logger.Error("publishToAllBrokers: custom broker publish failed",
 				"topic", topic,
 				"error", token.Error())
-			b.resetCustomConnection()
+			b.resetCustomConnection(custom)
 		} else {
 			b.logger.Info("Published to custom broker", "topic", topic)
 		}
 	} else {
 		b.logger.Warn("publishToAllBrokers: custom broker not ready, message dropped",
 			"topic", topic,
-			"custom_client_nil", b.customClient == nil)
+			"custom_client_nil", custom == nil)
 	}
 
 	// Publish to analyzer servers
@@ -1202,6 +1349,10 @@ func (b *MQTTBridge) publishStatus() {
 		return
 	}
 
+	b.clientMu.Lock()
+	custom := b.customClient
+	b.clientMu.Unlock()
+
 	b.logger.Debug("PUBLISH_STATUS: Publishing to custom broker",
 		"topic", topic,
 		"json_size", len(jsonData),
@@ -1209,42 +1360,41 @@ func (b *MQTTBridge) publishStatus() {
 		"qos", 1,
 		"retained", true,
 		"custom_connected_flag", b.customConnected.Load(),
-		"custom_client_nil", b.customClient == nil)
+		"custom_client_nil", custom == nil)
 
 	// Publish to custom broker (retained).
 	// Guard with paho's own IsConnected() to catch stale customConnected flags,
 	// then use WaitTimeout so a dead connection never blocks the goroutine forever.
-	if b.customClient != nil && b.customClient.IsConnected() {
+	if custom != nil && custom.IsConnected() {
 		if !b.customConnected.Load() {
 			b.logger.Warn("PUBLISH_STATUS: paho connected but flag false, updating flag")
 			b.customConnected.Store(true)
 		}
 
 		b.logger.Debug("PUBLISH_STATUS: Calling paho Publish")
-		token := b.customClient.Publish(topic, 1, true, jsonData)
+		token := custom.Publish(topic, 1, true, jsonData)
 
 		b.logger.Debug("PUBLISH_STATUS: Waiting for publish token")
 		if !token.WaitTimeout(15 * time.Second) {
 			b.logger.Error("PUBLISH_STATUS: Publish to custom broker timed out (no PUBACK)",
 				"topic", topic,
 				"token_waited", true)
-			b.resetCustomConnection()
+			b.resetCustomConnection(custom)
 		} else if token.Error() != nil {
 			b.logger.Error("PUBLISH_STATUS: Failed to publish status to custom broker",
 				"error", token.Error(),
 				"topic", topic)
-			b.resetCustomConnection()
+			b.resetCustomConnection(custom)
 		} else {
 			b.logger.Debug("PUBLISH_STATUS: Successfully published to custom broker",
 				"topic", topic,
 				"json_size", len(jsonData))
 		}
 	} else {
-		customConnected := b.customClient != nil && b.customClient.IsConnected()
 		b.logger.Warn("PUBLISH_STATUS: Cannot publish - custom broker not connected",
 			"custom_connected_flag", b.customConnected.Load(),
-			"custom_client_nil", b.customClient == nil,
-			"custom_client_connected", customConnected)
+			"custom_client_nil", custom == nil,
+			"custom_client_connected", custom != nil && custom.IsConnected())
 	}
 
 	// Publish to analyzer servers (retained).
@@ -1323,31 +1473,10 @@ func buildMQTTStats(stats *DeviceStats) *MQTTStats {
 	return s
 }
 
-// publishStatusToAnalyzers publishes status to Let's Mesh Analyzer servers
+// publishStatusToAnalyzers publishes retained status to Let's Mesh Analyzer
+// servers, fanning out to US and EU concurrently.
 func (b *MQTTBridge) publishStatusToAnalyzers(topic string, data []byte) {
-	const analyzerPublishTimeout = 15 * time.Second
-
-	if b.analyzerUSClient != nil && b.analyzerUSClient.IsConnected() {
-		token := b.analyzerUSClient.Publish(topic, 1, true, data)
-		if !token.WaitTimeout(analyzerPublishTimeout) {
-			b.logger.Warn("Publish status to US analyzer timed out", "topic", topic)
-		} else if token.Error() != nil {
-			b.logger.Error("Failed to publish status to US analyzer", "error", token.Error())
-		} else {
-			b.logger.Debug("Status published", "broker", "US analyzer")
-		}
-	}
-
-	if b.analyzerEUClient != nil && b.analyzerEUClient.IsConnected() {
-		token := b.analyzerEUClient.Publish(topic, 1, true, data)
-		if !token.WaitTimeout(analyzerPublishTimeout) {
-			b.logger.Warn("Publish status to EU analyzer timed out", "topic", topic)
-		} else if token.Error() != nil {
-			b.logger.Error("Failed to publish status to EU analyzer", "error", token.Error())
-		} else {
-			b.logger.Debug("Status published", "broker", "EU analyzer")
-		}
-	}
+	b.publishAnalyzers(topic, data, true)
 }
 
 // ============================================================================
