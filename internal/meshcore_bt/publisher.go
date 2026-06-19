@@ -18,6 +18,10 @@ type PacketPublisher interface {
 	// DevicePrivKey returns the device private key (hex) used to build synthetic
 	// outgoing-DM packets for publishing, or "" if unavailable.
 	DevicePrivKey() string
+	// TxEnabled reports whether the operator's own outgoing messages should be
+	// mirrored to MQTT. When false, the synthetic outgoing-packet paths skip
+	// publishing entirely.
+	TxEnabled() bool
 	// Stop shuts the publisher down and releases its resources.
 	Stop()
 }
