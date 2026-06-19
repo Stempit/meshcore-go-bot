@@ -681,8 +681,12 @@ func (b *MQTTBridge) disconnectAll() {
 // Packet Publishing
 // ============================================================================
 
-// QueuePacket adds a packet to the queue for publishing
+// QueuePacket adds a packet to the queue for publishing. Transmitted packets are
+// only published when TxEnabled is set; received packets are always queued.
 func (b *MQTTBridge) QueuePacket(rawData []byte, isTX bool, snr, rssi float64) {
+	if isTX && !b.config.TxEnabled {
+		return
+	}
 	b.enqueue(QueuedPacket{
 		RawData:   rawData,
 		Timestamp: time.Now(),
@@ -698,6 +702,9 @@ func (b *MQTTBridge) QueuePacket(rawData []byte, isTX bool, snr, rssi float64) {
 // name, message text) are embedded in the published JSON so the web UI can
 // display them without needing to parse or decrypt the raw bytes.
 func (b *MQTTBridge) QueueChannelPacket(rawData []byte, isTX bool, snr, rssi float64, channelIndex int, channelName, senderName, text, channelKeyHex string) {
+	if isTX && !b.config.TxEnabled {
+		return
+	}
 	b.enqueue(QueuedPacket{
 		RawData:          rawData,
 		Timestamp:        time.Now(),

@@ -746,7 +746,7 @@ func (c *MeshCoreClient) publishTXChannelPacket(channel *Channel, text string, t
 	}
 	channelKeyHex := hex.EncodeToString(channel.PSK[:16])
 
-	publisher.QueueChannelPacket(rawPkt, false, 0, 0, channel.Index, channelName, senderName, text, channelKeyHex)
+	publisher.QueueChannelPacket(rawPkt, true, 0, 0, channel.Index, channelName, senderName, text, channelKeyHex)
 }
 
 // buildTXTMsgPacket constructs a synthetic MeshCore TXT_MSG RF packet for an
@@ -839,7 +839,8 @@ func buildTXTMsgPacket(privKeyBytes, ourPubKey, recipientPubKey []byte, text str
 }
 
 // publishTXDirectMessage builds a synthetic TXT_MSG RF packet for an outgoing DM
-// and queues it to MQTT as an emulated RX packet (zero hop, SNR/RSSI = 0).
+// and queues it to MQTT as a TX packet (zero hop, SNR/RSSI = 0). Whether it is
+// actually published depends on the bridge's TxEnabled setting.
 func (c *MeshCoreClient) publishTXDirectMessage(contact *Contact, text string, timestamp uint32) {
 	c.mu.RLock()
 	publisher := c.publisher
@@ -870,7 +871,7 @@ func (c *MeshCoreClient) publishTXDirectMessage(contact *Contact, text string, t
 		return
 	}
 
-	publisher.QueuePacket(rawPkt, false, 0, 0)
+	publisher.QueuePacket(rawPkt, true, 0, 0)
 }
 
 // parseTraceData handles PUSH_CODE_TRACE_DATA (0x89).
