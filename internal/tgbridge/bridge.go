@@ -2,14 +2,40 @@
 package tgbridge
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	tgbotapi "github.com/OvyFlash/telegram-bot-api"
 )
+
+// Outbound delivery tuning. Forwarding to Telegram runs through a buffered queue
+// drained by a single worker, so a slow or unreachable Telegram API can never
+// block the mesh reply path. A single worker preserves message order; under a
+// sustained outage the queue fills and newer messages are dropped (logged)
+// rather than queued unbounded. Each send attempt is bounded by its own context
+// timeout so it can't inherit the long-poll client's 60s timeout.
+const (
+	outboxCapacity = 256              // buffered jobs before Forward drops
+	sendAttempts   = 3                // total send attempts per message
+	sendTimeout    = 15 * time.Second // per-attempt timeout for sends
+)
+
+// sendBackoff is the wait before retry N (index = attempt-1). Its length must be
+// at least sendAttempts-1.
+var sendBackoff = []time.Duration{2 * time.Second, 5 * time.Second}
+
+// tgJob is a single queued Telegram delivery.
+type tgJob struct {
+	chatID      int64
+	threadID    int
+	text        string
+	meshChannel string // for logging
+}
 
 // TelegramConfig holds bot credentials and the list of sources to monitor.
 type TelegramConfig struct {
@@ -45,6 +71,8 @@ type Bridge struct {
 	onMsg  func(meshChannelName, senderName, text string)
 	logger *slog.Logger
 	done   chan struct{}
+	outbox chan tgJob
+	wg     sync.WaitGroup
 }
 
 // New creates a Bridge and connects the Telegram bot. Call Start() to begin polling.
@@ -77,6 +105,7 @@ func New(cfg TelegramConfig, logger *slog.Logger, httpClient *http.Client) (*Bri
 		bot:    bot,
 		logger: logger,
 		done:   make(chan struct{}),
+		outbox: make(chan tgJob, outboxCapacity),
 	}, nil
 }
 
@@ -88,6 +117,10 @@ func (b *Bridge) OnMessage(fn func(meshChannelName, senderName, text string)) {
 
 // Start begins long-polling for updates. Blocks until Stop() is called.
 func (b *Bridge) Start() {
+	// One outbound worker drains the queue, preserving Telegram message order.
+	b.wg.Add(1)
+	go b.sendWorker()
+
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 30
 	u.AllowedUpdates = []string{"message", "channel_post"}
@@ -110,9 +143,11 @@ func (b *Bridge) Start() {
 	}
 }
 
-// Stop signals the polling loop to exit.
+// Stop signals the polling loop and outbound worker to exit, then waits for the
+// worker to finish any in-flight send.
 func (b *Bridge) Stop() {
 	close(b.done)
+	b.wg.Wait()
 }
 
 func (b *Bridge) handleUpdate(update tgbotapi.Update) {
@@ -208,7 +243,10 @@ func (b *Bridge) HasTarget(meshChannelName string) bool {
 	return false
 }
 
-// Forward sends a MeshCore channel message to every Telegram target configured for that channel.
+// Forward queues a MeshCore channel message for every Telegram target configured
+// for that channel. It never blocks on the network: jobs go onto a buffered queue
+// drained by sendWorker, so a slow Telegram API can't hold up the mesh reply path.
+// If the queue is full (sustained Telegram outage) the message is dropped and logged.
 // Call this from the incoming-message handler in bot.go for ChannelMessage events.
 func (b *Bridge) Forward(meshChannelName, senderName, text string) {
 	formatted := fmt.Sprintf("[%s] %s", senderName, text)
@@ -216,18 +254,62 @@ func (b *Bridge) Forward(meshChannelName, senderName, text string) {
 		if t.MeshChannelName != meshChannelName {
 			continue
 		}
-		mc := tgbotapi.NewMessage(t.ChatID, formatted)
-		if t.ThreadID != 0 {
-			mc.MessageThreadID = t.ThreadID
-		}
-		if _, err := b.bot.Send(mc); err != nil {
-			b.logger.Error("Telegram bridge: forward to Telegram failed",
-				"chat_id", t.ChatID, "mesh_channel", meshChannelName, "error", err)
-		} else {
-			b.logger.Info("Telegram bridge: forwarded to Telegram",
-				"chat_id", t.ChatID, "mesh_channel", meshChannelName, "sender", senderName)
+		job := tgJob{chatID: t.ChatID, threadID: t.ThreadID, text: formatted, meshChannel: meshChannelName}
+		select {
+		case b.outbox <- job:
+		default:
+			b.logger.Warn("Telegram bridge: outbox full, dropping message",
+				"chat_id", t.ChatID, "mesh_channel", meshChannelName)
 		}
 	}
+}
+
+// sendWorker drains the outbox, delivering one job at a time so Telegram messages
+// keep their order. It exits when Stop closes done.
+func (b *Bridge) sendWorker() {
+	defer b.wg.Done()
+	for {
+		select {
+		case <-b.done:
+			return
+		case job := <-b.outbox:
+			b.deliver(job)
+		}
+	}
+}
+
+// deliver sends one job, retrying up to sendAttempts times with backoff. Each
+// attempt is bounded by sendTimeout. Backoff waits abort early if Stop is called.
+func (b *Bridge) deliver(job tgJob) {
+	mc := tgbotapi.NewMessage(job.chatID, job.text)
+	if job.threadID != 0 {
+		mc.MessageThreadID = job.threadID
+	}
+
+	for attempt := 1; attempt <= sendAttempts; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), sendTimeout)
+		_, err := b.bot.RequestWithContext(ctx, mc)
+		cancel()
+		if err == nil {
+			b.logger.Info("Telegram bridge: forwarded to Telegram",
+				"chat_id", job.chatID, "mesh_channel", job.meshChannel, "attempt", attempt)
+			return
+		}
+		b.logger.Warn("Telegram bridge: forward attempt failed",
+			"chat_id", job.chatID, "mesh_channel", job.meshChannel,
+			"attempt", attempt, "max_attempts", sendAttempts, "error", err)
+
+		if attempt < sendAttempts {
+			select {
+			case <-b.done:
+				return
+			case <-time.After(sendBackoff[attempt-1]):
+			}
+		}
+	}
+
+	b.logger.Error("Telegram bridge: forward to Telegram failed, giving up",
+		"chat_id", job.chatID, "mesh_channel", job.meshChannel, "attempts", sendAttempts)
 }
 
 func (b *Bridge) emit(src Source, senderName, text string) {
