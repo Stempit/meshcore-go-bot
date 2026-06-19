@@ -25,14 +25,9 @@ MQTT:
   # common mqtt config
   iata: KVX               # region by iata
   status_enabled: true    # send status updates
-  packets_enabled: true   # send incoming packets
-  tx_enabled: true        # send outgoing packets
+  tx_enabled: true        # mirror own outgoing messages to MQTT (as emulated rx)
+  raw_enabled: false      # also publish minimal raw packets to analyzer servers
   status_interval: 50000  # ms
-  adverts_enabled: true
-  messages_enabled: true
-  channel_msgs_enabled: true
-  delivery_enabled: true
-  path_updates_enabled: true
 
   # old mqtt server (tcp)
   server: meshcoretel.ru

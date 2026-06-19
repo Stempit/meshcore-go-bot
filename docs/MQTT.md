@@ -376,7 +376,11 @@ _mqtt_client->setClientCertificate(client_cert, client_key);
 
 ### Reconnection Strategy
 
-**Main Broker (Custom):**
+Backoff doubles on each consecutive failure, starting from the broker's base
+delay and capped at 300 seconds. A successful connection resets the delay back to
+the base.
+
+**Main Broker (Custom)** — base delay 15 seconds:
 
 | Attempt | Delay |
 |---------|-------|
@@ -384,9 +388,10 @@ _mqtt_client->setClientCertificate(client_cert, client_key);
 | 2 | 30 seconds |
 | 3 | 60 seconds |
 | 4 | 120 seconds |
-| 5 | 300 seconds |
+| 5 | 240 seconds |
+| 6+ | 300 seconds |
 
-**Analyzer Servers:**
+**Analyzer Servers** — base delay 60 seconds:
 
 | Attempt | Delay |
 |---------|-------|

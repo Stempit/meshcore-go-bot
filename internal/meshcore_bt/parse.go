@@ -717,9 +717,10 @@ func (c *MeshCoreClient) noteRepeatCandidate(raw []byte) {
 	}
 }
 
-// publishTXChannelPacket builds a synthetic outgoing GRP_TXT RF packet and
-// queues it for MQTT publishing as a TX packet. This makes our outgoing channel
-// messages visible on analyzer servers exactly like packets from any other device.
+// publishTXChannelPacket builds a synthetic outgoing GRP_TXT RF packet and queues
+// it to MQTT as an emulated RX packet (zero hop, SNR/RSSI = 0) so the operator can
+// see their own outgoing channel messages in the feed. Gated by the bridge's
+// TxEnabled setting.
 func (c *MeshCoreClient) publishTXChannelPacket(channel *Channel, text string, timestamp uint32) {
 	c.mu.RLock()
 	publisher := c.publisher
@@ -727,6 +728,9 @@ func (c *MeshCoreClient) publishTXChannelPacket(channel *Channel, text string, t
 	c.mu.RUnlock()
 
 	if publisher == nil || selfInfo == nil {
+		return
+	}
+	if !publisher.TxEnabled() {
 		return
 	}
 	if len(channel.PSK) == 0 {
@@ -839,7 +843,9 @@ func buildTXTMsgPacket(privKeyBytes, ourPubKey, recipientPubKey []byte, text str
 }
 
 // publishTXDirectMessage builds a synthetic TXT_MSG RF packet for an outgoing DM
-// and queues it to MQTT as an emulated RX packet (zero hop, SNR/RSSI = 0).
+// and queues it to MQTT as an emulated RX packet (zero hop, SNR/RSSI = 0) so the
+// operator can see their own outgoing DMs in the feed. Gated by the bridge's
+// TxEnabled setting.
 func (c *MeshCoreClient) publishTXDirectMessage(contact *Contact, text string, timestamp uint32) {
 	c.mu.RLock()
 	publisher := c.publisher
@@ -847,6 +853,9 @@ func (c *MeshCoreClient) publishTXDirectMessage(contact *Contact, text string, t
 	c.mu.RUnlock()
 
 	if publisher == nil || selfInfo == nil {
+		return
+	}
+	if !publisher.TxEnabled() {
 		return
 	}
 	if len(contact.PublicKey) < 32 {
