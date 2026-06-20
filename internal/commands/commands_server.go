@@ -106,6 +106,13 @@ func GenerateReplies(text, channelName string, pingMeta *PingMeta, senderKey, se
 		replies, err := games.ProcessHangCommand(text, senderKey, senderName, channelName)
 		return replies, "hang", err
 
+	case lower == ".words", strings.HasPrefix(lower, ".words "):
+		if !config.Get().Words.Enabled {
+			return nil, "", nil
+		}
+		replies, err := games.ProcessWordsCommand(text, senderKey, senderName, channelName)
+		return replies, "words", err
+
 	case lower == ".top":
 		replies, err := ProcessTopCommand(channelName)
 		return replies, "top", err

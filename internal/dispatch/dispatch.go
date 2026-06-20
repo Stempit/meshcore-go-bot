@@ -8,11 +8,13 @@ package dispatch
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"meshbot/internal/config"
 	"meshbot/internal/logging"
 	meshcore "meshbot/internal/meshcore_bt"
+	"meshbot/internal/shrink"
 	"meshbot/internal/tgbridge"
 )
 
@@ -168,5 +170,36 @@ func (d *Dispatcher) SendChannelMessage(ch *meshcore.Channel, text string, ack b
 func (d *Dispatcher) SendDirectMessage(contact *meshcore.Contact, text string, ack bool) {
 	if !d.TryEnqueue(Outgoing{Contact: contact, Text: text, Ack: ack}) {
 		log().Warn("Outgoing queue full, dropping direct message", "node", contact.Name)
+	}
+}
+
+// AnnounceToScope resolves a games scope string to a channel or contact and
+// queues each message, mesh-fitting via the "words" variant. It is the games
+// Announcer: the timer-driven results path that has no incoming Outgoing target.
+// Delivery is best-effort — a full outgoing queue drops the message (logged)
+// rather than blocking the timer goroutine.
+//
+// DM scopes carry the sender's raw public-key bytes ("dm:" + string(pubkey), as
+// set by gameScope in processDM); channel scopes are the channel name.
+func (d *Dispatcher) AnnounceToScope(scope string, msgs []string) {
+	if rest, ok := strings.CutPrefix(scope, "dm:"); ok {
+		key := []byte(rest)
+		c := d.client.FindContactByKeyPrefix(key[:min(6, len(key))])
+		if c == nil {
+			log().Warn("Announce: contact not found for scope")
+			return
+		}
+		for _, m := range shrink.Fit("words", "", msgs) {
+			d.SendDirectMessage(c, m, true)
+		}
+		return
+	}
+	ch := d.client.GetChannelByName(scope)
+	if ch == nil {
+		log().Warn("Announce: channel not found", "scope", scope)
+		return
+	}
+	for _, m := range shrink.Fit("words", "", msgs) {
+		d.SendChannelMessage(ch, m, false)
 	}
 }

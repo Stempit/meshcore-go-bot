@@ -138,3 +138,16 @@ Top:
   # scan_count is how many of the most recent (non-bot) channel messages are
   # scanned before tallying authors; 0 or unset = default 100.
   scan_count: 100
+
+words:
+  # ".words" — timed anagram game ("Слова из слова"). Opt-in: stays off until
+  # enabled. The dictionary is a runtime file in CWD (not compiled in); a
+  # missing file disables the game ("Словарь недоступен"), the bot runs anyway.
+  enabled: false
+  dict_path: "words_anagram_ru.txt"  # runtime word list; 0/unset = this default
+  round_sec: 300     # countdown length per round; 0 or unset = default 300 (5 min)
+  min_sub_len: 3     # shortest valid submission in letters; 0/unset = default 3
+  base_min_len: 8    # shortest base word in letters; 0/unset = default 8
+  base_max_len: 10   # longest base word in letters; 0/unset = default 10
+  # To wrap (rather than truncate) an overlong results line, add:
+  #   Shrink.overrides.words: split

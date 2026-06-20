@@ -92,6 +92,18 @@ type TopConfig struct {
 	ScanCount int `yaml:"scan_count"` // recent messages to scan, default 100
 }
 
+// WordsConfig controls the ".words" anagram game. It is opt-in via Enabled
+// (same convention as Claw). The int fields have no central defaulter, so each
+// is defaulted at its use site when zero (see internal/games/words.go).
+type WordsConfig struct {
+	Enabled    bool   `yaml:"enabled"`      // opt-in: .words stays off unless true
+	DictPath   string `yaml:"dict_path"`    // dictionary file, default "words_anagram_ru.txt"
+	RoundSec   int    `yaml:"round_sec"`    // countdown length, default 300 (5 min)
+	MinSubLen  int    `yaml:"min_sub_len"`  // shortest valid submission, default 3
+	BaseMinLen int    `yaml:"base_min_len"` // shortest base word, default 8
+	BaseMaxLen int    `yaml:"base_max_len"` // longest base word, default 10
+}
+
 type Config struct {
 	Connection ConnectionConfig        `yaml:"Connection"`
 	Proxy      ProxyConfig             `yaml:"Proxy"`
@@ -103,6 +115,7 @@ type Config struct {
 	Stats      StatsConfig             `yaml:"Stats"`
 	Migration  MigrationConfig         `yaml:"Migration"`
 	Top        TopConfig               `yaml:"Top"`
+	Words      WordsConfig             `yaml:"words"`
 	Shrink     ShrinkConfig            `yaml:"Shrink"`
 	LLM        struct {
 		Enabled           bool    `yaml:"enabled"`

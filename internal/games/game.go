@@ -24,15 +24,32 @@ const (
 )
 
 var (
-	numLogBase  = filepath.Join(gamesBaseDir, "num")
-	hangLogBase = filepath.Join(gamesBaseDir, "hang")
+	numLogBase   = filepath.Join(gamesBaseDir, "num")
+	hangLogBase  = filepath.Join(gamesBaseDir, "hang")
+	wordsLogBase = filepath.Join(gamesBaseDir, "words")
 
 	// Win records are written through historylog (no dedicated package): each
 	// game type gets its own base dir, and the scope string is used as the
 	// "channel" name so both channel and DM games share one reader/writer.
-	numLog  = historylog.New(numLogBase)
-	hangLog = historylog.New(hangLogBase)
+	numLog   = historylog.New(numLogBase)
+	hangLog  = historylog.New(hangLogBase)
+	wordsLog = historylog.New(wordsLogBase)
 )
+
+// Announcer pushes unsolicited game messages (e.g. round results from a timer)
+// to a scope. It decouples the games package from the send layer: games never
+// import dispatch/meshcore, and the real implementation is injected at startup.
+type Announcer func(scope string, msgs []string)
+
+var announce Announcer = func(string, []string) {} // no-op until wired
+
+// SetAnnouncer installs the announcer. Called once at startup from the
+// composition root; a nil argument is ignored so the no-op stays in place.
+func SetAnnouncer(a Announcer) {
+	if a != nil {
+		announce = a
+	}
+}
 
 // gameScope keys a game by its conversation: the channel name for channel games
 // (shared by everyone in the channel) or the sender's key for DMs (private).
