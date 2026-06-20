@@ -90,6 +90,7 @@ log/
 | `.dice [NdM]` | `games.ProcessDiceCommand` | Roll dice (`NdM`/`M`, default `1d6`). Sub-verbs `start`/`roll`/`end`/`status` run a per-channel roll-off (highest total wins; one roll per player; stays open until anyone runs `.dice end`); session verbs channel-only |
 | `.num [start/<n>/status/end/top]` | `games.ProcessNumCommand` | Guess-the-number (bot picks 1..max, default 100; `больше`/`меньше` hints). Works in channels (shared) and DMs (private); `.num top` is a 30-day win leaderboard. See [docs/games/NUM.md](docs/games/NUM.md) |
 | `.hang [start/<буква>/<слово>/status/end/top]` | `games.ProcessHangCommand` | Hangman in Russian from an embedded word bank (`words_ru.txt`, ё→е, 6 lives). Channels are collaborative, DMs solo; `.hang top` is a 30-day leaderboard. See [docs/games/HANG.md](docs/games/HANG.md) |
+| `.words [start/<слово>/status/end/top]` | `games.ProcessWordsCommand` | Anagram ("Слова из слова"): timed round, build words from one long base word's letters; `score = len²`. Opt-in (`words.enabled`), runtime dict `words_anagram_ru.txt`. First game with a self-firing timer that pushes results via the injected `games.Announcer`. Channels collaborative-competitive, DMs solo; `.words top` is a 30-day leaderboard. See [docs/games/WORDS.md](docs/games/WORDS.md) |
 
 New commands go in `internal/commands/` (or `internal/games/` for games) and must be wired into the `switch` in `commands_server.go`.
 

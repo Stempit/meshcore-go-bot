@@ -12,6 +12,7 @@ import (
 	"meshbot/internal/commands"
 	"meshbot/internal/config"
 	"meshbot/internal/dispatch"
+	"meshbot/internal/games"
 	"meshbot/internal/greeter"
 	"meshbot/internal/historylog"
 	"meshbot/internal/logging"
@@ -39,6 +40,10 @@ func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
 	shrink.ValidateConfig()
+
+	// Load the .words anagram dictionary (best-effort; a missing file just
+	// disables the game with "Словарь недоступен", the rest of the bot runs).
+	_ = games.LoadWordsDict(config.Get().Words.DictPath)
 
 	proxyCfg := config.Get().Proxy
 	if err := proxy.Init(proxyCfg.Enabled, proxyCfg.URL); err != nil {
@@ -92,6 +97,10 @@ func main() {
 	// The dispatcher owns the inbound worker pool and the serialized outbound
 	// sender. Subsystems (greeter, Telegram) are wired in before it starts.
 	d := dispatch.New(client)
+
+	// The .words game pushes round results from a timer goroutine; give the games
+	// package a way to resolve a scope back to a channel/contact and enqueue.
+	games.SetAnnouncer(d.AnnounceToScope)
 
 	// ─── Greet new nodes + hash migration nudge ───────────────────────────────
 
