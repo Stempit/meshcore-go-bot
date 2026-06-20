@@ -1,10 +1,11 @@
-// Package words answers .words (the "Слова из слова" anagram game) via the
-// games support package. It owns the game's config section and is opt-in.
+// Package words answers .words — the "Слова из слова" anagram game: a timed
+// round where players build words from one long base word's letters
+// (score = len²). Opt-in via config; channels collaborative-competitive, DMs
+// solo; 30-day leaderboard. The round timer pushes results via games.Announce.
 package words
 
 import (
 	"meshbot/internal/commands/registry"
-	"meshbot/internal/games"
 )
 
 func init() { registry.Register(plugin{}) }
@@ -22,5 +23,5 @@ func (plugin) Meta() registry.Meta {
 }
 
 func (plugin) Handle(c registry.Ctx) ([]string, error) {
-	return games.ProcessWordsCommand(c.Text, c.SenderKey, c.SenderName, c.Channel)
+	return processWords(c.Text, c.SenderKey, c.SenderName, c.Channel)
 }

@@ -1,12 +1,10 @@
 package words
 
-import (
-	"meshbot/internal/config"
-	"meshbot/internal/games"
-)
+import "meshbot/internal/config"
 
 // cfg is the .words config section (yaml key "words"). It is opt-in via Enabled
-// (same convention as Claw).
+// (same convention as Claw). The int fields are defaulted at their use sites
+// when zero (see the wordsRoundDur/wordsMinSub/... accessors in anagram.go).
 type cfg struct {
 	Enabled    bool   `yaml:"enabled"`      // opt-in: .words stays off unless true
 	DictPath   string `yaml:"dict_path"`    // dictionary file, default "words_anagram_ru.txt"
@@ -20,20 +18,14 @@ var conf cfg
 
 func (plugin) ConfigKey() string { return "words" }
 
-// Configure decodes the section, installs the tunables into the games support
-// package, and loads the runtime dictionary (best-effort: a missing file just
-// disables the game with "Словарь недоступен", the rest of the bot runs).
+// Configure decodes the section and loads the runtime dictionary (best-effort:
+// a missing file just disables the game with "Словарь недоступен", the rest of
+// the bot runs). It runs once at startup, before any round.
 func (plugin) Configure(s config.Sectioner) error {
 	if err := s.Section("words", &conf); err != nil {
 		return err
 	}
-	games.SetWordsSettings(games.WordsSettings{
-		RoundSec:   conf.RoundSec,
-		MinSubLen:  conf.MinSubLen,
-		BaseMinLen: conf.BaseMinLen,
-		BaseMaxLen: conf.BaseMaxLen,
-	})
-	_ = games.LoadWordsDict(conf.DictPath)
+	_ = loadWordsDict(conf.DictPath)
 	return nil
 }
 

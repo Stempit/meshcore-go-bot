@@ -6,14 +6,12 @@ import (
 	"time"
 
 	"meshbot/internal/commands/registry"
+	"meshbot/internal/helpers"
 	"meshbot/internal/historylog"
 )
 
-const (
-	historyBaseDir = "log/history"
-	// statWindow is the trailing period summarised by ".stat".
-	statWindow = 24 * time.Hour
-)
+// statWindow is the trailing period summarised by ".stat".
+const statWindow = 24 * time.Hour
 
 func init() { registry.Register(plugin{}) }
 
@@ -38,7 +36,7 @@ func (plugin) Handle(c registry.Ctx) ([]string, error) {
 		return []string{"Статистика доступна только в каналах"}, nil
 	}
 
-	entries, err := historylog.ReadAllChannel(historyBaseDir, c.Channel)
+	entries, err := historylog.ReadAllChannel(helpers.HistoryDir, c.Channel)
 	if err != nil {
 		return nil, fmt.Errorf(".stat: %w", err)
 	}

@@ -10,11 +10,11 @@ import (
 
 	"meshbot/internal/commands/registry"
 	"meshbot/internal/config"
+	"meshbot/internal/helpers"
 	"meshbot/internal/historylog"
 )
 
 const (
-	historyBaseDir      = "log/history"
 	defaultTopScanCount = 100 // recent messages scanned when scan_count is unset
 	topAuthorsShown     = 3   // how many ranked authors to return
 	topNameMaxRunes     = 12  // author names are clipped to fit the 140-byte mesh limit
@@ -64,7 +64,7 @@ func (plugin) Handle(c registry.Ctx) ([]string, error) {
 	}
 	currentChannel := c.Channel
 
-	entries, err := historylog.ReadAllChannel(historyBaseDir, currentChannel)
+	entries, err := historylog.ReadAllChannel(helpers.HistoryDir, currentChannel)
 	if err != nil {
 		return nil, fmt.Errorf(".top: %w", err)
 	}
@@ -124,7 +124,7 @@ func (plugin) Handle(c registry.Ctx) ([]string, error) {
 		// Lead with a fixed-width bar so bars and counts form columns; the
 		// variable-length name trails where its length no longer matters.
 		bar := strings.Repeat(topBarChar, blocks) + strings.Repeat(" ", topBarMax-blocks)
-		fmt.Fprintf(&b, "\n%s %s %*d %s", place, bar, countWidth, cnt, clipName(name))
+		fmt.Fprintf(&b, "\n%s %s %*d %s", place, bar, countWidth, cnt, helpers.ClipRunes(name, topNameMaxRunes))
 	}
 	return []string{b.String()}, nil
 }
@@ -140,14 +140,4 @@ func barLen(count, leader int) int {
 		n = 1
 	}
 	return n
-}
-
-// clipName shortens an author name to topNameMaxRunes runes (adding an ellipsis)
-// so a five-line top still fits the 140-byte mesh message limit.
-func clipName(name string) string {
-	r := []rune(name)
-	if len(r) <= topNameMaxRunes {
-		return name
-	}
-	return string(r[:topNameMaxRunes]) + "…"
 }

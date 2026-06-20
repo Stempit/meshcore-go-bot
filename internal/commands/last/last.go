@@ -7,13 +7,13 @@ import (
 	"strings"
 
 	"meshbot/internal/commands/registry"
+	"meshbot/internal/helpers"
 	"meshbot/internal/historylog"
 )
 
 const (
 	defaultLastCount = 3
 	maxLastCount     = 7
-	historyBaseDir   = "log/history"
 )
 
 func init() { registry.Register(plugin{}) }
@@ -36,7 +36,7 @@ func (plugin) Handle(c registry.Ctx) ([]string, error) {
 		return []string{err.Error()}, nil
 	}
 
-	entries, err := historylog.ReadLastChannel(historyBaseDir, srcChannel, count)
+	entries, err := historylog.ReadLastChannel(helpers.HistoryDir, srcChannel, count)
 	if err != nil {
 		return nil, fmt.Errorf(".last: %w", err)
 	}

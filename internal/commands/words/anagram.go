@@ -1,4 +1,4 @@
-package games
+package words
 
 import (
 	"bufio"
@@ -11,13 +11,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"meshbot/internal/games"
+	"meshbot/internal/helpers"
 )
 
-// .words — "Слова из слова": a timed anagram game. The bot picks one long
-// Russian noun (the base word) and players race to build shorter words from its
-// letters before a countdown expires. It is the first game with a self-firing
-// timer: on timeout the round results are pushed via the injected announcer
-// (see SetAnnouncer in game.go), since there is no incoming message to reply to.
 // russian words from http://blog.kislenko.net/show.php?id=1678
 
 const (
@@ -46,14 +44,17 @@ var (
 	wordsMu    sync.Mutex
 	wordsToken uint64 // monotonic round-id source, guarded by wordsMu
 
-	// Indexes loaded once at startup by LoadWordsDict, before any game runs, so
+	wordsLogBase = games.LogBase("words")
+	wordsLog     = games.NewLog("words")
+
+	// Indexes loaded once at startup by loadWordsDict, before any game runs, so
 	// concurrent reads from worker goroutines need no lock (load-once pattern,
 	// like the embedded hang word bank).
 	wordsValid map[string]struct{} // validation set (submission membership)
 	wordsPool  []string            // base-word pool (BaseMin..BaseMax runes)
 )
 
-// ProcessWordsCommand handles ".words" and its sub-verbs.
+// processWords handles ".words" and its sub-verbs.
 //
 //	.words / .words start – pick a base word and open a round
 //	.words <слово>        – submit a word built from the base letters
@@ -62,7 +63,7 @@ var (
 //	.words top            – leaderboard for this scope (last 30 days)
 //
 // Works in both channels (shared base word, per-player scores) and DMs (solo).
-func ProcessWordsCommand(text, senderKey, senderName, channelName string) ([]string, error) {
+func processWords(text, senderKey, senderName, channelName string) ([]string, error) {
 	rest := strings.TrimSpace(strings.TrimPrefix(text, ".words"))
 	fields := strings.Fields(rest)
 
@@ -70,19 +71,19 @@ func ProcessWordsCommand(text, senderKey, senderName, channelName string) ([]str
 	if len(fields) > 0 {
 		verb = strings.ToLower(fields[0])
 	}
-	scope := gameScope(senderKey, channelName)
+	scope := games.Scope(senderKey, channelName)
 
 	switch verb {
 	case "", "start":
 		return wordsStart(scope)
 	case "status":
-		return wordsStatus(scope, gameWho(senderName))
+		return wordsStatus(scope, games.Who(senderName))
 	case "end":
 		return wordsEnd(scope)
 	case "top":
-		return gameTop(wordsLogBase, scope), nil
+		return games.Top(wordsLogBase, scope), nil
 	default:
-		return wordsSubmit(scope, gameWho(senderName), fields[0])
+		return wordsSubmit(scope, games.Who(senderName), fields[0])
 	}
 }
 
@@ -126,7 +127,7 @@ func wordsStart(scope string) ([]string, error) {
 // wordsSubmit validates a submission and, on success, scores it. The validation
 // order is cheapest-first; the first failure decides the reply.
 func wordsSubmit(scope, who, arg string) ([]string, error) {
-	norm := normalizeRu(arg)
+	norm := games.NormalizeRu(arg)
 	if norm == "" {
 		return []string{"❌ только русские буквы"}, nil
 	}
@@ -225,7 +226,7 @@ func wordsOnTimeout(scope string, token uint64) {
 	wordsMu.Unlock()
 
 	// Resolve-and-enqueue may be slow; never hold wordsMu across it.
-	announce(scope, results)
+	games.Announce(scope, results)
 }
 
 // wordsFinalizeLocked ranks players, records the winner(s), deletes the round,
@@ -256,20 +257,20 @@ func wordsFinalizeLocked(scope string, g *wordsGame) []string {
 		return ranked[i].name < ranked[j].name
 	})
 
-	// Build the ranked line to a byte budget (like gameTop): append players
+	// Build the ranked line to a byte budget (like games.Top): append players
 	// while they fit, then stop — never split, which would silently truncate.
 	line := "🏆 "
 	shown := 0
 	for _, p := range ranked {
-		if shown >= gameTopMax {
+		if shown >= games.TopMax {
 			break
 		}
-		part := fmt.Sprintf("%s %d", clipGameName(p.name), p.score)
+		part := fmt.Sprintf("%s %d", helpers.ClipRunes(p.name, games.NameMaxRune), p.score)
 		sep := ""
 		if shown > 0 {
 			sep = " · "
 		}
-		if len(line)+len(sep)+len(part) > gameTopBytes {
+		if len(line)+len(sep)+len(part) > games.TopBytes {
 			break
 		}
 		line += sep + part
@@ -282,7 +283,7 @@ func wordsFinalizeLocked(scope string, g *wordsGame) []string {
 		if p.score != top {
 			break
 		}
-		logWin(wordsLog, scope, p.name, strconv.Itoa(p.score))
+		games.LogWin(wordsLog, scope, p.name, strconv.Itoa(p.score))
 	}
 	slog.Info("words round ended", "scope", scope, "winner", ranked[0].name, "score", top)
 
@@ -320,13 +321,13 @@ func runeCounts(rs []rune) map[rune]int {
 	return m
 }
 
-// LoadWordsDict loads the runtime dictionary into the validation set and the
-// base-word pool. It is defensive: every line is run through normalizeRu and the
-// ≥3-rune / pure-Cyrillic filter, so pointing it at a raw singular.txt also
-// works. On a missing/empty file it logs a warning, leaves the indexes empty
-// (so .words start replies "Словарь недоступен"), and returns the error — the
-// rest of the bot keeps running. Call once at startup, before the dispatcher.
-func LoadWordsDict(path string) error {
+// loadWordsDict loads the runtime dictionary into the validation set and the
+// base-word pool. It is defensive: every line is run through games.NormalizeRu
+// and the ≥3-rune / pure-Cyrillic filter, so pointing it at a raw singular.txt
+// also works. On a missing/empty file it logs a warning, leaves the indexes
+// empty (so .words start replies "Словарь недоступен"), and returns the error —
+// the rest of the bot keeps running. Called once at startup, from Configure.
+func loadWordsDict(path string) error {
 	if path == "" {
 		path = wordsDefDictPath
 	}
@@ -344,7 +345,7 @@ func LoadWordsDict(path string) error {
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 64*1024), 1024*1024)
 	for sc.Scan() {
-		w := normalizeRu(sc.Text())
+		w := games.NormalizeRu(sc.Text())
 		n := len([]rune(w))
 		if n < wordsDefMinSub {
 			continue
@@ -365,48 +366,32 @@ func LoadWordsDict(path string) error {
 	return nil
 }
 
-// WordsSettings holds the .words tunables. The words plugin owns the config
-// section and installs the decoded values via SetWordsSettings at startup, so
-// this package stays free of the config singleton. Zero fields fall back to the
-// use-site defaults below.
-type WordsSettings struct {
-	RoundSec   int
-	MinSubLen  int
-	BaseMinLen int
-	BaseMaxLen int
-}
-
-var wordsSettings WordsSettings
-
-// SetWordsSettings installs the .words tunables. Called once at startup from the
-// words plugin's Configure, before any round runs.
-func SetWordsSettings(s WordsSettings) { wordsSettings = s }
-
-// Config accessors with use-site defaults (no central config defaulter).
+// Config accessors with use-site defaults (no central config defaulter); they
+// read the plugin's own decoded config section.
 
 func wordsRoundDur() time.Duration {
-	if s := wordsSettings.RoundSec; s > 0 {
+	if s := conf.RoundSec; s > 0 {
 		return time.Duration(s) * time.Second
 	}
 	return wordsDefRoundSec * time.Second
 }
 
 func wordsMinSub() int {
-	if n := wordsSettings.MinSubLen; n > 0 {
+	if n := conf.MinSubLen; n > 0 {
 		return n
 	}
 	return wordsDefMinSub
 }
 
 func wordsBaseMin() int {
-	if n := wordsSettings.BaseMinLen; n > 0 {
+	if n := conf.BaseMinLen; n > 0 {
 		return n
 	}
 	return wordsDefBaseMin
 }
 
 func wordsBaseMax() int {
-	if n := wordsSettings.BaseMaxLen; n > 0 {
+	if n := conf.BaseMaxLen; n > 0 {
 		return n
 	}
 	return wordsDefBaseMax

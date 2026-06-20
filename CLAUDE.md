@@ -23,9 +23,18 @@ There are no automated tests. Manual testing uses `cmd/example` and `cmd/llm`.
 cmd/bot/bot.go          – main entry point; wires everything together
 internal/
   meshcore_bt/          – BLE protocol driver (client.go is the main type)
-  commands/             – command handlers: ping, trace, last, news, llm, greet
-  games/                – text games: dice, num (guess-the-number), hang (hangman)
-  config/               – YAML config loader (singleton via sync.Once)
+  dispatch/             – inbound worker pool + serialized outbound sender;
+                          processDM/processChannelMessage call registry.Dispatch
+  commands/             – self-registering command plugins (one folder each)
+    registry/           – the framework: Ctx, PingMeta, Meta, Command, Register, Dispatch, Help
+    allcommands/        – aggregator: blank-imports every plugin so they self-register
+    ping/ trace/ last/ news/ llm/ weather/ path/ top/ stat/ eightball/
+    ticket/ help/ claw/ bbs/ dice/ num/ hang/ words/  – one command per folder
+    advert.go, greet.go – non-command code kept in package commands (advert parse, greeter)
+  games/                – shared support layer for the game plugins (scope keying,
+                          historylog leaderboard, round-result Announcer, NormalizeRu)
+  helpers/              – small cross-command utilities (ClipRunes, HistoryDir)
+  config/               – YAML config loader (singleton via sync.Once) + per-plugin Sectioner
   historylog/           – per-conversation append-only log files
   llm/                  – Ollama and OpenRouter LLM providers
   mqttbridge/           – MQTT publishing to custom broker + Let's Mesh analyzer
@@ -34,7 +43,7 @@ internal/
 
 The MeshCore BLE client (`internal/meshcore_bt/client.go`) is the core dependency. Everything else depends on it.
 
-Message flow: BLE device → `client.IncomingMessages()` channel → `processDM` / `processChannelMessage` in `bot.go` → `commands.GenerateReplies` → reply sent back over BLE.
+Message flow: BLE device → `client.IncomingMessages()` channel → `processDM` / `processChannelMessage` in `internal/dispatch` → `registry.Dispatch` → first matching plugin's `Handle` → reply sent back over BLE.
 
 ## Configuration
 
@@ -72,26 +81,33 @@ log/
 
 - **`internal/meshcore_bt/client.go`** (~2300 lines) – BLE protocol state machine. The `sentConfirmCh` channel is a single shared slot; only one send can be in flight at a time, so concurrent senders must serialise their sends.
 - **`internal/mqttbridge/bridge.go`** (~1700 lines) – manages multiple MQTT connections (custom broker + EU/US analyzers) with JWT auth (Ed25519). Changes here affect network-visible state.
-- **`internal/config/model.go`** – adding a new config field requires a YAML tag; check for typos before committing.
+- **`internal/config/model.go`** – holds only **infra** config (Connection, Proxy, MQTT, Telegram, Security, Shrink, LLM, Trace, Migration). Adding a field requires a YAML tag; check for typos. **Per-command** config lives in the plugin folder instead: the plugin implements `registry.Configurable` and decodes its own section via `config.Sectioner` (two-pass YAML over the same single `config.yaml`).
 
 ## What the commands do
 
-| Command | Handler | Notes |
-|---------|---------|-------|
-| `ping` / `пинг` / `.ping` | `commands.ProcessPingMessage` | Random pong string |
-| `.trace` | `commands.ProcessTraceMessage` | Haversine distance + hop IDs from `PingMeta` |
-| `.last [n] [channel]` | `commands.ProcessLastCommand` | Last *n* lines from `historylog` (max 7) |
-| `.llm <prompt>` | `commands.ProcessLLMMessage` | LLM query; auto-shrinks response to ≤130 chars |
-| `.news [feed] [n] [offset]` | `commands.ProcessNewsCommand` | Lists feeds or returns recent RSS items from `log/news/`, populated by the [newswire](https://github.com/Stempit/newswire) poller |
-| `.claw <prompt>` | `commands.ProcessClawCommand` | Sends prompt to picoclaw AI agent via WebSocket; auto-shrinks response |
-| `.8ball <question>` | `commands.ProcessEightBallCommand` | Magic 8-Ball; random Russian yes/no/maybe answer |
-| `.top` | `commands.ProcessTopCommand` | Top-5 channel authors by message count (scans last `Top.scan_count`, default 100); channels only, "not available" in DMs |
-| `.stat` | `commands.ProcessStatCommand` | Channel traffic in last 24h: message count, peak hour, unique users; channels only, "not available" in DMs |
-| `.dice [NdM]` | `games.ProcessDiceCommand` | Roll dice (`NdM`/`M`, default `1d6`). Sub-verbs `start`/`roll`/`end`/`status` run a per-channel roll-off (highest total wins; one roll per player; stays open until anyone runs `.dice end`); session verbs channel-only |
-| `.num [start/<n>/status/end/top]` | `games.ProcessNumCommand` | Guess-the-number (bot picks 1..max, default 100; `больше`/`меньше` hints). Works in channels (shared) and DMs (private); `.num top` is a 30-day win leaderboard. See [docs/games/NUM.md](docs/games/NUM.md) |
-| `.hang [start/<буква>/<слово>/status/end/top]` | `games.ProcessHangCommand` | Hangman in Russian from an embedded word bank (`words_ru.txt`, ё→е, 6 lives). Channels are collaborative, DMs solo; `.hang top` is a 30-day leaderboard. See [docs/games/HANG.md](docs/games/HANG.md) |
-| `.words [start/<слово>/status/end/top]` | `games.ProcessWordsCommand` | Anagram ("Слова из слова"): timed round, build words from one long base word's letters; `score = len²`. Opt-in (`words.enabled`), runtime dict `words_anagram_ru.txt`. First game with a self-firing timer that pushes results via the injected `games.Announcer`. Channels collaborative-competitive, DMs solo; `.words top` is a 30-day leaderboard. See [docs/games/WORDS.md](docs/games/WORDS.md) |
+Each command is a self-registering plugin in its own folder; the table's **Plugin** column is the package path. `Meta().Name` (shown after the `→`) is the shrink-variant key, which is decoupled from the trigger.
 
-New commands go in `internal/commands/` (or `internal/games/` for games) and must be wired into the `switch` in `commands_server.go`.
+| Command | Plugin | Notes |
+|---------|--------|-------|
+| `ping` / `пинг` / `.ping` | `commands/ping` → `ping` | Random pong string |
+| `.trace` | `commands/trace` → `trace` | Haversine distance + hop IDs from `registry.PingMeta` |
+| `.last [n] [channel]` | `commands/last` → `last` | Last *n* lines from `historylog` (max 7) |
+| `.llm <prompt>` | `commands/llm` → `llm` | LLM query; auto-shrinks response to ≤130 chars |
+| `.news [feed] [n] [offset]` | `commands/news` → `news` | Lists feeds or returns recent RSS items from `log/news/`, populated by the [newswire](https://github.com/Stempit/newswire) poller |
+| `.claw <prompt>` / `@[BotName]` mention | `commands/claw` → `claw` | `Matcher` interceptor (Priority 20, above bbs): mention beats BBS. Sends prompt to picoclaw AI agent via WebSocket; auto-shrinks response |
+| `.2ch` (+ all input while in BBS mode) | `commands/bbs` → `bbs` | Stateful `Matcher` interceptor (Priority 10): forum/BBS mode until `.exit` |
+| `.ticket [random]` | `commands/ticket` → `ticket` | Stable random "callsign" per sender (persisted); not in `.help` index |
+| `.help [cmd]` | `commands/help` → `help` | Index + per-command help, generated from registered `Meta` |
+| `.8ball <question>` | `commands/eightball` → `8ball` | Magic 8-Ball; random Russian yes/no/maybe answer |
+| `.w [tomorrow] [city]` | `commands/weather` → `weather` | Current or next-day weather from wttr.in (`Weather` config section) |
+| `.path [<from> to <to>]` | `commands/path` → `path` | Network summary or best route between repeaters (`Stats` config section) |
+| `.top` | `commands/top` → `top` | Top-5 channel authors by message count (scans last `Top.scan_count`, default 100); channels only, "not available" in DMs |
+| `.stat` | `commands/stat` → `stat` | Channel traffic in last 24h: message count, peak hour, unique users; channels only, "not available" in DMs |
+| `.dice [NdM]` | `commands/dice` → `dice` | Roll dice (`NdM`/`M`, default `1d6`). Sub-verbs `start`/`roll`/`end`/`status` run a per-channel roll-off (highest total wins; one roll per player; stays open until anyone runs `.dice end`); session verbs channel-only |
+| `.num [start/<n>/status/end/top]` | `commands/num` → `num` | Guess-the-number (bot picks 1..max, default 100; `больше`/`меньше` hints). Works in channels (shared) and DMs (private); `.num top` is a 30-day win leaderboard. See [docs/games/NUM.md](docs/games/NUM.md) |
+| `.hang [start/<буква>/<слово>/status/end/top]` | `commands/hang` → `hang` | Hangman in Russian from an embedded word bank (`words_ru.txt`, ё→е, 6 lives). Channels are collaborative, DMs solo; `.hang top` is a 30-day leaderboard. See [docs/games/HANG.md](docs/games/HANG.md) |
+| `.words [start/<слово>/status/end/top]` | `commands/words` → `words` | Anagram ("Слова из слова"): timed round, build words from one long base word's letters; `score = len²`. Opt-in (`words.enabled`), runtime dict `words_anagram_ru.txt`. Self-firing timer pushes results via the injected `games.Announcer`. Channels collaborative-competitive, DMs solo; `.words top` is a 30-day leaderboard. See [docs/games/WORDS.md](docs/games/WORDS.md) |
 
-The `games` package keeps game logic separate from the command dispatcher; `commands` imports it. Win records and leaderboards (`.num top` / `.hang top`) reuse the `historylog` package under `log/games/<game>/`, keyed by game scope — see [docs/games/](docs/games/).
+New commands are self-registering plugins: create `internal/commands/<name>/` implementing `registry.Command` (+ `Configurable`/`Matcher` if needed) and add one blank import to `internal/commands/allcommands`. There is no central switch or help list to edit — `.help` and routing are generated from each plugin's `Meta`. See [docs/NEW_COMMAND.md](docs/NEW_COMMAND.md) and the design in [docs/PLUGINS.md](docs/PLUGINS.md).
+
+The `internal/games` package is a **shared support layer** (scope keying, the `historylog`-backed leaderboards under `log/games/<game>/`, the round-result `Announcer`, and `NormalizeRu`); each game's own logic lives in its `internal/commands/<game>/` plugin and imports `games` for those helpers. Win records and leaderboards (`.num top` / `.hang top` / `.words top`) are keyed by game scope — see [docs/games/](docs/games/).

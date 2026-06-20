@@ -1,3 +1,8 @@
+// Package games is the shared support layer for the text-game command plugins
+// (.dice, .num, .hang, .words). The game logic lives in each command folder
+// under internal/commands/<game>; this package holds only what those plugins
+// share: scope keying, the win-record leaderboard, the round-result announcer,
+// and Russian text normalization.
 package games
 
 import (
@@ -8,36 +13,32 @@ import (
 	"strings"
 	"time"
 
+	"meshbot/internal/helpers"
 	"meshbot/internal/historylog"
 )
 
-// Shared helpers for the text games (.num, .hang). Each game keeps its own
-// in-memory state but reuses the same scope keying and the historylog package
-// for persistent win records that feed the per-game leaderboards.
+// BaseDir is the root for per-game result logs (leaderboards).
+const BaseDir = "log/games"
 
 const (
-	gamesBaseDir    = "log/games" // root for per-game results logs
-	gameTopMax      = 5           // players listed in a leaderboard (mesh size)
-	gameTopDays     = 30          // leaderboard window
-	gameTopBytes    = 130         // byte budget for a one-line leaderboard reply
-	gameNameMaxRune = 12          // player names are clipped to fit the mesh limit
+	TopMax      = 5   // players listed in a leaderboard (mesh size)
+	TopDays     = 30  // leaderboard window (days)
+	TopBytes    = 130 // byte budget for a one-line leaderboard reply
+	NameMaxRune = 12  // player names are clipped to fit the mesh limit
 )
 
-var (
-	numLogBase   = filepath.Join(gamesBaseDir, "num")
-	hangLogBase  = filepath.Join(gamesBaseDir, "hang")
-	wordsLogBase = filepath.Join(gamesBaseDir, "words")
+// NewLog returns the historylog.Logger a game writes win records through. Win
+// records have no dedicated package: each game gets its own base dir and uses
+// the scope string as the "channel" name so channel and DM games share one
+// reader/writer.
+func NewLog(game string) *historylog.Logger { return historylog.New(LogBase(game)) }
 
-	// Win records are written through historylog (no dedicated package): each
-	// game type gets its own base dir, and the scope string is used as the
-	// "channel" name so both channel and DM games share one reader/writer.
-	numLog   = historylog.New(numLogBase)
-	hangLog  = historylog.New(hangLogBase)
-	wordsLog = historylog.New(wordsLogBase)
-)
+// LogBase returns the base dir for a game's win records (BaseDir/<game>), used
+// when reading the leaderboard via Top.
+func LogBase(game string) string { return filepath.Join(BaseDir, game) }
 
 // Announcer pushes unsolicited game messages (e.g. round results from a timer)
-// to a scope. It decouples the games package from the send layer: games never
+// to a scope. It decouples the games layer from the send layer: games never
 // import dispatch/meshcore, and the real implementation is injected at startup.
 type Announcer func(scope string, msgs []string)
 
@@ -51,42 +52,47 @@ func SetAnnouncer(a Announcer) {
 	}
 }
 
-// gameScope keys a game by its conversation: the channel name for channel games
+// Announce pushes msgs to a scope via the injected announcer. Game plugins call
+// this from timer goroutines, where there is no incoming message to reply to.
+func Announce(scope string, msgs []string) { announce(scope, msgs) }
+
+// Scope keys a game by its conversation: the channel name for channel games
 // (shared by everyone in the channel) or the sender's key for DMs (private).
-func gameScope(senderKey, channelName string) string {
+func Scope(senderKey, channelName string) string {
 	if s := strings.TrimSpace(channelName); s != "" {
 		return s
 	}
 	return "dm:" + senderKey
 }
 
-// gameWho returns a usable player label for win records, falling back when the
+// Who returns a usable player label for win records, falling back when the
 // name is empty (e.g. an unresolved contact).
-func gameWho(senderName string) string {
+func Who(senderName string) string {
 	if n := strings.TrimSpace(senderName); n != "" {
 		return n
 	}
 	return "?"
 }
 
-// logWin appends a win record for the scope. Logging failures are non-fatal:
+// LogWin appends a win record for the scope. Logging failures are non-fatal:
 // the game already finished, so a missing leaderboard entry just gets dropped.
-func logWin(logger *historylog.Logger, scope, winner, detail string) {
+func LogWin(logger *historylog.Logger, scope, winner, detail string) {
 	if err := logger.LogChannelIncoming(scope, winner, detail, time.Now()); err != nil {
 		slog.Warn("game: failed to log win", "scope", scope, "error", err)
 	}
 }
 
-// gameTop renders the leaderboard for one scope: wins per player over the last
-// gameTopDays, ranked descending, capped to fit a single mesh message.
-func gameTop(base, scope string) []string {
+// Top renders the leaderboard for one scope: wins per player over the last
+// TopDays, ranked descending, capped to fit a single mesh message. base is the
+// game's LogBase.
+func Top(base, scope string) []string {
 	entries, err := historylog.ReadAllChannel(base, scope)
 	if err != nil {
 		slog.Warn("game: failed to read leaderboard", "scope", scope, "error", err)
 		return []string{"Пока никто не выигрывал"}
 	}
 
-	cutoff := time.Now().AddDate(0, 0, -gameTopDays)
+	cutoff := time.Now().AddDate(0, 0, -TopDays)
 	counts := make(map[string]int)
 	var order []string // first-seen order for stable ties
 	for _, e := range entries {
@@ -110,15 +116,15 @@ func gameTop(base, scope string) []string {
 	line := "🏆 "
 	shown := 0
 	for _, name := range order {
-		if shown >= gameTopMax {
+		if shown >= TopMax {
 			break
 		}
-		part := fmt.Sprintf("%s %d", clipGameName(name), counts[name])
+		part := fmt.Sprintf("%s %d", helpers.ClipRunes(name, NameMaxRune), counts[name])
 		sep := ""
 		if shown > 0 {
 			sep = ", "
 		}
-		if len(line)+len(sep)+len(part) > gameTopBytes {
+		if len(line)+len(sep)+len(part) > TopBytes {
 			break
 		}
 		line += sep + part
@@ -127,12 +133,19 @@ func gameTop(base, scope string) []string {
 	return []string{line}
 }
 
-// clipGameName shortens a player name to gameNameMaxRune runes (adding an
-// ellipsis) so a five-player leaderboard still fits the 140-byte mesh limit.
-func clipGameName(name string) string {
-	r := []rune(name)
-	if len(r) <= gameNameMaxRune {
-		return name
+// NormalizeRu lowercases s, folds ё→е, and keeps only Russian letters. The word
+// games (.hang, .words) use it for both word-bank entries and player guesses so
+// they compare consistently.
+func NormalizeRu(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	var b strings.Builder
+	for _, r := range s {
+		if r == 'ё' {
+			r = 'е'
+		}
+		if r >= 'а' && r <= 'я' {
+			b.WriteRune(r)
+		}
 	}
-	return string(r[:gameNameMaxRune]) + "…"
+	return b.String()
 }
