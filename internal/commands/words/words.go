@@ -19,6 +19,7 @@ func (plugin) Meta() registry.Meta {
 		Match:     registry.Prefix,
 		HelpShort: "anagram game",
 		HelpLong:  ".words <слово> — слова из слова\n.words start / status / end / top",
+		Group:     "Games",
 	}
 }
 

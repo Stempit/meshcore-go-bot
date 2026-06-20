@@ -26,6 +26,7 @@ func (plugin) Meta() registry.Meta {
 		Match:     registry.Prefix,
 		HelpShort: "hangman",
 		HelpLong:  ".hang <буква> — виселица\n.hang start / <слово> / status / end / top",
+		Group:     "Games",
 	}
 }
 

@@ -25,6 +25,7 @@ func (plugin) Meta() registry.Meta {
 		Match:     registry.Prefix,
 		HelpShort: "roll dice",
 		HelpLong:  ".dice [NdM] — кинуть кости (def 1d6)\n.dice start [NdM] / roll / end — раунд в канале",
+		Group:     "Games",
 	}
 }
 

@@ -24,6 +24,7 @@ func (plugin) Meta() registry.Meta {
 		Match:     registry.Exact,
 		HelpShort: "channel traffic",
 		HelpLong:  ".stat — трафик канала за 24ч: сообщений, пик, участники",
+		Group:     "Info",
 	}
 }
 

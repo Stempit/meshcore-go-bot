@@ -27,6 +27,7 @@ func (plugin) Meta() registry.Meta {
 		Match:     registry.Prefix,
 		HelpShort: "last n msgs",
 		HelpLong:  ".last [n] [channel]\nshow last n msgs (def 3, max 7) in channel",
+		Group:     "Info",
 	}
 }
 

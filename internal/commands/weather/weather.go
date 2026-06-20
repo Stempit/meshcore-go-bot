@@ -25,6 +25,7 @@ func (plugin) Meta() registry.Meta {
 		Match:     registry.Prefix,
 		HelpShort: "weather",
 		HelpLong:  ".w [tomorrow] [city]\ncurrent or next-day weather",
+		Group:     "Info",
 	}
 }
 

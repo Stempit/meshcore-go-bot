@@ -25,6 +25,7 @@ func (plugin) Meta() registry.Meta {
 		Match:     registry.Prefix,
 		HelpShort: "guess the number",
 		HelpLong:  ".num <число> — угадай число (1–100)\n.num start [max] / status / end / top",
+		Group:     "Games",
 	}
 }
 

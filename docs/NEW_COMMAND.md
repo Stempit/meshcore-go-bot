@@ -58,8 +58,9 @@ func (plugin) Meta() registry.Meta {
 		Name:      "mycmd",                       // shrink.Fit variant key
 		Triggers:  []string{".mycmd"},            // Triggers[0] shows in .help
 		Match:     registry.Prefix,               // Exact | Prefix
-		HelpShort: "what it does",                // non-empty → listed in .help
-		HelpLong:  ".mycmd <arg>\nwhat it does",  // shown by ".help mycmd"
+		HelpShort: "what it does",                // non-empty + Group → listed in .help
+		Group:     "Service",                     // .help index category
+		HelpLong:  ".mycmd <arg>\nwhat it does",  // shown by ".mycmd help"
 	}
 }
 
@@ -151,9 +152,10 @@ in `config.example.yaml`.
 
 ## Help
 
-`.help` and `.help <cmd>` are generated from the registered `Meta` by the
+`.help` (grouped index) is generated from the registered `Meta` by the
 [help](../internal/commands/help/help.go) plugin — no list to maintain. Set
-`HelpShort` (to appear in the index) and `HelpLong` (for `.help mycmd`).
+`HelpShort` + `Group` (to appear in the index) and `HelpLong` (shown by
+`.mycmd help`, intercepted centrally in `registry.Dispatch`).
 
 ---
 

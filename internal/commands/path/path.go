@@ -27,6 +27,7 @@ func (plugin) Meta() registry.Meta {
 		Match:     registry.Prefix,
 		HelpShort: "best path",
 		HelpLong:  ".path — network summary\n.path <from> to <to> — best path\nex: .path TIM to CHEP",
+		Group:     "Service",
 	}
 }
 

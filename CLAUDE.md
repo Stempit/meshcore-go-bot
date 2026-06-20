@@ -99,7 +99,7 @@ Each command is a self-registering plugin in its own folder; the table's **Plugi
 | `.claw <prompt>` / `@[BotName]` mention | `commands/claw` → `claw` | `Matcher` interceptor (Priority 20, above bbs): mention beats BBS. Sends prompt to picoclaw AI agent via WebSocket; auto-shrinks response |
 | `.2ch` (+ all input while in BBS mode) | `commands/bbs` → `bbs` | Stateful `Matcher` interceptor (Priority 10): forum/BBS mode until `.exit` |
 | `.ticket [random]` | `commands/ticket` → `ticket` | Stable random "callsign" per sender (persisted); not in `.help` index |
-| `.help [cmd]` | `commands/help` → `help` | Index + per-command help, generated from registered `Meta` |
+| `.help` | `commands/help` → `help` | Grouped command index from registered `Meta` (`Group`/`HelpShort`); per-command help is `.<cmd> help` (`HelpLong`), intercepted in `registry.Dispatch` |
 | `.8ball <question>` | `commands/eightball` → `8ball` | Magic 8-Ball; random Russian yes/no/maybe answer |
 | `.w [tomorrow] [city]` | `commands/weather` → `weather` | Current or next-day weather from wttr.in (`Weather` config section) |
 | `.path [<from> to <to>]` | `commands/path` → `path` | Network summary or best route between repeaters (`Stats` config section) |

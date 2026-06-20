@@ -25,6 +25,7 @@ func (plugin) Meta() registry.Meta {
 		Match:     registry.Prefix,
 		HelpShort: "ask picoclaw",
 		HelpLong:  ".claw <вопрос>\nспросить picoclaw AI агента",
+		Group:     "AI",
 		Priority:  clawPriority,
 	}
 }

@@ -136,8 +136,9 @@ type Meta struct {
     Name      string         // "ping" — also the shrink.Fit variant key
     Triggers  []string       // ".ping", "ping", "пинг"
     Match     MatchMode      // Exact | Prefix (applies to all Triggers)
-    HelpShort string         // listed in .help index
-    HelpLong  string         // shown by ".help <name>"
+    HelpShort string         // listed in .help index (needs Group too)
+    HelpLong  string         // shown by ".<cmd> help"
+    Group     string         // .help index category (e.g. "Games"); empty → not listed
     Priority  int            // higher runs first; interceptors (BBS) use this
 }
 ```
@@ -176,17 +177,19 @@ type Configurable interface {
 func Register(c Command)               // called from each plugin's init()
 func ConfigureAll(s config.Sectioner)  // main calls after config.Load
 func Dispatch(ctx Ctx) (replies []string, name string, err error)
-func HelpIndex() string                // generated from registered Meta
-func HelpFor(name string) string
+func HelpIndex() string                // grouped index, generated from registered Meta
 ```
 
 `Dispatch` logic (replaces the big switch):
 
-1. Sort registered commands by `Priority` desc, then registration order.
-2. For each command: skip if `Configurable` and `!Enabled()`.
-3. Match: if it implements `Matcher`, call `Matches(ctx)`; else compare
+1. Per-command help: if `ctx.Lower == "<trigger> help"` for an enabled command
+   with a non-empty `HelpLong`, return that `HelpLong`. This runs first so it
+   beats the claw/bbs `Matcher` interceptors.
+2. Sort registered commands by `Priority` desc, then registration order.
+3. For each command: skip if `Configurable` and `!Enabled()`.
+4. Match: if it implements `Matcher`, call `Matches(ctx)`; else compare
    `ctx.Lower` against `Triggers` per `Match` mode (see Prefix semantics above).
-4. First match wins → return `c.Handle(ctx)` plus `c.Meta().Name`.
+5. First match wins → return `c.Handle(ctx)` plus `c.Meta().Name`.
 5. No match → `nil, "", nil` (same contract as today).
 
 **Interceptor precedence must be pinned by `Priority`,** because order is meaningful

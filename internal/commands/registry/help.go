@@ -1,43 +1,82 @@
 package registry
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
 
-// HelpIndex renders the one-line command index from the registered Meta. It
-// lists Triggers[0] for every enabled command that sets HelpShort, in
-// registration order, followed by the usage hint.
+// helpGroupOrder is the display order of .help index categories. Groups not
+// listed here are appended afterward, sorted alphabetically.
+var helpGroupOrder = []string{"Games", "Info", "AI", "Service", "Other"}
+
+// HelpIndex renders the grouped command index from the registered Meta. For
+// every enabled command that sets both HelpShort and Group it lists Triggers[0]
+// under its group (one line per group), in registration order within a group,
+// followed by the usage hint.
 func HelpIndex() string {
-	var triggers []string
+	byGroup := map[string][]string{}
+	var seen []string
 	for _, c := range registered {
 		m := c.Meta()
-		if m.HelpShort == "" || len(m.Triggers) == 0 {
+		if m.HelpShort == "" || m.Group == "" || len(m.Triggers) == 0 {
 			continue
 		}
 		if !enabled(c) {
 			continue
 		}
-		triggers = append(triggers, m.Triggers[0])
+		if _, ok := byGroup[m.Group]; !ok {
+			seen = append(seen, m.Group)
+		}
+		byGroup[m.Group] = append(byGroup[m.Group], m.Triggers[0])
 	}
-	return strings.Join(triggers, " ") + "\n\".help <cmd>\" for details"
+
+	var lines []string
+	for _, g := range groupOrder(seen) {
+		lines = append(lines, g+": "+strings.Join(byGroup[g], " "))
+	}
+	lines = append(lines, "\"<cmd> help\" for details")
+	return strings.Join(lines, "\n")
 }
 
-// HelpFor returns the long help for the command identified by arg, which may be
-// a command Name or a trigger without its leading dot ("w", "2ch", "8ball").
-// Falls back to HelpIndex when nothing matches.
-func HelpFor(arg string) string {
-	arg = strings.ToLower(strings.TrimSpace(arg))
+// groupOrder returns the groups in helpGroupOrder first (only those present in
+// seen), then any remaining groups sorted alphabetically.
+func groupOrder(seen []string) []string {
+	present := map[string]bool{}
+	for _, g := range seen {
+		present[g] = true
+	}
+	var out []string
+	for _, g := range helpGroupOrder {
+		if present[g] {
+			out = append(out, g)
+			present[g] = false
+		}
+	}
+	var rest []string
+	for g, ok := range present {
+		if ok {
+			rest = append(rest, g)
+		}
+	}
+	sort.Strings(rest)
+	return append(out, rest...)
+}
+
+// helpReply implements per-command help: when ctx is exactly "<trigger> help"
+// for an enabled command with a non-empty HelpLong, it returns that HelpLong and
+// the command Name. The exact-match guard means "help" elsewhere is ignored, and
+// commands without HelpLong fall through to normal dispatch.
+func helpReply(ctx Ctx) (help, name string, ok bool) {
 	for _, c := range registered {
 		m := c.Meta()
 		if m.HelpLong == "" || !enabled(c) {
 			continue
 		}
-		if strings.EqualFold(m.Name, arg) {
-			return m.HelpLong
-		}
 		for _, t := range m.Triggers {
-			if strings.TrimPrefix(t, ".") == arg {
-				return m.HelpLong
+			if ctx.Lower == strings.ToLower(t)+" help" {
+				return m.HelpLong, m.Name, true
 			}
 		}
 	}
-	return HelpIndex()
+	return "", "", false
 }

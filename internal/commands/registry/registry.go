@@ -30,7 +30,8 @@ type Meta struct {
 	Triggers  []string  // ".ping", "ping", "пинг"; Triggers[0] is shown in the help index
 	Match     MatchMode // Exact | Prefix (applies to all Triggers)
 	HelpShort string    // non-empty → listed in the .help index
-	HelpLong  string    // shown by ".help <name>"
+	HelpLong  string    // shown by ".<cmd> help"
+	Group     string    // .help index category (e.g. "Games"); empty → not grouped/listed
 	Priority  int       // higher runs first; interceptors use this
 }
 
@@ -117,6 +118,11 @@ func matches(c Command, ctx Ctx) bool {
 // Dispatch routes ctx to the first matching enabled command (highest Priority
 // first), returning its replies and Meta().Name. No match → nil, "", nil.
 func Dispatch(ctx Ctx) (replies []string, name string, err error) {
+	// Per-command help: "<trigger> help" returns that command's HelpLong. Runs
+	// before the dispatch loop so it wins over the claw/bbs Matcher interceptors.
+	if h, n, ok := helpReply(ctx); ok {
+		return []string{h}, n, nil
+	}
 	for _, c := range dispatchOrder() {
 		if !enabled(c) {
 			continue

@@ -43,6 +43,7 @@ func (plugin) Meta() registry.Meta {
 		Match:     registry.Exact,
 		HelpShort: "top authors",
 		HelpLong:  ".top — топ-5 авторов канала по числу сообщений",
+		Group:     "Info",
 	}
 }
 

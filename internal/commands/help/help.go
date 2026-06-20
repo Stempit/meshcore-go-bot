@@ -1,10 +1,9 @@
-// Package help answers .help by rendering the command index and per-command
-// help from the registry's registered Meta.
+// Package help answers .help by rendering the grouped command index from the
+// registry's registered Meta. Per-command detail is reached via ".<cmd> help",
+// handled centrally in registry.Dispatch.
 package help
 
 import (
-	"strings"
-
 	"meshbot/internal/commands/registry"
 )
 
@@ -21,10 +20,6 @@ func (plugin) Meta() registry.Meta {
 	}
 }
 
-func (plugin) Handle(c registry.Ctx) ([]string, error) {
-	arg := strings.TrimSpace(strings.TrimPrefix(strings.ToLower(c.Text), ".help"))
-	if arg == "" {
-		return []string{registry.HelpIndex()}, nil
-	}
-	return []string{registry.HelpFor(arg)}, nil
+func (plugin) Handle(registry.Ctx) ([]string, error) {
+	return []string{registry.HelpIndex()}, nil
 }

@@ -23,6 +23,7 @@ func (plugin) Meta() registry.Meta {
 		Match:     registry.Prefix,
 		HelpShort: "ask AI",
 		HelpLong:  ".llm <query>\nask AI, auto-shrunk to <130 chars",
+		Group:     "AI",
 	}
 }
 

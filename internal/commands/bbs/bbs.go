@@ -64,6 +64,7 @@ func (plugin) Meta() registry.Meta {
 		Match:     registry.Exact,
 		HelpShort: "BBS mode",
 		HelpLong:  ".2ch - start BBS/forum mode",
+		Group:     "Other",
 		Priority:  bbsPriority,
 	}
 }

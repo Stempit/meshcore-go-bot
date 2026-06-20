@@ -22,6 +22,7 @@ func (plugin) Meta() registry.Meta {
 		Match:     registry.Exact,
 		HelpShort: "hop count & distance",
 		HelpLong:  ".trace — hop count & distance from last ping",
+		Group:     "Service",
 	}
 }
 

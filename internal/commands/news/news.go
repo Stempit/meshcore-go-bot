@@ -27,6 +27,7 @@ func (plugin) Meta() registry.Meta {
 		Match:     registry.Prefix,
 		HelpShort: "rss feeds",
 		HelpLong:  ".news — list feeds\n.news <feed> [n] [offset] — recent items",
+		Group:     "Info",
 	}
 }
 

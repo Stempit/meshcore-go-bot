@@ -49,6 +49,7 @@ func (plugin) Meta() registry.Meta {
 		Match:     registry.Prefix,
 		HelpShort: "magic 8-ball",
 		HelpLong:  ".8ball <вопрос>\nмагический шар отвечает да/нет",
+		Group:     "Other",
 	}
 }
 

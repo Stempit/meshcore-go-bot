@@ -19,6 +19,7 @@ func (plugin) Meta() registry.Meta {
 		Match:     registry.Exact,
 		HelpShort: "random pong",
 		HelpLong:  ".ping — random pong\nalso: ping, пинг",
+		Group:     "Service",
 	}
 }
 
