@@ -1,4 +1,6 @@
-package commands
+// Package news answers .news by reading per-feed files produced by the separate
+// newswire poller (https://github.com/Stempit/newswire).
+package news
 
 import (
 	"bufio"
@@ -7,14 +9,28 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"meshbot/internal/commands/registry"
 )
 
 const newsDir = "log/news"
 const defaultNewsCount = 5
 
-// ProcessNewsCommand handles the .news command variants. It reads the per-feed
-// files in log/news/ produced by the separate newswire poller:
-// https://github.com/Stempit/newswire
+func init() { registry.Register(plugin{}) }
+
+type plugin struct{}
+
+func (plugin) Meta() registry.Meta {
+	return registry.Meta{
+		Name:      "news",
+		Triggers:  []string{".news"},
+		Match:     registry.Prefix,
+		HelpShort: "rss feeds",
+		HelpLong:  ".news — list feeds\n.news <feed> [n] [offset] — recent items",
+	}
+}
+
+// Handle implements the .news command variants:
 //
 //	.news                        – list available feeds
 //	.news <feed>                 – last 5 items
@@ -22,8 +38,8 @@ const defaultNewsCount = 5
 //	.news <feed> <n> <offset>    – last n items before the last <offset> items
 //
 // Each returned string is sent as a separate message.
-func ProcessNewsCommand(text string) ([]string, error) {
-	parts := strings.Fields(text)
+func (plugin) Handle(c registry.Ctx) ([]string, error) {
+	parts := strings.Fields(c.Text)
 	// parts[0] is ".news"
 
 	if len(parts) == 1 {

@@ -1,4 +1,5 @@
-package commands
+// Package top answers .top with the most active channel authors.
+package top
 
 import (
 	"fmt"
@@ -7,12 +8,14 @@ import (
 	"strconv"
 	"strings"
 
+	"meshbot/internal/commands/registry"
 	"meshbot/internal/config"
 	"meshbot/internal/historylog"
 )
 
 const (
-	defaultTopScanCount = 100 // recent messages scanned when Top.scan_count is unset
+	historyBaseDir      = "log/history"
+	defaultTopScanCount = 100 // recent messages scanned when scan_count is unset
 	topAuthorsShown     = 3   // how many ranked authors to return
 	topNameMaxRunes     = 12  // author names are clipped to fit the 140-byte mesh limit
 	topBarMax           = 5   // blocks in the longest bar (the leader)
@@ -22,22 +25,51 @@ const (
 // topMedals decorates the first three places; lower places fall back to a number.
 var topMedals = []string{"🥇", "🥈", "🥉"}
 
-// ProcessTopCommand ranks the most active authors in the channel where ".top"
-// was called. It scans the last N channel messages (N from Top.scan_count,
-// default 100), excludes the bot's own ("Me") messages, and returns the top
-// authors by message count. Only works in public channels; in DMs the channel
-// name is empty and it reports that the command is unavailable.
-func ProcessTopCommand(currentChannel string) ([]string, error) {
-	if strings.TrimSpace(currentChannel) == "" {
+// cfg controls how many recent messages are scanned. Configured once at startup.
+type cfg struct {
+	ScanCount int `yaml:"scan_count"` // recent messages to scan, default 100
+}
+
+var conf cfg
+
+func init() { registry.Register(plugin{}) }
+
+type plugin struct{}
+
+func (plugin) Meta() registry.Meta {
+	return registry.Meta{
+		Name:      "top",
+		Triggers:  []string{".top"},
+		Match:     registry.Exact,
+		HelpShort: "top authors",
+		HelpLong:  ".top — топ-5 авторов канала по числу сообщений",
+	}
+}
+
+func (plugin) ConfigKey() string { return "Top" }
+
+func (plugin) Configure(s config.Sectioner) error {
+	return s.Section("Top", &conf)
+}
+
+func (plugin) Enabled() bool { return true }
+
+// Handle ranks the most active authors in the channel where ".top" was called.
+// It scans the last N channel messages (N from scan_count, default 100),
+// excludes the bot's own ("Me") messages, and returns the top authors by
+// message count. Channels only; in DMs it reports unavailable.
+func (plugin) Handle(c registry.Ctx) ([]string, error) {
+	if c.IsDM() {
 		return []string{"Топ доступен только в каналах"}, nil
 	}
+	currentChannel := c.Channel
 
 	entries, err := historylog.ReadAllChannel(historyBaseDir, currentChannel)
 	if err != nil {
 		return nil, fmt.Errorf(".top: %w", err)
 	}
 
-	scanCount := config.Get().Top.ScanCount
+	scanCount := conf.ScanCount
 	if scanCount <= 0 {
 		scanCount = defaultTopScanCount
 	}
@@ -87,12 +119,12 @@ func ProcessTopCommand(currentChannel string) ([]string, error) {
 		} else {
 			place = fmt.Sprintf("%d", i+1)
 		}
-		c := counts[name]
-		blocks := barLen(c, leader)
+		cnt := counts[name]
+		blocks := barLen(cnt, leader)
 		// Lead with a fixed-width bar so bars and counts form columns; the
 		// variable-length name trails where its length no longer matters.
 		bar := strings.Repeat(topBarChar, blocks) + strings.Repeat(" ", topBarMax-blocks)
-		fmt.Fprintf(&b, "\n%s %s %*d %s", place, bar, countWidth, c, clipName(name))
+		fmt.Fprintf(&b, "\n%s %s %*d %s", place, bar, countWidth, cnt, clipName(name))
 	}
 	return []string{b.String()}, nil
 }

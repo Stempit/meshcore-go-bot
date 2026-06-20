@@ -1,4 +1,6 @@
-package commands
+// Package ticket answers .ticket by assigning each sender a stable random
+// "callsign" phrase, persisted to disk.
+package ticket
 
 import (
 	"bufio"
@@ -8,6 +10,8 @@ import (
 	"os"
 	"strings"
 	"sync"
+
+	"meshbot/internal/commands/registry"
 )
 
 var firstWords = []string{
@@ -95,7 +99,7 @@ func (ts *TicketStore) random() (string, bool) {
 }
 
 // printableKey returns senderKey as a readable string.
-// bot.go passes raw public-key bytes cast to string for DMs, so we hex-encode
+// The DM path passes raw public-key bytes cast to string, so we hex-encode
 // those; plain channel names (already ASCII) pass through unchanged.
 func printableKey(key string) string {
 	for _, b := range []byte(key) {
@@ -106,8 +110,28 @@ func printableKey(key string) string {
 	return key
 }
 
-// ProcessTicketCommand handles the .ticket command.
-func ProcessTicketCommand(text, senderKey string) (string, error) {
+func init() { registry.Register(plugin{}) }
+
+type plugin struct{}
+
+func (plugin) Meta() registry.Meta {
+	return registry.Meta{
+		Name:     "ticket",
+		Triggers: []string{".ticket"},
+		Match:    registry.Prefix,
+		// Not listed in the .help index (no HelpShort), matching the original.
+	}
+}
+
+func (plugin) Handle(c registry.Ctx) ([]string, error) {
+	reply, err := processTicket(c.Text, c.SenderKey)
+	if err != nil {
+		return []string{"ошибка"}, err
+	}
+	return []string{reply}, nil
+}
+
+func processTicket(text, senderKey string) (string, error) {
 	if ticketStore == nil {
 		return "ticket store not initialized", nil
 	}

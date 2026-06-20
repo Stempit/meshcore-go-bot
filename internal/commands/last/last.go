@@ -1,10 +1,12 @@
-package commands
+// Package last answers .last [n] [channel] with recent channel history.
+package last
 
 import (
 	"fmt"
 	"strconv"
 	"strings"
 
+	"meshbot/internal/commands/registry"
 	"meshbot/internal/historylog"
 )
 
@@ -14,10 +16,22 @@ const (
 	historyBaseDir   = "log/history"
 )
 
-// ProcessLastCommand parses ".last [n] [channel]" and returns formatted messages
-// ready to be relayed into the current channel.
-func ProcessLastCommand(text, currentChannel string) ([]string, error) {
-	count, srcChannel, err := parseLastArgs(text, currentChannel)
+func init() { registry.Register(plugin{}) }
+
+type plugin struct{}
+
+func (plugin) Meta() registry.Meta {
+	return registry.Meta{
+		Name:      "last",
+		Triggers:  []string{".last"},
+		Match:     registry.Prefix,
+		HelpShort: "last n msgs",
+		HelpLong:  ".last [n] [channel]\nshow last n msgs (def 3, max 7) in channel",
+	}
+}
+
+func (plugin) Handle(c registry.Ctx) ([]string, error) {
+	count, srcChannel, err := parseLastArgs(c.Text, c.Channel)
 	if err != nil {
 		return []string{err.Error()}, nil
 	}

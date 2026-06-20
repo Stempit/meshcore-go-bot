@@ -65,17 +65,6 @@ type ProxyConfig struct {
 	URL     string `yaml:"url"` // e.g. "socks5://user:pass@host:1080"
 }
 
-type WeatherConfig struct {
-	Enabled         bool   `yaml:"enabled"`
-	DefaultLocation string `yaml:"default_location"`
-	Units           string `yaml:"units"` // "metric" or "imperial"
-}
-
-type StatsConfig struct {
-	URL         string `yaml:"url"`           // HTTP(S) URL or file:///path/to/stats.json
-	CacheTTLSec int    `yaml:"cache_ttl_sec"` // default 300
-}
-
 // MigrationConfig controls the "switch to 2-byte hash" nudge: when a received
 // advert or public-channel message reveals a node still using 1-byte routing
 // hashes, the bot posts a reminder on the channel, at most once per CooldownSec
@@ -86,24 +75,6 @@ type MigrationConfig struct {
 	CooldownSec int    `yaml:"cooldown_sec"` // default 86400 (24h)
 }
 
-// TopConfig controls the ".top" command: how many of the most recent channel
-// messages are scanned to rank authors by message count.
-type TopConfig struct {
-	ScanCount int `yaml:"scan_count"` // recent messages to scan, default 100
-}
-
-// WordsConfig controls the ".words" anagram game. It is opt-in via Enabled
-// (same convention as Claw). The int fields have no central defaulter, so each
-// is defaulted at its use site when zero (see internal/games/words.go).
-type WordsConfig struct {
-	Enabled    bool   `yaml:"enabled"`      // opt-in: .words stays off unless true
-	DictPath   string `yaml:"dict_path"`    // dictionary file, default "words_anagram_ru.txt"
-	RoundSec   int    `yaml:"round_sec"`    // countdown length, default 300 (5 min)
-	MinSubLen  int    `yaml:"min_sub_len"`  // shortest valid submission, default 3
-	BaseMinLen int    `yaml:"base_min_len"` // shortest base word, default 8
-	BaseMaxLen int    `yaml:"base_max_len"` // longest base word, default 10
-}
-
 type Config struct {
 	Connection ConnectionConfig        `yaml:"Connection"`
 	Proxy      ProxyConfig             `yaml:"Proxy"`
@@ -111,11 +82,7 @@ type Config struct {
 	Telegram   tgbridge.TelegramConfig `yaml:"Telegram"`
 	Trace      TraceConfig             `yaml:"Trace"`
 	Security   SecurityConfig          `yaml:"Security"`
-	Weather    WeatherConfig           `yaml:"Weather"`
-	Stats      StatsConfig             `yaml:"Stats"`
 	Migration  MigrationConfig         `yaml:"Migration"`
-	Top        TopConfig               `yaml:"Top"`
-	Words      WordsConfig             `yaml:"words"`
 	Shrink     ShrinkConfig            `yaml:"Shrink"`
 	LLM        struct {
 		Enabled           bool    `yaml:"enabled"`
@@ -124,11 +91,4 @@ type Config struct {
 		SystemPrompt      string  `yaml:"system_prompt"`
 		SystemTemperature float64 `yaml:"system_temperature"`
 	} `yaml:"LLM"`
-	Claw struct {
-		Enabled    bool   `yaml:"enabled"`
-		URL        string `yaml:"url"`         // ws://host:18790/pico/ws (gateway port, not dashboard)
-		Token      string `yaml:"token"`       // from picoclaw dashboard → Pico token
-		TimeoutSec int    `yaml:"timeout_sec"` // default 180
-		BotName    string `yaml:"bot_name"`    // mesh display name of the bot, e.g. "Yorick 💀"
-	} `yaml:"Claw"`
 }

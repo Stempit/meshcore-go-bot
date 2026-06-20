@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"meshbot/internal/commands"
+	"meshbot/internal/commands/registry"
 	"meshbot/internal/config"
 	meshcore "meshbot/internal/meshcore_bt"
 	"meshbot/internal/shrink"
@@ -87,7 +88,7 @@ func (d *Dispatcher) processDM(m *meshcore.Message) {
 	pingMeta := buildPingMeta(m.PathLength, m.PathBytes, m.Timestamp, contact.Latitude, contact.Longitude, d.client.GetContacts())
 	setSelfCoords(pingMeta, d.client)
 
-	replies, name, err := commands.GenerateReplies(m.Text, "", pingMeta, string(contact.PublicKey), contact.Name)
+	replies, name, err := registry.Dispatch(registry.NewCtx(m.Text, "", string(contact.PublicKey), contact.Name, pingMeta, config.Get()))
 	if err != nil {
 		log().Error("Command error", "error", err)
 		return
@@ -178,7 +179,7 @@ func (d *Dispatcher) processChannelMessage(m *meshcore.ChannelMessage) {
 	pingMeta := buildPingMeta(m.PathLength, m.PathBytes, m.Timestamp, senderLat, senderLon, d.client.GetContacts())
 	setSelfCoords(pingMeta, d.client)
 
-	replies, name, err := commands.GenerateReplies(m.Text, channel.Name, pingMeta, senderKeyHexCh, m.SenderName)
+	replies, name, err := registry.Dispatch(registry.NewCtx(m.Text, channel.Name, senderKeyHexCh, m.SenderName, pingMeta, config.Get()))
 	if err != nil {
 		log().Error("Command error", "error", err)
 		return
@@ -199,8 +200,8 @@ func (d *Dispatcher) processChannelMessage(m *meshcore.ChannelMessage) {
 
 // buildPingMeta constructs a PingMeta from raw message fields. It resolves
 // intermediate hop coordinates from the contact list when available.
-func buildPingMeta(pathLength int, pathBytes []byte, timestamp time.Time, senderLat, senderLon *float64, contacts map[string]*meshcore.Contact) *commands.PingMeta {
-	meta := &commands.PingMeta{
+func buildPingMeta(pathLength int, pathBytes []byte, timestamp time.Time, senderLat, senderLon *float64, contacts map[string]*meshcore.Contact) *registry.PingMeta {
+	meta := &registry.PingMeta{
 		PathLength: pathLength,
 		PathBytes:  pathBytes,
 		Timestamp:  timestamp,
@@ -225,7 +226,7 @@ func buildPingMeta(pathLength int, pathBytes []byte, timestamp time.Time, sender
 // setSelfCoords fills pingMeta.SelfLat/SelfLon from config (when use_config_coords
 // is true) or from the device's own SelfInfo. Config coords take priority when
 // the flag is set.
-func setSelfCoords(pingMeta *commands.PingMeta, client interface {
+func setSelfCoords(pingMeta *registry.PingMeta, client interface {
 	GetSelfInfo() *meshcore.SelfInfo
 }) {
 	pingCfg := config.Get().Trace

@@ -1,22 +1,36 @@
-package commands
+// Package weather answers .w [tomorrow] [city] using wttr.in.
+package weather
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
-	"meshbot/internal/config"
-	"meshbot/internal/proxy"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
+
+	"meshbot/internal/commands/registry"
+	"meshbot/internal/proxy"
 )
 
-// ProcessWeatherCommand handles .w [завтра|tomorrow] [location].
-func ProcessWeatherCommand(text string) ([]string, error) {
-	text = strings.TrimSpace(strings.TrimPrefix(text, ".w"))
+type plugin struct{}
+
+func (plugin) Meta() registry.Meta {
+	return registry.Meta{
+		Name:      "weather",
+		Triggers:  []string{".w"},
+		Match:     registry.Prefix,
+		HelpShort: "weather",
+		HelpLong:  ".w [tomorrow] [city]\ncurrent or next-day weather",
+	}
+}
+
+// Handle implements .w [завтра|tomorrow] [location].
+func (plugin) Handle(c registry.Ctx) ([]string, error) {
+	text := c.Arg(".w")
 
 	day := 0
 	textLower := strings.ToLower(text)
@@ -28,10 +42,9 @@ func ProcessWeatherCommand(text string) ([]string, error) {
 		}
 	}
 
-	cfg := config.Get()
 	location := strings.TrimSpace(text)
 	if location == "" {
-		location = cfg.Weather.DefaultLocation
+		location = conf.DefaultLocation
 	}
 	if location == "" {
 		return []string{"погода: не указан город"}, nil
@@ -42,9 +55,9 @@ func ProcessWeatherCommand(text string) ([]string, error) {
 		err   error
 	)
 	if day == 0 {
-		reply, err = fetchCurrentWeather(location, cfg.Weather.Units)
+		reply, err = fetchCurrentWeather(location, conf.Units)
 	} else {
-		reply, err = fetchTomorrowWeather(location, cfg.Weather.Units)
+		reply, err = fetchTomorrowWeather(location, conf.Units)
 	}
 	if err != nil {
 		log().Warn("weather fetch error", "error", err, "location", location)
@@ -190,8 +203,8 @@ func fetchTomorrowWeather(location, units string) (string, error) {
 	return fmt.Sprintf("%s %s: %s, %s, 💨 %s", emoji, location, temp, cond, wind), nil
 }
 
-func formatTemp(c, f, units string) string {
-	val, unit := c, "°C"
+func formatTemp(cVal, f, units string) string {
+	val, unit := cVal, "°C"
 	if units == "imperial" {
 		val, unit = f, "°F"
 	}
@@ -268,16 +281,16 @@ var conditionRU = map[int]string{
 }
 
 func conditionText(code string) string {
-	c, _ := strconv.Atoi(code)
-	if desc, ok := conditionRU[c]; ok {
+	cVal, _ := strconv.Atoi(code)
+	if desc, ok := conditionRU[cVal]; ok {
 		return desc
 	}
 	return ""
 }
 
 func weatherCodeEmoji(code string) string {
-	c, _ := strconv.Atoi(code)
-	switch c {
+	cVal, _ := strconv.Atoi(code)
+	switch cVal {
 	case 113:
 		return "☀️"
 	case 116:

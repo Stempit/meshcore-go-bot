@@ -1,4 +1,6 @@
-package commands
+// Package path answers .path with a network summary or the best route between
+// two repeater nodes, computed from the Let's Mesh analyzer edge-stats data.
+package path
 
 import (
 	"context"
@@ -12,9 +14,25 @@ import (
 	"sync"
 	"time"
 
-	"meshbot/internal/config"
+	"meshbot/internal/commands/registry"
 	"meshbot/internal/proxy"
 )
+
+type plugin struct{}
+
+func (plugin) Meta() registry.Meta {
+	return registry.Meta{
+		Name:      "path",
+		Triggers:  []string{".path"},
+		Match:     registry.Prefix,
+		HelpShort: "best path",
+		HelpLong:  ".path — network summary\n.path <from> to <to> — best path\nex: .path TIM to CHEP",
+	}
+}
+
+func (plugin) Handle(c registry.Ctx) ([]string, error) {
+	return processPath(c.Trimmed)
+}
 
 // ── JSON models (mirrors Let's Mesh analyzer edge-stats API) ─────────────────
 
@@ -60,17 +78,16 @@ func getStats() (*statsResponse, error) {
 		return statsCache, nil
 	}
 
-	cfg := config.Get().Stats
-	if cfg.URL == "" {
+	if conf.URL == "" {
 		return nil, fmt.Errorf("Stats.url not configured")
 	}
 
 	var raw []byte
 	var err error
-	if strings.HasPrefix(cfg.URL, "file://") {
-		raw, err = os.ReadFile(strings.TrimPrefix(cfg.URL, "file://"))
+	if strings.HasPrefix(conf.URL, "file://") {
+		raw, err = os.ReadFile(strings.TrimPrefix(conf.URL, "file://"))
 	} else {
-		raw, err = statsHTTPGet(cfg.URL)
+		raw, err = statsHTTPGet(conf.URL)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("fetch stats: %w", err)
@@ -81,7 +98,7 @@ func getStats() (*statsResponse, error) {
 		return nil, fmt.Errorf("parse stats: %w", err)
 	}
 
-	ttl := time.Duration(cfg.CacheTTLSec) * time.Second
+	ttl := time.Duration(conf.CacheTTLSec) * time.Second
 	if ttl <= 0 {
 		ttl = 5 * time.Minute
 	}
@@ -408,13 +425,13 @@ func trySplits(stats *statsResponse, rawArgs []string) [][2]string {
 
 // ── Command handler ───────────────────────────────────────────────────────────
 
-// ProcessPathCommand handles:
+// processPath handles:
 //
 //	.path                    — network summary
 //	.path <from> to <to>     — best path; "to" is the explicit separator
 //	.path <from> <to>        — both names may contain spaces; the unique split
 //	                           where both parts match a node is chosen automatically
-func ProcessPathCommand(text string) ([]string, error) {
+func processPath(text string) ([]string, error) {
 	stats, err := getStats()
 	if err != nil {
 		log().Warn("path command: stats unavailable", "error", err)
@@ -505,15 +522,15 @@ func ProcessPathCommand(text string) ([]string, error) {
 		}
 	}
 
-	path, pubkeys, edges, ok := findBestPath(stats, srcKey, dstKey)
+	pathNodes, pubkeys, edges, ok := findBestPath(stats, srcKey, dstKey)
 	if !ok {
 		return []string{fmt.Sprintf("no path: %s→%s", srcName, dstName)}, nil
 	}
 
-	hops := len(path) - 1
+	hops := len(pathNodes) - 1
 	quality := pathQuality(edges)
 	pct := deliveryPct(edges)
-	route := strings.Join(path, "→")
+	route := strings.Join(pathNodes, "→")
 
 	// Build [aa,bb,cc] hash list from the first byte (2 hex chars) of each key.
 	hashes := make([]string, len(pubkeys))
@@ -526,8 +543,8 @@ func ProcessPathCommand(text string) ([]string, error) {
 
 	// Abbreviate node names to first word when the line is too long for mesh.
 	if len(reply) > 130 {
-		short := make([]string, len(path))
-		for i, nm := range path {
+		short := make([]string, len(pathNodes))
+		for i, nm := range pathNodes {
 			parts := strings.Fields(nm)
 			short[i] = parts[0]
 		}

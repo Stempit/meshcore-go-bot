@@ -1,4 +1,7 @@
-package commands
+// Package bbs is a stateful interceptor: once a sender enters BBS mode (.2ch)
+// it claims all of that sender's input until they .exit. It registers at a
+// Priority above normal commands (but below claw) so the interception wins.
+package bbs
 
 import (
 	"encoding/json"
@@ -9,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"meshbot/internal/commands/registry"
 )
 
 const (
@@ -17,6 +22,8 @@ const (
 	bbsPageSize     = 8 // threads per /ls page
 	bbsPostsPerPage = 3 // posts per /rd page
 	bbsMsgMax       = 138
+	// bbsPriority sits above normal commands (0) but below claw (20).
+	bbsPriority = 10
 )
 
 // BBSPost is a single post in a thread.
@@ -46,29 +53,62 @@ var (
 	bbsLoaded    bool
 )
 
-// IsBBSMode returns true when the session key is in BBS mode.
-func IsBBSMode(sessionKey string) bool {
+func init() { registry.Register(plugin{}) }
+
+type plugin struct{}
+
+func (plugin) Meta() registry.Meta {
+	return registry.Meta{
+		Name:      "bbs",
+		Triggers:  []string{".2ch"},
+		Match:     registry.Exact,
+		HelpShort: "BBS mode",
+		HelpLong:  ".2ch - start BBS/forum mode",
+		Priority:  bbsPriority,
+	}
+}
+
+// Matches claims ".2ch" (enter) plus any input while the sender is in BBS mode.
+func (plugin) Matches(c registry.Ctx) bool {
+	return isBBSMode(c.SenderKey) || c.Lower == ".2ch"
+}
+
+func (plugin) Handle(c registry.Ctx) ([]string, error) {
+	if isBBSMode(c.SenderKey) {
+		if c.Lower == ".exit" {
+			exitBBSMode(c.SenderKey)
+			return []string{"Left BBS. Bye!"}, nil
+		}
+		return processBBSCommand(c.Text, c.SenderKey, c.SenderName)
+	}
+	// Enter BBS mode.
+	enterBBSMode(c.SenderKey)
+	return []string{"Welcome to BBS!\n/hl for help\n.exit to leave"}, nil
+}
+
+// isBBSMode returns true when the session key is in BBS mode.
+func isBBSMode(sessionKey string) bool {
 	bbsSessionsMu.RLock()
 	defer bbsSessionsMu.RUnlock()
 	return bbsSessions[sessionKey]
 }
 
-// EnterBBSMode puts the session key into BBS mode.
-func EnterBBSMode(sessionKey string) {
+// enterBBSMode puts the session key into BBS mode.
+func enterBBSMode(sessionKey string) {
 	bbsSessionsMu.Lock()
 	defer bbsSessionsMu.Unlock()
 	bbsSessions[sessionKey] = true
 }
 
-// ExitBBSMode removes the session key from BBS mode.
-func ExitBBSMode(sessionKey string) {
+// exitBBSMode removes the session key from BBS mode.
+func exitBBSMode(sessionKey string) {
 	bbsSessionsMu.Lock()
 	defer bbsSessionsMu.Unlock()
 	delete(bbsSessions, sessionKey)
 }
 
-// ProcessBBSCommand routes a command while in BBS mode.
-func ProcessBBSCommand(text, authorKey, authorName string) ([]string, error) {
+// processBBSCommand routes a command while in BBS mode.
+func processBBSCommand(text, authorKey, authorName string) ([]string, error) {
 	bbsThreadsMu.Lock()
 	defer bbsThreadsMu.Unlock()
 

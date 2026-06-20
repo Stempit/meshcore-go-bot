@@ -11,8 +11,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"meshbot/internal/config"
 )
 
 // .words — "Слова из слова": a timed anagram game. The bot picks one long
@@ -367,31 +365,48 @@ func LoadWordsDict(path string) error {
 	return nil
 }
 
+// WordsSettings holds the .words tunables. The words plugin owns the config
+// section and installs the decoded values via SetWordsSettings at startup, so
+// this package stays free of the config singleton. Zero fields fall back to the
+// use-site defaults below.
+type WordsSettings struct {
+	RoundSec   int
+	MinSubLen  int
+	BaseMinLen int
+	BaseMaxLen int
+}
+
+var wordsSettings WordsSettings
+
+// SetWordsSettings installs the .words tunables. Called once at startup from the
+// words plugin's Configure, before any round runs.
+func SetWordsSettings(s WordsSettings) { wordsSettings = s }
+
 // Config accessors with use-site defaults (no central config defaulter).
 
 func wordsRoundDur() time.Duration {
-	if s := config.Get().Words.RoundSec; s > 0 {
+	if s := wordsSettings.RoundSec; s > 0 {
 		return time.Duration(s) * time.Second
 	}
 	return wordsDefRoundSec * time.Second
 }
 
 func wordsMinSub() int {
-	if n := config.Get().Words.MinSubLen; n > 0 {
+	if n := wordsSettings.MinSubLen; n > 0 {
 		return n
 	}
 	return wordsDefMinSub
 }
 
 func wordsBaseMin() int {
-	if n := config.Get().Words.BaseMinLen; n > 0 {
+	if n := wordsSettings.BaseMinLen; n > 0 {
 		return n
 	}
 	return wordsDefBaseMin
 }
 
 func wordsBaseMax() int {
-	if n := config.Get().Words.BaseMaxLen; n > 0 {
+	if n := wordsSettings.BaseMaxLen; n > 0 {
 		return n
 	}
 	return wordsDefBaseMax

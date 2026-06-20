@@ -1,4 +1,5 @@
-package commands
+// Package trace answers .trace with hop count and distance from the last ping.
+package trace
 
 import (
 	"encoding/hex"
@@ -6,7 +7,27 @@ import (
 	"math"
 	"strings"
 	"time"
+
+	"meshbot/internal/commands/registry"
 )
+
+func init() { registry.Register(plugin{}) }
+
+type plugin struct{}
+
+func (plugin) Meta() registry.Meta {
+	return registry.Meta{
+		Name:      "trace",
+		Triggers:  []string{".trace"},
+		Match:     registry.Exact,
+		HelpShort: "hop count & distance",
+		HelpLong:  ".trace — hop count & distance from last ping",
+	}
+}
+
+func (plugin) Handle(c registry.Ctx) ([]string, error) {
+	return []string{formatTechPong(c.PingMeta)}, nil
+}
 
 // haversineKm returns the great-circle distance in km between two lat/lon points.
 func haversineKm(lat1, lon1, lat2, lon2 float64) float64 {
@@ -19,7 +40,7 @@ func haversineKm(lat1, lon1, lat2, lon2 float64) float64 {
 	return r * 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
 }
 
-func formatTechPong(meta *PingMeta) string {
+func formatTechPong(meta *registry.PingMeta) string {
 	var sb strings.Builder
 
 	// 0xFF means direct delivery (no repeaters)
@@ -112,8 +133,4 @@ func formatTechPong(meta *PingMeta) string {
 	}
 
 	return sb.String()
-}
-
-func ProcessTraceMessage(meta *PingMeta) (string, error) {
-	return formatTechPong(meta), nil
 }
