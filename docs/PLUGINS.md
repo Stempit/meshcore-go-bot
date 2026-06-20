@@ -2,7 +2,7 @@
 
 Status: **implemented**. The flat `internal/commands` package has been converted
 into self-registering, self-contained command modules ("plugins") under
-`internal/commands/<name>/`, driven by the `internal/registry`
+`internal/commands/<name>/`, driven by the `internal/support/registry`
 framework. This document remains the design reference; see
 [NEW_COMMAND.md](NEW_COMMAND.md) for the day-to-day "add a command" workflow.
 
@@ -48,7 +48,7 @@ internal/commands/
 ```
 
 Games (`internal/games`) become plugins under the same registry. The shared game
-helpers in [`internal/games/game.go`](../internal/games/game.go) (`Announcer`,
+helpers in [`internal/support/games/game.go`](../internal/support/games/game.go) (`Announcer`,
 `gameScope`, `gameTop`, `logWin`) stay as a support package that game-plugins
 import; only the command-routing layer moves.
 

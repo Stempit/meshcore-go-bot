@@ -20,7 +20,7 @@ enabled command compares `Ctx.Lower` against its `Triggers` (or calls its
 `Meta().Name` (used by the send layer to pick a mesh-fit variant). No match →
 `nil, "", nil`.
 
-Every command implements [`registry.Command`](../internal/registry/registry.go):
+Every command implements [`registry.Command`](../internal/support/registry/registry.go):
 
 ```go
 type Command interface {
@@ -46,7 +46,7 @@ package mycmd
 import (
 	"strings"
 
-	"meshbot/internal/registry"
+	"meshbot/internal/support/registry"
 )
 
 func init() { registry.Register(plugin{}) }
@@ -162,7 +162,7 @@ in `config.example.yaml`.
 ## Using PingMeta / history
 
 `c.PingMeta` carries path/timing/GPS (see
-[registry/ctx.go](../internal/registry/ctx.go)). Read channel history
+[registry/ctx.go](../internal/support/registry/ctx.go)). Read channel history
 with `historylog.ReadLastChannel("log/history", c.Channel, n)`.
 
 ---

@@ -30,7 +30,7 @@ the existing `games` helpers.
 
 Game state is keyed by the shared **scope string** (identical to [`.num`](NUM.md)
 and [`.hang`](HANG.md)), via the existing `gameScope(senderKey, channelName)`
-helper in [internal/games/game.go](../../internal/games/game.go):
+helper in [internal/games/game.go](../../internal/support/games/game.go):
 
 ```
 scope = channelName          if channelName != ""
@@ -185,7 +185,7 @@ breakdown), as two ≤140-byte lines:
 - Line 1: header with the base word.
 - Line 2: players ranked by total score (descending; tie-break by name), capped
   at `gameTopMax` (5) players, **built to a byte budget the same way
-  [`gameTop`](../../internal/games/game.go) builds its line** (append players
+  [`gameTop`](../../internal/support/games/game.go) builds its line** (append players
   while they fit, then stop). Do **not** rely on `shrink.Fit` to *split* this
   line: with no `shrink` override configured, `Fit` resolves to the **Truncate**
   variant, which would silently *cut* trailing players rather than wrap them. If

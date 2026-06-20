@@ -25,19 +25,20 @@ internal/
   meshcore/          – BLE protocol driver (client.go is the main type)
   dispatch/             – inbound worker pool + serialized outbound sender;
                           processDM/processChannelMessage parse .advert, then call registry.Dispatch
-  registry/             – the command framework: Ctx, PingMeta, Meta, Command, Register, Dispatch, Help
   commands/             – self-registering command plugins (one folder each; no loose files)
     allcommands/        – aggregator: blank-imports every plugin so they self-register
     ping/ trace/ last/ news/ llm/ weather/ path/ top/ stat/ eightball/
     ticket/ help/ claw/ bbs/ dice/ num/ hang/ words/  – one command per folder
     advert/             – .advert parser; handled in the dispatch layer (needs the BLE
                           client's SendSelfAdvert), so it is not a registry plugin
-  greeter/              – greets newly seen nodes; owns KnownKeys persistence + GreetMessage
-  games/                – shared support layer for the game plugins (scope keying,
+  support/              – shared framework + support layer sitting above commands/
+    registry/           – the command framework: Ctx, PingMeta, Meta, Command, Register, Dispatch, Help
+    games/              – shared support layer for the game plugins (scope keying,
                           historylog leaderboard, round-result Announcer, NormalizeRu)
-  helpers/              – small cross-command utilities (ClipRunes, HistoryDir)
+    helpers/            – small cross-command utilities (ClipRunes, HistoryDir)
+    historylog/         – per-conversation append-only log files
+  greeter/              – greets newly seen nodes; owns KnownKeys persistence + GreetMessage
   config/               – YAML config loader (singleton via sync.Once) + per-plugin Sectioner
-  historylog/           – per-conversation append-only log files
   bridge/               – external integrations
     llm/                – Ollama and OpenRouter LLM providers
     mqttbridge/         – MQTT publishing to custom broker + Let's Mesh analyzer
@@ -114,4 +115,4 @@ Each command is a self-registering plugin in its own folder; the table's **Plugi
 
 New commands are self-registering plugins: create `internal/commands/<name>/` implementing `registry.Command` (+ `Configurable`/`Matcher` if needed) and add one blank import to `internal/commands/allcommands`. There is no central switch or help list to edit — `.help` and routing are generated from each plugin's `Meta`. See [docs/NEW_COMMAND.md](docs/NEW_COMMAND.md) and the design in [docs/PLUGINS.md](docs/PLUGINS.md).
 
-The `internal/games` package is a **shared support layer** (scope keying, the `historylog`-backed leaderboards under `log/games/<game>/`, the round-result `Announcer`, and `NormalizeRu`); each game's own logic lives in its `internal/commands/<game>/` plugin and imports `games` for those helpers. Win records and leaderboards (`.num top` / `.hang top` / `.words top`) are keyed by game scope — see [docs/games/](docs/games/).
+The `internal/support/games` package is a **shared support layer** (scope keying, the `historylog`-backed leaderboards under `log/games/<game>/`, the round-result `Announcer`, and `NormalizeRu`); each game's own logic lives in its `internal/commands/<game>/` plugin and imports `games` for those helpers. Win records and leaderboards (`.num top` / `.hang top` / `.words top`) are keyed by game scope — see [docs/games/](docs/games/).
