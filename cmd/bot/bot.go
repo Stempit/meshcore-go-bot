@@ -18,7 +18,7 @@ import (
 	"meshbot/internal/greeter"
 	"meshbot/internal/historylog"
 	"meshbot/internal/logging"
-	meshcore "meshbot/internal/meshcore_bt"
+	"meshbot/internal/meshcore"
 	"meshbot/internal/migrator"
 	"meshbot/internal/mqttbridge"
 	"meshbot/internal/proxy"
@@ -90,7 +90,7 @@ func main() {
 	client.SetHistoryLogger(histlog)
 
 	// mqtt init — optional. The bridge is constructed here, in the composition
-	// root, and attached to the client as a packet publisher; the meshcore_bt
+	// root, and attached to the client as a packet publisher; the meshcore
 	// driver itself has no dependency on the MQTT package.
 	mqttCfg := config.Get().MQTT
 	if bridge := startMQTTBridge(client, &mqttCfg); bridge != nil {

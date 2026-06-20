@@ -9,7 +9,7 @@ import (
 	"sync"
 
 	"meshbot/internal/logging"
-	meshcore "meshbot/internal/meshcore_bt"
+	"meshbot/internal/meshcore"
 )
 
 var log = logging.For("greeter")

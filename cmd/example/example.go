@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	meshcore "meshbot/internal/meshcore_bt"
+	"meshbot/internal/meshcore"
 )
 
 func main() {

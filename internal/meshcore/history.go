@@ -1,4 +1,4 @@
-package meshcore_bt
+package meshcore
 
 import "time"
 

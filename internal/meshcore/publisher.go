@@ -1,4 +1,4 @@
-package meshcore_bt
+package meshcore
 
 // PacketPublisher is an optional sink for mesh RF packets. Attach one with
 // SetPacketPublisher to mirror received and transmitted packets to an external

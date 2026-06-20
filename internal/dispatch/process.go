@@ -9,7 +9,7 @@ import (
 	"meshbot/internal/commands/advert"
 	"meshbot/internal/commands/registry"
 	"meshbot/internal/config"
-	meshcore "meshbot/internal/meshcore_bt"
+	"meshbot/internal/meshcore"
 	"meshbot/internal/shrink"
 )
 

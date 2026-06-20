@@ -22,7 +22,7 @@ There are no automated tests. Manual testing uses `cmd/example` and `cmd/llm`.
 ```
 cmd/bot/bot.go          – main entry point; wires everything together
 internal/
-  meshcore_bt/          – BLE protocol driver (client.go is the main type)
+  meshcore/          – BLE protocol driver (client.go is the main type)
   dispatch/             – inbound worker pool + serialized outbound sender;
                           processDM/processChannelMessage parse .advert, then call registry.Dispatch
   commands/             – self-registering command plugins (one folder each; no loose files)
@@ -43,7 +43,7 @@ internal/
   tgbridge/             – Telegram bot bridge (long-poll)
 ```
 
-The MeshCore BLE client (`internal/meshcore_bt/client.go`) is the core dependency. Everything else depends on it.
+The MeshCore BLE client (`internal/meshcore/client.go`) is the core dependency. Everything else depends on it.
 
 Message flow: BLE device → `client.IncomingMessages()` channel → `processDM` / `processChannelMessage` in `internal/dispatch` → `registry.Dispatch` → first matching plugin's `Handle` → reply sent back over BLE.
 
@@ -81,7 +81,7 @@ log/
 
 ## Packages that need care
 
-- **`internal/meshcore_bt/client.go`** (~2300 lines) – BLE protocol state machine. The `sentConfirmCh` channel is a single shared slot; only one send can be in flight at a time, so concurrent senders must serialise their sends.
+- **`internal/meshcore/client.go`** (~2300 lines) – BLE protocol state machine. The `sentConfirmCh` channel is a single shared slot; only one send can be in flight at a time, so concurrent senders must serialise their sends.
 - **`internal/mqttbridge/bridge.go`** (~1700 lines) – manages multiple MQTT connections (custom broker + EU/US analyzers) with JWT auth (Ed25519). Changes here affect network-visible state.
 - **`internal/config/model.go`** – holds only **infra** config (Connection, Proxy, MQTT, Telegram, Security, Shrink, LLM, Trace, Migration). Adding a field requires a YAML tag; check for typos. **Per-command** config lives in the plugin folder instead: the plugin implements `registry.Configurable` and decodes its own section via `config.Sectioner` (two-pass YAML over the same single `config.yaml`).
 

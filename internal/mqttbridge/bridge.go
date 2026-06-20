@@ -1529,7 +1529,7 @@ func (b *MQTTBridge) isAnyConnected() bool {
 }
 
 // DevicePrivKey returns the configured device private key (hex), or "" if unset.
-// It lets the bridge satisfy the meshcore_bt.PacketPublisher interface without
+// It lets the bridge satisfy the meshcore.PacketPublisher interface without
 // exposing the whole config.
 func (b *MQTTBridge) DevicePrivKey() string {
 	if b.config == nil {
