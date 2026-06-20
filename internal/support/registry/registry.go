@@ -128,8 +128,18 @@ func Dispatch(ctx Ctx) (replies []string, name string, err error) {
 			continue
 		}
 		if matches(c, ctx) {
+			name := c.Meta().Name
+			// Redirect gate: steer flood-prone commands off busy channels before
+			// the handler runs, so no game state mutates and no network call fires.
+			// DMs are exempt (Lookup returns false for an empty channel).
+			if msg, ok := ctx.Cfg.Redirect.Lookup(name, ctx.Channel); ok {
+				if allowNotice(ctx.Channel, name, ctx.Cfg.Redirect.Cooldown) {
+					return []string{msg}, name, nil
+				}
+				return nil, "", nil // throttled → stay silent
+			}
 			r, e := c.Handle(ctx)
-			return r, c.Meta().Name, e
+			return r, name, e
 		}
 	}
 	return nil, "", nil

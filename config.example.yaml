@@ -117,6 +117,21 @@ Security:
     whitelist: ["deadbeef1234..."]  # non-empty = only these keys
     blacklist: []
 
+Redirect:
+  # Steer flood-prone commands off busy channels: when a listed command arrives
+  # on a listed channel, the bot replies with the rule's message instead of
+  # running the command. DMs are never redirected. Commands are matched by their
+  # canonical name (the same names shown in .help / the command table).
+  enabled: false
+  cooldown_seconds: 60   # min seconds between identical notices per channel; 0 = no throttle
+  rules:
+    - on: ["Public"]                 # channels where the rule applies; empty = all channels
+      commands: [ping, trace]
+      message: "→ #ping-pong 🏓"
+    - on: ["Public"]
+      commands: [dice, num, hang, words, "8ball"]
+      message: "Игры → #games 🎮"
+
 Stats:
   # URL for the Let's Mesh edge-stats API (or a local snapshot for testing).
   # HTTP/HTTPS example: https://api-eu-v1.letsmesh.net/stats/edges?token=YOUR_TOKEN

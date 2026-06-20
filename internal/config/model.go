@@ -21,6 +21,24 @@ type SecurityConfig struct {
 	Direct   SecurityListConfig `yaml:"direct"`
 }
 
+// RedirectRule steers a set of commands away from busy channels: when a listed
+// command arrives on a listed channel, the bot replies with Message instead of
+// running the command. DMs are never redirected.
+type RedirectRule struct {
+	On       []string `yaml:"on"`       // channels where the rule applies; empty = all channels
+	Commands []string `yaml:"commands"` // canonical command names (Meta().Name), e.g. "ping", "dice"
+	Message  string   `yaml:"message"`  // notice sent instead of running the command
+}
+
+// RedirectConfig declutters flood-prone channels by pointing common commands at
+// dedicated channels. Cooldown throttles the notice itself so repeated commands
+// do not turn the redirect into new flood.
+type RedirectConfig struct {
+	Enabled  bool           `yaml:"enabled"`
+	Cooldown int            `yaml:"cooldown_seconds"` // min seconds between notices per channel+command; 0 = no throttle
+	Rules    []RedirectRule `yaml:"rules"`
+}
+
 // ShrinkLLMConfig configures the "llm" shrink variant. Type/Model are optional
 // overrides that inherit from the top-level LLM section when empty, so a light
 // model can shrink while a big model answers.
@@ -82,6 +100,7 @@ type Config struct {
 	Telegram   tgbridge.TelegramConfig `yaml:"Telegram"`
 	Trace      TraceConfig             `yaml:"Trace"`
 	Security   SecurityConfig          `yaml:"Security"`
+	Redirect   RedirectConfig          `yaml:"Redirect"`
 	Migration  MigrationConfig         `yaml:"Migration"`
 	Shrink     ShrinkConfig            `yaml:"Shrink"`
 	LLM        struct {
