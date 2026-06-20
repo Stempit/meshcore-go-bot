@@ -38,8 +38,8 @@ internal/
   helpers/              – small cross-command utilities (ClipRunes, HistoryDir)
   config/               – YAML config loader (singleton via sync.Once) + per-plugin Sectioner
   historylog/           – per-conversation append-only log files
-  llm/                  – Ollama and OpenRouter LLM providers
   bridge/               – external integrations
+    llm/                – Ollama and OpenRouter LLM providers
     mqttbridge/         – MQTT publishing to custom broker + Let's Mesh analyzer
     tgbridge/           – Telegram bot bridge (long-poll)
     picoclaw/           – picoclaw AI agent WebSocket client (used by .claw)

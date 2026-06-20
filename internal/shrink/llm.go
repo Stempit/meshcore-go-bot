@@ -4,7 +4,7 @@ import (
 	"strings"
 
 	"meshbot/internal/config"
-	"meshbot/internal/llm"
+	"meshbot/internal/bridge/llm"
 )
 
 // llmShrink compresses text with the configured shrink model, retrying against

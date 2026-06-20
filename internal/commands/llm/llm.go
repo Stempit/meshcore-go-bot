@@ -6,7 +6,7 @@ import (
 
 	"meshbot/internal/registry"
 	"meshbot/internal/config"
-	provider "meshbot/internal/llm"
+	provider "meshbot/internal/bridge/llm"
 	"meshbot/internal/logging"
 )
 
