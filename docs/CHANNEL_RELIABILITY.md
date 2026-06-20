@@ -3,7 +3,7 @@
 How the bot makes channel (group) replies actually reach the mesh, given that
 MeshCore channel messages have **no delivery acknowledgement**.
 
-All the logic lives in [`internal/meshcore_bt/client.go`](../internal/meshcore_bt/client.go);
+All the logic lives in [`internal/meshcore/client.go`](../internal/meshcore/client.go);
 the firmware it reasons about is vendored at [`MeshCore/`](../MeshCore/).
 
 ---
@@ -155,7 +155,7 @@ window setting.
 - **repeat / retransmit** — a *repeater node* rebroadcasting a packet across the
   network (a different, inbound concept). Deliberately not reused for our sends.
 
-## Code map (`internal/meshcore_bt/client.go`)
+## Code map (`internal/meshcore/client.go`)
 
 | Symbol | Role |
 |--------|------|

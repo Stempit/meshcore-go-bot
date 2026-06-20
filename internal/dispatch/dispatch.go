@@ -13,9 +13,9 @@ import (
 
 	"meshbot/internal/config"
 	"meshbot/internal/logging"
-	meshcore "meshbot/internal/meshcore_bt"
+	"meshbot/internal/meshcore"
 	"meshbot/internal/shrink"
-	"meshbot/internal/tgbridge"
+	"meshbot/internal/bridge/tgbridge"
 )
 
 var log = logging.For("bot")

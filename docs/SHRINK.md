@@ -236,11 +236,11 @@ internal/shrink/
   fit.go       – Fit, variant resolution, config validation, final cap
   split.go     – rune/space-aware splitter (cap 9), marker helpers
   truncate.go  – rune-safe truncate with ellipsis
-  llm.go       – LLM variant (wraps internal/llm), Split fallback
+  llm.go       – LLM variant (wraps internal/bridge/llm), Split fallback
   cyrlat.go    – lossless Cyrillic→Latin homoglyph pre-transform
 ```
 
-`shrink` imports only `internal/config` and `internal/llm`. It is imported by
+`shrink` imports only `internal/config` and `internal/bridge/llm`. It is imported by
 `cmd/bot` — **not by `commands`**, since handlers return raw text and all
 shrinking happens at the send sites. No import cycle: `llm` does not import
 `config`.

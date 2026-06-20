@@ -9,19 +9,21 @@ import (
 	"syscall"
 	"time"
 
-	"meshbot/internal/commands"
+	"meshbot/internal/bridge/mqttbridge"
+	"meshbot/internal/bridge/tgbridge"
+	_ "meshbot/internal/commands/allcommands" // self-registering command plugins
+	"meshbot/internal/commands/ticket"
 	"meshbot/internal/config"
 	"meshbot/internal/dispatch"
-	"meshbot/internal/games"
+	"meshbot/internal/support/games"
 	"meshbot/internal/greeter"
-	"meshbot/internal/historylog"
+	"meshbot/internal/support/historylog"
 	"meshbot/internal/logging"
-	meshcore "meshbot/internal/meshcore_bt"
+	"meshbot/internal/meshcore"
 	"meshbot/internal/migrator"
-	"meshbot/internal/mqttbridge"
 	"meshbot/internal/proxy"
+	"meshbot/internal/support/registry"
 	"meshbot/internal/shrink"
-	"meshbot/internal/tgbridge"
 )
 
 var log = logging.For("bot")
@@ -37,13 +39,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Per-plugin config: each registered command decodes its own section from
+	// the single config file (two-pass YAML). Fail loud on invalid values.
+	if err := registry.ConfigureAll(config.Sections()); err != nil {
+		log().Error("Failed to configure command plugins", "error", err)
+		os.Exit(1)
+	}
+
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
 	shrink.ValidateConfig()
-
-	// Load the .words anagram dictionary (best-effort; a missing file just
-	// disables the game with "Словарь недоступен", the rest of the bot runs).
-	_ = games.LoadWordsDict(config.Get().Words.DictPath)
 
 	proxyCfg := config.Get().Proxy
 	if err := proxy.Init(proxyCfg.Enabled, proxyCfg.URL); err != nil {
@@ -85,7 +90,7 @@ func main() {
 	client.SetHistoryLogger(histlog)
 
 	// mqtt init — optional. The bridge is constructed here, in the composition
-	// root, and attached to the client as a packet publisher; the meshcore_bt
+	// root, and attached to the client as a packet publisher; the meshcore
 	// driver itself has no dependency on the MQTT package.
 	mqttCfg := config.Get().MQTT
 	if bridge := startMQTTBridge(client, &mqttCfg); bridge != nil {
@@ -104,13 +109,13 @@ func main() {
 
 	// ─── Greet new nodes + hash migration nudge ───────────────────────────────
 
-	knownKeys, err := commands.NewKnownKeys("log/known.txt")
+	knownKeys, err := greeter.NewKnownKeys("log/known.txt")
 	if err != nil {
 		log().Error("Failed to load known keys", "error", err)
 		os.Exit(1)
 	}
 
-	if err := commands.InitTicketStore("log/tickets.txt"); err != nil {
+	if err := ticket.InitTicketStore("log/tickets.txt"); err != nil {
 		log().Error("Failed to load ticket store", "error", err)
 		os.Exit(1)
 	}
@@ -285,7 +290,9 @@ func startMQTTBridge(client *meshcore.MeshCoreClient, cfg *mqttbridge.MQTTConfig
 		bridge.SetDeviceInfo(mqttbridge.DeviceInfoFromMesh(info))
 	}
 	client.OnSelfInfo(func(info *meshcore.SelfInfo) { bridge.SetDeviceInfo(mqttbridge.DeviceInfoFromMesh(info)) })
-	client.OnStats(func(stats *meshcore.CompanionRadioStats) { bridge.SetDeviceStats(mqttbridge.DeviceStatsFromMesh(stats)) })
+	client.OnStats(func(stats *meshcore.CompanionRadioStats) {
+		bridge.SetDeviceStats(mqttbridge.DeviceStatsFromMesh(stats))
+	})
 
 	client.SetPacketPublisher(bridge)
 	return bridge
