@@ -24,13 +24,15 @@ cmd/bot/bot.go          – main entry point; wires everything together
 internal/
   meshcore_bt/          – BLE protocol driver (client.go is the main type)
   dispatch/             – inbound worker pool + serialized outbound sender;
-                          processDM/processChannelMessage call registry.Dispatch
-  commands/             – self-registering command plugins (one folder each)
+                          processDM/processChannelMessage parse .advert, then call registry.Dispatch
+  commands/             – self-registering command plugins (one folder each; no loose files)
     registry/           – the framework: Ctx, PingMeta, Meta, Command, Register, Dispatch, Help
     allcommands/        – aggregator: blank-imports every plugin so they self-register
     ping/ trace/ last/ news/ llm/ weather/ path/ top/ stat/ eightball/
     ticket/ help/ claw/ bbs/ dice/ num/ hang/ words/  – one command per folder
-    advert.go, greet.go – non-command code kept in package commands (advert parse, greeter)
+    advert/             – .advert parser; handled in the dispatch layer (needs the BLE
+                          client's SendSelfAdvert), so it is not a registry plugin
+  greeter/              – greets newly seen nodes; owns KnownKeys persistence + GreetMessage
   games/                – shared support layer for the game plugins (scope keying,
                           historylog leaderboard, round-result Announcer, NormalizeRu)
   helpers/              – small cross-command utilities (ClipRunes, HistoryDir)
