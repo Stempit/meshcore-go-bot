@@ -1,4 +1,4 @@
-package commands
+package greeter
 
 import (
 	"bufio"

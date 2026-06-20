@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"meshbot/internal/commands"
+	"meshbot/internal/commands/advert"
 	"meshbot/internal/commands/registry"
 	"meshbot/internal/config"
 	meshcore "meshbot/internal/meshcore_bt"
@@ -74,7 +74,7 @@ func (d *Dispatcher) processDM(m *meshcore.Message) {
 	}
 	defer d.inflight.done("dm:" + senderKeyHex)
 
-	if flood, ok := commands.ParseAdvertCommand(m.Text); ok {
+	if flood, ok := advert.ParseAdvertCommand(m.Text); ok {
 		log().Info("Sending advert", "flood", flood)
 		reply := "success"
 		if err := d.client.SendSelfAdvert(flood); err != nil {
@@ -163,7 +163,7 @@ func (d *Dispatcher) processChannelMessage(m *meshcore.ChannelMessage) {
 	}
 	defer d.inflight.done("ch:" + m.SenderName)
 
-	if flood, ok := commands.ParseAdvertCommand(m.Text); ok {
+	if flood, ok := advert.ParseAdvertCommand(m.Text); ok {
 		log().Info("Sending advert", "flood", flood)
 		reply := "success"
 		if err := d.client.SendSelfAdvert(flood); err != nil {

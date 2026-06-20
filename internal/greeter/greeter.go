@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"sync"
 
-	"meshbot/internal/commands"
 	"meshbot/internal/logging"
 	meshcore "meshbot/internal/meshcore_bt"
 )
@@ -23,7 +22,7 @@ type Sender func(ch *meshcore.Channel, text string, ack bool)
 // Register installs the device observers.
 type Greeter struct {
 	client *meshcore.MeshCoreClient
-	known  *commands.KnownKeys
+	known  *KnownKeys
 	send   Sender
 
 	// pendingGreets holds public-key hex strings of nodes whose advert arrived
@@ -35,7 +34,7 @@ type Greeter struct {
 
 // New returns a Greeter. known tracks already-greeted nodes and send queues
 // outgoing channel messages.
-func New(client *meshcore.MeshCoreClient, known *commands.KnownKeys, send Sender) *Greeter {
+func New(client *meshcore.MeshCoreClient, known *KnownKeys, send Sender) *Greeter {
 	return &Greeter{
 		client:  client,
 		known:   known,
@@ -106,7 +105,7 @@ func (g *Greeter) greet(contact *meshcore.Contact) {
 		log().Warn("Public channel 0 not available, skipping greeting")
 		return
 	}
-	msg := commands.GreetMessage(contact.Name, contact.PublicKey, contact.Type)
+	msg := GreetMessage(contact.Name, contact.PublicKey, contact.Type)
 	log().Info("New node seen, queuing greeting", "name", contact.Name, "type", contact.Type)
 	g.send(pubCh, msg, true)
 }

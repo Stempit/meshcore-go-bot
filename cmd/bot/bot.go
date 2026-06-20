@@ -9,7 +9,6 @@ import (
 	"syscall"
 	"time"
 
-	"meshbot/internal/commands"
 	_ "meshbot/internal/commands/allcommands" // self-registering command plugins
 	"meshbot/internal/commands/registry"
 	"meshbot/internal/commands/ticket"
@@ -110,7 +109,7 @@ func main() {
 
 	// ─── Greet new nodes + hash migration nudge ───────────────────────────────
 
-	knownKeys, err := commands.NewKnownKeys("log/known.txt")
+	knownKeys, err := greeter.NewKnownKeys("log/known.txt")
 	if err != nil {
 		log().Error("Failed to load known keys", "error", err)
 		os.Exit(1)
