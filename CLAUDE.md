@@ -60,6 +60,8 @@ Key environment variables:
 
 **Note:** the yaml key for LLM shrink retries is `shrink_max_retries` (fixed from the original typo `shrink_max_reties`).
 
+**Channel redirect:** the `Redirect` section steers flood-prone commands off busy channels — when a rule's command arrives on a listed channel, the bot replies with the rule's notice instead of running the command (DMs exempt). The gate lives in `registry.Dispatch` (before the handler runs, so no state mutates) with a per-channel cooldown on the notice itself. Rules match by canonical command name (`Meta().Name`).
+
 ## Key conventions
 
 - **All log messages in English.** Use `log/slog` with structured key-value pairs.
