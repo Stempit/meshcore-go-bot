@@ -1,7 +1,7 @@
 package weather
 
 import (
-	"meshbot/internal/registry"
+	"meshbot/internal/support/registry"
 	"meshbot/internal/config"
 	"meshbot/internal/logging"
 )

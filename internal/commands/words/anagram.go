@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"meshbot/internal/games"
-	"meshbot/internal/helpers"
+	"meshbot/internal/support/games"
+	"meshbot/internal/support/helpers"
 )
 
 // russian words from http://blog.kislenko.net/show.php?id=1678

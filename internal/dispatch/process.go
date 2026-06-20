@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"meshbot/internal/commands/advert"
-	"meshbot/internal/registry"
+	"meshbot/internal/support/registry"
 	"meshbot/internal/config"
 	"meshbot/internal/meshcore"
 	"meshbot/internal/shrink"

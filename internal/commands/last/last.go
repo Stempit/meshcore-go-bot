@@ -6,9 +6,9 @@ import (
 	"strconv"
 	"strings"
 
-	"meshbot/internal/registry"
-	"meshbot/internal/helpers"
-	"meshbot/internal/historylog"
+	"meshbot/internal/support/registry"
+	"meshbot/internal/support/helpers"
+	"meshbot/internal/support/historylog"
 )
 
 const (

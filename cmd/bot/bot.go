@@ -15,14 +15,14 @@ import (
 	"meshbot/internal/commands/ticket"
 	"meshbot/internal/config"
 	"meshbot/internal/dispatch"
-	"meshbot/internal/games"
+	"meshbot/internal/support/games"
 	"meshbot/internal/greeter"
-	"meshbot/internal/historylog"
+	"meshbot/internal/support/historylog"
 	"meshbot/internal/logging"
 	"meshbot/internal/meshcore"
 	"meshbot/internal/migrator"
 	"meshbot/internal/proxy"
-	"meshbot/internal/registry"
+	"meshbot/internal/support/registry"
 	"meshbot/internal/shrink"
 )
 

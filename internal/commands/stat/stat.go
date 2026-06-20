@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"meshbot/internal/registry"
-	"meshbot/internal/helpers"
-	"meshbot/internal/historylog"
+	"meshbot/internal/support/registry"
+	"meshbot/internal/support/helpers"
+	"meshbot/internal/support/historylog"
 )
 
 // statWindow is the trailing period summarised by ".stat".

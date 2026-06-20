@@ -8,10 +8,10 @@ import (
 	"strconv"
 	"strings"
 
-	"meshbot/internal/registry"
+	"meshbot/internal/support/registry"
 	"meshbot/internal/config"
-	"meshbot/internal/helpers"
-	"meshbot/internal/historylog"
+	"meshbot/internal/support/helpers"
+	"meshbot/internal/support/historylog"
 )
 
 const (

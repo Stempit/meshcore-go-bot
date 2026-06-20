@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"meshbot/internal/registry"
-	"meshbot/internal/games"
+	"meshbot/internal/support/registry"
+	"meshbot/internal/support/games"
 )
 
 func init() { registry.Register(plugin{}) }

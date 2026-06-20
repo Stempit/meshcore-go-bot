@@ -5,7 +5,7 @@ import (
 	"math/rand"
 	"time"
 
-	"meshbot/internal/registry"
+	"meshbot/internal/support/registry"
 )
 
 // eightBallAnswers are the 20 classic Magic 8-Ball responses, translated to
