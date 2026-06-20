@@ -2,7 +2,7 @@
 
 Status: **implemented**. The flat `internal/commands` package has been converted
 into self-registering, self-contained command modules ("plugins") under
-`internal/commands/<name>/`, driven by the `internal/commands/registry`
+`internal/commands/<name>/`, driven by the `internal/registry`
 framework. This document remains the design reference; see
 [NEW_COMMAND.md](NEW_COMMAND.md) for the day-to-day "add a command" workflow.
 
@@ -67,7 +67,7 @@ words plugin's `Configure`. This is the highest-effort migration step.
 
 ## The registry package
 
-A new package `internal/commands/registry` with no dependency on any individual
+A new package `internal/registry` with no dependency on any individual
 command (commands depend on it, never the reverse — this breaks the import cycle).
 
 ### Ctx — the unified handler input
@@ -378,7 +378,7 @@ After every phase: `go build ./... && go vet ./...` must pass.
 ## Open questions to confirm before coding
 
 1. **Package home for `Ctx`/`PingMeta`/`Meta`** — put them in
-   `internal/commands/registry`, or a tiny `internal/commands/types` to avoid
+   `internal/registry`, or a tiny `internal/commands/types` to avoid
    `dispatch` importing the registry's `Register`? (Leaning: registry; dispatch
    only needs `Ctx`, `Dispatch`, `PingMeta`.)
 2. **Games support package** — keep `internal/games` as the shared helper home

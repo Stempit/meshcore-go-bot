@@ -9,8 +9,9 @@ import (
 	"syscall"
 	"time"
 
+	"meshbot/internal/bridge/mqttbridge"
+	"meshbot/internal/bridge/tgbridge"
 	_ "meshbot/internal/commands/allcommands" // self-registering command plugins
-	"meshbot/internal/commands/registry"
 	"meshbot/internal/commands/ticket"
 	"meshbot/internal/config"
 	"meshbot/internal/dispatch"
@@ -20,10 +21,9 @@ import (
 	"meshbot/internal/logging"
 	"meshbot/internal/meshcore"
 	"meshbot/internal/migrator"
-	"meshbot/internal/mqttbridge"
 	"meshbot/internal/proxy"
+	"meshbot/internal/registry"
 	"meshbot/internal/shrink"
-	"meshbot/internal/tgbridge"
 )
 
 var log = logging.For("bot")

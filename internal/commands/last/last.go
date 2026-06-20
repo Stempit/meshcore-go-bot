@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"meshbot/internal/commands/registry"
+	"meshbot/internal/registry"
 	"meshbot/internal/helpers"
 	"meshbot/internal/historylog"
 )

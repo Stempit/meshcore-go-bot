@@ -4,7 +4,7 @@ package llm
 import (
 	"strings"
 
-	"meshbot/internal/commands/registry"
+	"meshbot/internal/registry"
 	"meshbot/internal/config"
 	provider "meshbot/internal/llm"
 	"meshbot/internal/logging"

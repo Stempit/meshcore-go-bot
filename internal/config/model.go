@@ -1,8 +1,8 @@
 package config
 
 import (
-	"meshbot/internal/mqttbridge"
-	"meshbot/internal/tgbridge"
+	"meshbot/internal/bridge/mqttbridge"
+	"meshbot/internal/bridge/tgbridge"
 )
 
 type TraceConfig struct {

@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"meshbot/internal/commands/registry"
+	"meshbot/internal/registry"
 )
 
 const newsDir = "log/news"

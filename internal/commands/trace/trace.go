@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"meshbot/internal/commands/registry"
+	"meshbot/internal/registry"
 )
 
 func init() { registry.Register(plugin{}) }

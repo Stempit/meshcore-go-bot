@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"meshbot/internal/commands/registry"
-	"meshbot/internal/picoclaw"
+	"meshbot/internal/registry"
+	"meshbot/internal/bridge/picoclaw"
 )
 
 // clawPriority sits above bbs (10) so a @[BotName] mention beats BBS mode.

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"meshbot/internal/commands/registry"
+	"meshbot/internal/registry"
 	"meshbot/internal/helpers"
 	"meshbot/internal/historylog"
 )

@@ -25,8 +25,8 @@ internal/
   meshcore/          – BLE protocol driver (client.go is the main type)
   dispatch/             – inbound worker pool + serialized outbound sender;
                           processDM/processChannelMessage parse .advert, then call registry.Dispatch
+  registry/             – the command framework: Ctx, PingMeta, Meta, Command, Register, Dispatch, Help
   commands/             – self-registering command plugins (one folder each; no loose files)
-    registry/           – the framework: Ctx, PingMeta, Meta, Command, Register, Dispatch, Help
     allcommands/        – aggregator: blank-imports every plugin so they self-register
     ping/ trace/ last/ news/ llm/ weather/ path/ top/ stat/ eightball/
     ticket/ help/ claw/ bbs/ dice/ num/ hang/ words/  – one command per folder
@@ -39,8 +39,10 @@ internal/
   config/               – YAML config loader (singleton via sync.Once) + per-plugin Sectioner
   historylog/           – per-conversation append-only log files
   llm/                  – Ollama and OpenRouter LLM providers
-  mqttbridge/           – MQTT publishing to custom broker + Let's Mesh analyzer
-  tgbridge/             – Telegram bot bridge (long-poll)
+  bridge/               – external integrations
+    mqttbridge/         – MQTT publishing to custom broker + Let's Mesh analyzer
+    tgbridge/           – Telegram bot bridge (long-poll)
+    picoclaw/           – picoclaw AI agent WebSocket client (used by .claw)
 ```
 
 The MeshCore BLE client (`internal/meshcore/client.go`) is the core dependency. Everything else depends on it.
@@ -82,7 +84,7 @@ log/
 ## Packages that need care
 
 - **`internal/meshcore/client.go`** (~2300 lines) – BLE protocol state machine. The `sentConfirmCh` channel is a single shared slot; only one send can be in flight at a time, so concurrent senders must serialise their sends.
-- **`internal/mqttbridge/bridge.go`** (~1700 lines) – manages multiple MQTT connections (custom broker + EU/US analyzers) with JWT auth (Ed25519). Changes here affect network-visible state.
+- **`internal/bridge/mqttbridge/bridge.go`** (~1700 lines) – manages multiple MQTT connections (custom broker + EU/US analyzers) with JWT auth (Ed25519). Changes here affect network-visible state.
 - **`internal/config/model.go`** – holds only **infra** config (Connection, Proxy, MQTT, Telegram, Security, Shrink, LLM, Trace, Migration). Adding a field requires a YAML tag; check for typos. **Per-command** config lives in the plugin folder instead: the plugin implements `registry.Configurable` and decodes its own section via `config.Sectioner` (two-pass YAML over the same single `config.yaml`).
 
 ## What the commands do

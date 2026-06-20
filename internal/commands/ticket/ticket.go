@@ -11,7 +11,7 @@ import (
 	"strings"
 	"sync"
 
-	"meshbot/internal/commands/registry"
+	"meshbot/internal/registry"
 )
 
 var firstWords = []string{

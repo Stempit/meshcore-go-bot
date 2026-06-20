@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"meshbot/internal/commands/registry"
+	"meshbot/internal/registry"
 	"meshbot/internal/proxy"
 )
 
