@@ -78,7 +78,13 @@ func processNum(text, senderKey, senderName, channelName string) ([]string, erro
 
 	switch verb {
 	case "", "start":
-		return numStart(scope, strings.Join(fields[1:], " "))
+		// Guard the slice: a bare ".num" yields an empty fields, so fields[1:]
+		// would panic. Only "start [max]" carries an argument after the verb.
+		arg := ""
+		if len(fields) > 1 {
+			arg = strings.Join(fields[1:], " ")
+		}
+		return numStart(scope, arg)
 	case "status":
 		return numStatus(scope)
 	case "end":
