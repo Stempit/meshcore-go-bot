@@ -22,9 +22,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"meshbot/internal/proxy"
+
 	"filippo.io/edwards25519"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
-	"meshbot/internal/proxy"
 )
 
 // regexp for sanitizing client IDs (MQTT spec: alphanumeric, dash, underscore, max 23 chars)
@@ -1228,7 +1229,7 @@ func (b *MQTTBridge) publishStatus() {
 	b.publishAnalyzers(topic, jsonData, true)
 
 	b.lastStatusPublish = time.Now()
-	b.logger.Info("Status published", "topic", topic,
+	b.logger.Debug("Status published", "topic", topic,
 		"lat", mqttStatus.Lat, "lon", mqttStatus.Lon,
 		"tx_power", mqttStatus.TxPower,
 		"has_stats", mqttStatus.Stats != nil)
