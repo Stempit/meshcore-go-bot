@@ -7,10 +7,10 @@ import (
 	"time"
 
 	"meshbot/internal/commands/advert"
-	"meshbot/internal/support/registry"
 	"meshbot/internal/config"
 	"meshbot/internal/meshcore"
 	"meshbot/internal/shrink"
+	"meshbot/internal/support/registry"
 )
 
 // inflightSet tracks senders that currently have a command being processed, so
@@ -104,7 +104,7 @@ func (d *Dispatcher) processDM(m *meshcore.Message) {
 }
 
 func (d *Dispatcher) processChannelMessage(m *meshcore.ChannelMessage) {
-	log().Info("Channel message received", "channel", m.ChannelIndex, "sender", m.SenderName, "text", m.Text)
+	log().Debug("Channel message received", "channel", m.ChannelIndex, "sender", m.SenderName, "text", m.Text)
 
 	channels := d.client.GetChannels()
 	channel, ok := channels[m.ChannelIndex]
