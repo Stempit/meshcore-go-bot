@@ -1,5 +1,5 @@
 // Package advert parses the .advert command. Unlike the registry command
-// plugins, .advert is handled in the dispatch layer (it drives the BLE client's
+// plugins, .advert is handled in the dispatch layer (it drives the MeshCore client's
 // SendSelfAdvert, which command plugins have no access to), so this package
 // exposes only a parser that dispatch calls before registry.Dispatch.
 package advert

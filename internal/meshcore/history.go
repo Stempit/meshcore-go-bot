@@ -8,7 +8,7 @@ import "time"
 // call is guarded by a nil check.
 //
 // Keeping this an interface (rather than importing a concrete logger) means the
-// BLE/serial driver has no dependency on the historylog package: the composition
+// MeshCore driver has no dependency on the historylog package: the composition
 // root (cmd/bot) constructs the logger and wires it in, and the driver can be
 // built and used without history logging at all.
 type HistoryLogger interface {

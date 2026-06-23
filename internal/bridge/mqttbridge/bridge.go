@@ -695,7 +695,7 @@ func (b *MQTTBridge) QueuePacket(rawData []byte, isTX bool, snr, rssi float64) {
 }
 
 // QueueChannelPacket queues a raw RF packet that has been correlated with a
-// decoded BLE channel message frame. The decoded fields (channel name, sender
+// decoded channel message frame. The decoded fields (channel name, sender
 // name, message text) are embedded in the published JSON so the web UI can
 // display them without needing to parse or decrypt the raw bytes.
 func (b *MQTTBridge) QueueChannelPacket(rawData []byte, isTX bool, snr, rssi float64, channelIndex int, channelName, senderName, text, channelKeyHex string) {
@@ -810,7 +810,7 @@ func getPathLenByte(data []byte) uint8 {
 
 // signalQueue wakes the publisher goroutine. It never blocks: notifyCh is
 // buffered to depth 1, so if a wake-up is already pending this is a no-op and
-// the enqueuing caller (the BLE receive path) is never stalled on MQTT.
+// the enqueuing caller (the receive path) is never stalled on MQTT.
 func (b *MQTTBridge) signalQueue() {
 	select {
 	case b.notifyCh <- struct{}{}:

@@ -6,7 +6,7 @@ package meshcore
 // attached — every publish call is guarded by a nil check.
 //
 // Keeping this an interface (rather than importing a concrete bridge) means the
-// BLE/serial driver has no dependency on the MQTT package: the composition root
+// MeshCore driver has no dependency on the MQTT package: the composition root
 // (cmd/bot) constructs the bridge and wires it in, and the driver can be built
 // and used without MQTT at all.
 type PacketPublisher interface {

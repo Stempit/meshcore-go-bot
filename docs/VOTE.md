@@ -82,7 +82,7 @@ The poll auto-closes after `vote.round_sec` seconds (default 180). On timeout,
 3. Render results and delete the poll under the lock.
 4. **Release `pollMu`**, then call `games.Announce(scope, results)`.
 
-`games.Announce` resolves the scope to the channel and enqueues messages over BLE
+`games.Announce` resolves the scope to the channel and enqueues messages over the radio
 — this must not run while holding `pollMu`. The same pattern is used by `.words`.
 
 The announcer is wired at startup in `cmd/bot/bot.go`:
