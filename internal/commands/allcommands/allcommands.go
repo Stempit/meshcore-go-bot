@@ -25,6 +25,7 @@ import (
 	_ "meshbot/internal/commands/ticket"
 	_ "meshbot/internal/commands/top"
 	_ "meshbot/internal/commands/trace"
+	_ "meshbot/internal/commands/vote"
 	_ "meshbot/internal/commands/weather"
 	_ "meshbot/internal/commands/words"
 )
