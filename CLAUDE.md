@@ -1,6 +1,6 @@
 # meshbot
 
-A MeshCore mesh-radio bot. Bridges a Bluetooth LE MeshCore device to Telegram, MQTT brokers, RSS feeds, and an LLM. Responds to `.ping`, `.trace`, `.last`, `.llm`, and `.news` commands over mesh radio.
+A MeshCore mesh-radio bot. Bridges a MeshCore device to Telegram, MQTT brokers, RSS feeds, and an LLM. Responds to `.ping`, `.trace`, `.last`, `.llm`, and `.news` commands over mesh radio.
 
 ## Build & run
 
@@ -9,7 +9,7 @@ go build ./...                    # build everything
 go build ./cmd/bot                # build the main bot
 
 go run ./cmd/bot                  # run the bot (reads config.yaml in CWD)
-go run ./cmd/example              # run the BLE example harness
+go run ./cmd/example              # run the example harness
 go run ./cmd/llm                  # run the LLM prompt test utility
 
 go vet ./...                      # static analysis
@@ -22,14 +22,14 @@ There are no automated tests. Manual testing uses `cmd/example` and `cmd/llm`.
 ```
 cmd/bot/bot.go          – main entry point; wires everything together
 internal/
-  meshcore/          – BLE protocol driver (client.go is the main type)
+  meshcore/          – MeshCore protocol driver (client.go is the main type)
   dispatch/             – inbound worker pool + serialized outbound sender;
                           processDM/processChannelMessage parse .advert, then call registry.Dispatch
   commands/             – self-registering command plugins (one folder each; no loose files)
     allcommands/        – aggregator: blank-imports every plugin so they self-register
     ping/ trace/ last/ news/ llm/ weather/ path/ top/ stat/ eightball/
     ticket/ help/ claw/ bbs/ dice/ num/ hang/ words/  – one command per folder
-    advert/             – .advert parser; handled in the dispatch layer (needs the BLE
+    advert/             – .advert parser; handled in the dispatch layer (needs the
                           client's SendSelfAdvert), so it is not a registry plugin
   support/              – shared framework + support layer sitting above commands/
     registry/           – the command framework: Ctx, PingMeta, Meta, Command, Register, Dispatch, Help
@@ -46,9 +46,9 @@ internal/
     picoclaw/           – picoclaw AI agent WebSocket client (used by .claw)
 ```
 
-The MeshCore BLE client (`internal/meshcore/client.go`) is the core dependency. Everything else depends on it.
+The MeshCore client (`internal/meshcore/client.go`) is the core dependency. Everything else depends on it.
 
-Message flow: BLE device → `client.IncomingMessages()` channel → `processDM` / `processChannelMessage` in `internal/dispatch` → `registry.Dispatch` → first matching plugin's `Handle` → reply sent back over BLE.
+Message flow: MeshCore device → `client.IncomingMessages()` channel → `processDM` / `processChannelMessage` in `internal/dispatch` → `registry.Dispatch` → first matching plugin's `Handle` → reply sent back over radio.
 
 ## Configuration
 

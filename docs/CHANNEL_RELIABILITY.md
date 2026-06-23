@@ -161,7 +161,7 @@ window setting.
 |--------|------|
 | `SendChannelMessageWithRetry` | Entry point: arm watch, transmit up to N times, stop early on mesh repeat |
 | `sendChannelOnce` | One transmission + wait for device `OK` (fixed timestamp) |
-| `sendChannelTextMessageTS` | BLE write with a caller-supplied timestamp |
+| `sendChannelTextMessageTS` | Write with a caller-supplied timestamp |
 | `buildGRPTXTPacket` | Deterministic GRP_TXT packet (AES-ECB + HMAC); also used by MQTT TX |
 | `packetHash` | `SHA256(payloadType ‖ payload)[:8]` — the firmware dedup hash |
 | `rawFramePayload` | Extract payloadType + payload from a raw `0x88` frame |

@@ -276,7 +276,7 @@ func (c *MeshCoreClient) SendMessage(contact *Contact, text string) error {
 
 // channelTxGap is the pause between successive transmissions of the same
 // channel packet when adaptive listening is unavailable. It spaces the
-// transmissions out on air without flooding the device's BLE command path or
+// transmissions out on air without flooding the device's command path or
 // its TX duty-cycle budget.
 const channelTxGap = 3 * time.Second
 
@@ -422,7 +422,7 @@ func (c *MeshCoreClient) sendChannelOnce(channelIndex byte, text string, timesta
 			time.Sleep(2 * time.Second)
 		}
 
-		// Register BEFORE the BLE write so we cannot miss a fast response.
+		// Register BEFORE the write so we cannot miss a fast response.
 		confirmCh := make(chan error, 1)
 		c.confirmMu.Lock()
 		c.sentConfirmCh = confirmCh

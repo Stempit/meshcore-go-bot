@@ -96,7 +96,7 @@ Design choices that matter under mesh latency:
   change the result.
 - **No timeout.** A round stays open until someone runs `.dice end`. There is
   deliberately no auto-expiry — handlers are request→response and have no handle
-  to the BLE send layer, so they cannot push an unsolicited "round over"
+  to the send layer, so they cannot push an unsolicited "round over"
   message. (An earlier lazy-TTL version was removed for being surprising: it
   only fired on the *next* `.dice` command and silently discarded the round.)
   Trade-off: a round nobody ends lingers in the map until restart, and

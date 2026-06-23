@@ -192,7 +192,7 @@ func voteEnd(scope, channelName string) ([]string, error) {
 // voteOnTimeout is the AfterFunc callback. It bails on a stale fire (the poll was
 // ended/restarted, so it is gone or carries a different token), finalizes under
 // the lock, then announces the results after releasing pollMu — Announce resolves
-// the scope and enqueues over BLE, which must not run while holding the lock.
+// the scope and enqueues over the radio, which must not run while holding the lock.
 func voteOnTimeout(scope string, token uint64) {
 	pollMu.Lock()
 	p := polls[scope]

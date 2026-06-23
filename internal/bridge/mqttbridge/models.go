@@ -172,7 +172,7 @@ type MQTTPacket struct {
 	Path       string `json:"path,omitempty"` // Routing path for direct packets
 
 	// Decoded channel message fields — present only when the raw packet was
-	// identified as a channel message and correlated with the BLE 0x11 frame.
+	// identified as a channel message and correlated with the 0x11 channel message frame.
 	ChannelIndex *int   `json:"channel_index,omitempty"` // Channel number (0-based)
 	ChannelName  string `json:"channel_name,omitempty"`  // Channel display name
 	SenderName   string `json:"sender_name,omitempty"`   // Sender display name
@@ -199,7 +199,7 @@ type QueuedPacket struct {
 	Hash      string    // Packet hash for deduplication
 
 	// Decoded message fields — populated when a 0x88 raw frame is correlated
-	// with a 0x11 BLE channel message frame from the same radio packet.
+	// with the 0x11 channel message frame from the same radio packet.
 	IsChannelMessage bool
 	ChannelIndex     int
 	ChannelName      string

@@ -25,7 +25,7 @@ dispatch ──▶ commands, config, meshcore, tgbridge, shrink
 ## Message flow
 
 ```
-BLE device
+MeshCore device
    │  client.IncomingMessages()  (*meshcore.Message | *meshcore.ChannelMessage)
    ▼
 cmd/bot live forwarder ──▶ d.Submit(msg)
@@ -42,7 +42,7 @@ d.Enqueue(Outgoing{…})
    ▼
 d.outgoing (buffered chan, cap 64)
    ▼
-runSender  ── one at a time, paced ──▶ client.Send…WithRetry ──▶ BLE device
+runSender  ── one at a time, paced ──▶ client.Send…WithRetry ──▶ MeshCore device
 ```
 
 Both **stored** messages (replayed once at startup) and **live** messages go
@@ -63,7 +63,7 @@ d.Run(ctx)                // starts the sender + worker goroutines, returns imme
 
 | Method | Purpose |
 |---|---|
-| `New(client)` | Build a dispatcher bound to the BLE client. |
+| `New(client)` | Build a dispatcher bound to the MeshCore client. |
 | `SetTelegram(tgb)` | Attach a Telegram bridge for channel forwarding (`nil` disables). |
 | `AddObserver(o)` | Register an `Observer` notified of every received message. Call before `Run`. |
 | `Submit(msg)` | Feed an incoming `*meshcore.Message` / `*meshcore.ChannelMessage` into the pipeline. |

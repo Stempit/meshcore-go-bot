@@ -153,7 +153,7 @@ func errCodeName(code byte) string {
 	}
 }
 
-// sendChannelTextMessage returns the timestamp embedded in the BLE command so
+// sendChannelTextMessage returns the timestamp embedded in the command so
 // callers can build a matching synthetic RF packet with the same timestamp.
 func (c *MeshCoreClient) sendChannelTextMessage(channelIndex byte, text string) (uint32, error) {
 	return c.sendChannelTextMessageTS(channelIndex, text, uint32(time.Now().Unix()))
@@ -441,11 +441,11 @@ func (c *MeshCoreClient) markDisconnected() {
 		c.logger.Warn("Serial connection lost; reconnection required")
 	} else if c.device != nil {
 		_ = c.device.Disconnect()
-		c.logger.Warn("BLE connection lost; reconnection required")
+		c.logger.Warn("Connection lost; reconnection required")
 	}
 }
 
-// IsConnected reports whether the client currently has an active BLE connection.
+// IsConnected reports whether the client currently has an active connection.
 func (c *MeshCoreClient) IsConnected() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
