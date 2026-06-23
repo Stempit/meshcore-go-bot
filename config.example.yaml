@@ -166,3 +166,14 @@ words:
   base_max_len: 10   # longest base word in letters; 0/unset = default 10
   # To wrap (rather than truncate) an overlong results line, add:
   #   Shrink.overrides.words: split
+
+vote:
+  # ".vote" — a per-channel group poll: open with a question and options, each
+  # sender gets one changeable, anonymous vote, results auto-post when the timer
+  # fires or anyone runs ".vote end". Channels only. Opt-in: stays off until
+  # enabled.
+  enabled: false
+  round_sec: 180     # auto-close countdown per poll; 0 or unset = default 180 (3 min)
+  max_options: 6     # max options per poll; 0 or unset = default 6
+  # The results list is multi-line; to wrap (rather than truncate) it, add:
+  #   Shrink.overrides.vote: split
