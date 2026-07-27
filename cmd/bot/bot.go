@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"meshbot/internal/bridge/alerts"
 	"meshbot/internal/bridge/mqttbridge"
 	"meshbot/internal/bridge/tgbridge"
 	_ "meshbot/internal/commands/allcommands" // self-registering command plugins
@@ -163,6 +164,29 @@ func main() {
 		}
 	}
 	d.SetTelegram(tgb)
+
+	// ─── FPV/UAV alert bridge ──────────────────────────────────────────────────
+
+	if alertsCfg := config.Get().Alerts; alertsCfg.Enabled {
+		ab, err := alerts.New(alertsCfg, slog.Default(), proxy.HTTPClient())
+		if err != nil {
+			log().Error("Failed to start alerts bridge", "error", err)
+		} else {
+			ab.OnEvent(func(ev alerts.Event) {
+				ch := client.GetChannelByName(alertsCfg.Channel)
+				if ch == nil {
+					log().Warn("Alerts bridge: meshcore channel not found", "name", alertsCfg.Channel)
+					return
+				}
+				text := ev.Date[:5] + " " + ev.Time + " " + ev.Title
+				for _, part := range shrink.Fit("alerts", "", []string{text}) {
+					d.Enqueue(dispatch.Outgoing{Channel: ch, Text: part, Ack: false})
+				}
+			})
+			go ab.Start()
+			defer ab.Stop()
+		}
+	}
 
 	// Start the engine now that all subsystems are wired in.
 	d.Run(ctx)

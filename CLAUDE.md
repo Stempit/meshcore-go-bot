@@ -43,6 +43,9 @@ internal/
     llm/                – Ollama and OpenRouter LLM providers
     mqttbridge/         – MQTT publishing to custom broker + Let's Mesh analyzer
     tgbridge/           – Telegram bot bridge (long-poll)
+    alerts/             – polls an FPV/UAV alert site (bplarussia.ru) and announces new
+                          incidents to a mesh channel; no meshcore/dispatch dependency,
+                          delivery via an injected OnEvent callback (same shape as tgbridge)
     picoclaw/           – picoclaw AI agent WebSocket client (used by .claw)
 ```
 
@@ -61,6 +64,8 @@ Key environment variables:
 **Note:** the yaml key for LLM shrink retries is `shrink_max_retries` (fixed from the original typo `shrink_max_reties`).
 
 **Channel redirect:** the `Redirect` section steers flood-prone commands off busy channels — when a rule's command arrives on a listed channel, the bot replies with the rule's notice instead of running the command (DMs exempt). The gate lives in `registry.Dispatch` (before the handler runs, so no state mutates) with a per-channel cooldown on the notice itself. Rules match by canonical command name (`Meta().Name`).
+
+**FPV/UAV alerts:** the `Alerts` section (opt-in, `enabled: false` by default) points `internal/bridge/alerts` at a region page on bplarussia.ru and a target `channel` that must already exist on the MeshCore device. It polls on `poll_interval_sec`, silently seeds its seen-set from whatever's already on the page on first run (so history isn't dumped into the channel), and afterwards announces only new incidents — title only, no description, to stay within the mesh's tight per-message byte limit — capped at `max_per_poll` per tick to avoid flooding after downtime. Dedup state lives in `log/alerts/seen.txt`.
 
 ## Key conventions
 
@@ -82,13 +87,14 @@ log/
     dm/<name>.txt         – direct-message history
   known.txt               – greeted node public keys (hex, one per line)
   news/<feed>.txt         – RSS items written by the separate newswire app (https://github.com/Stempit/newswire); read by .news
+  alerts/seen.txt         – permalinks of FPV/UAV alert incidents already seen/announced
 ```
 
 ## Packages that need care
 
 - **`internal/meshcore/client.go`** (~2300 lines) – BLE protocol state machine. The `sentConfirmCh` channel is a single shared slot; only one send can be in flight at a time, so concurrent senders must serialise their sends.
 - **`internal/bridge/mqttbridge/bridge.go`** (~1700 lines) – manages multiple MQTT connections (custom broker + EU/US analyzers) with JWT auth (Ed25519). Changes here affect network-visible state.
-- **`internal/config/model.go`** – holds only **infra** config (Connection, Proxy, MQTT, Telegram, Security, Shrink, LLM, Trace, Migration). Adding a field requires a YAML tag; check for typos. **Per-command** config lives in the plugin folder instead: the plugin implements `registry.Configurable` and decodes its own section via `config.Sectioner` (two-pass YAML over the same single `config.yaml`).
+- **`internal/config/model.go`** – holds only **infra** config (Connection, Proxy, MQTT, Telegram, Alerts, Security, Shrink, LLM, Trace, Migration). Adding a field requires a YAML tag; check for typos. **Per-command** config lives in the plugin folder instead: the plugin implements `registry.Configurable` and decodes its own section via `config.Sectioner` (two-pass YAML over the same single `config.yaml`).
 
 ## What the commands do
 

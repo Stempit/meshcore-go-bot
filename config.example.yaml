@@ -96,6 +96,13 @@ Weather:
   default_location: "Moscow"  # used when .w is called with no argument
   units: metric               # metric (°C, m/s) or imperial (°F, mph)
 
+Alerts:
+  enabled: false
+  url: "https://bplarussia.ru/region/kirovskaya-oblast"
+  channel: "#alerts"        # must already exist as a MeshCore channel on the device
+  poll_interval_sec: 60
+  max_per_poll: 3           # cap on new incidents announced per poll, to avoid flooding after downtime
+
 Trace:
   use_config_coords: false  # использование предзаданных координат
   lat: 0
