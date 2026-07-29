@@ -21,9 +21,9 @@ type Event struct {
 // bplarussia.ru region pages. Verified against the live site's markup.
 const articleClassPrefix = "bg-white rounded-xl shadow-sm border border-gray-200"
 
-// fetchEvents retrieves and parses the alert page, returning events oldest-first
-// (the page itself lists newest-first).
-func fetchEvents(ctx context.Context, httpClient *http.Client, pageURL string) ([]Event, error) {
+// fetchHTMLCards retrieves and parses a bplarussia.ru-style incident page,
+// returning events oldest-first (the page itself lists newest-first).
+func fetchHTMLCards(ctx context.Context, httpClient *http.Client, pageURL string) ([]Event, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)

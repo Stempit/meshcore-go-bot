@@ -43,9 +43,10 @@ internal/
     llm/                – Ollama and OpenRouter LLM providers
     mqttbridge/         – MQTT publishing to custom broker + Let's Mesh analyzer
     tgbridge/           – Telegram bot bridge (long-poll)
-    alerts/             – polls an FPV/UAV alert site (bplarussia.ru) and announces new
-                          incidents to a mesh channel; no meshcore/dispatch dependency,
-                          delivery via an injected OnEvent callback (same shape as tgbridge)
+    alerts/             – polls one or more hazard-alert sources (bplarussia.ru FPV/UAV
+                          incident cards, МЧС RSS feeds) and announces new items to a mesh
+                          channel; no meshcore/dispatch dependency, delivery via an injected
+                          OnEvent callback (same shape as tgbridge)
     picoclaw/           – picoclaw AI agent WebSocket client (used by .claw)
 ```
 
@@ -65,7 +66,7 @@ Key environment variables:
 
 **Channel redirect:** the `Redirect` section steers flood-prone commands off busy channels — when a rule's command arrives on a listed channel, the bot replies with the rule's notice instead of running the command (DMs exempt). The gate lives in `registry.Dispatch` (before the handler runs, so no state mutates) with a per-channel cooldown on the notice itself. Rules match by canonical command name (`Meta().Name`).
 
-**FPV/UAV alerts:** the `Alerts` section (opt-in, `enabled: false` by default) points `internal/bridge/alerts` at a region page on bplarussia.ru and a target `channel` that must already exist on the MeshCore device. It polls on `poll_interval_sec`, silently seeds its seen-set from whatever's already on the page on first run (so history isn't dumped into the channel), and afterwards announces only new incidents — title only, no description, to stay within the mesh's tight per-message byte limit — capped at `max_per_poll` per tick to avoid flooding after downtime. Dedup state lives in `log/alerts/seen.txt`.
+**Hazard alerts:** the `Alerts` section (opt-in, `enabled: false` by default) configures `internal/bridge/alerts` with a list of independent `sources`, each with its own `type` (`html_cards` for bplarussia.ru-style incident pages, `rss` for standard RSS feeds), `url`, target `channel` (must already exist on the MeshCore device), `poll_interval_sec`, and `max_per_poll`. An optional `title_prefix` filters an RSS/HTML source down to items whose title starts with it — e.g. the shipped `mchs` source uses `title_prefix: "Внимание"` to keep only genuine МЧС hazard warnings and skip routine daily reports. Each source silently seeds its own seen-set from whatever's already there on first run (so history isn't dumped into the channel), then announces only new items — title only, no description, to stay within the mesh's tight per-message byte limit — capped at `max_per_poll` per poll to avoid flooding after downtime. Dedup state lives in `log/alerts/<source name>.txt`.
 
 ## Key conventions
 
@@ -87,7 +88,7 @@ log/
     dm/<name>.txt         – direct-message history
   known.txt               – greeted node public keys (hex, one per line)
   news/<feed>.txt         – RSS items written by the separate newswire app (https://github.com/Stempit/newswire); read by .news
-  alerts/seen.txt         – permalinks of FPV/UAV alert incidents already seen/announced
+  alerts/<name>.txt       – ids of alert items already seen/announced, one file per configured source
 ```
 
 ## Packages that need care
