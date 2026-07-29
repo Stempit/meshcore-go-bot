@@ -53,6 +53,9 @@ func New(cfg Config, logger *slog.Logger, httpClient *http.Client) (*Bridge, err
 	}
 
 	for _, sc := range cfg.Sources {
+		if !sc.Enabled {
+			continue
+		}
 		if sc.PollIntervalSec <= 0 {
 			sc.PollIntervalSec = defaultPollIntervalSec
 		}

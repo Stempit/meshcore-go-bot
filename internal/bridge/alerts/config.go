@@ -3,12 +3,12 @@ package alerts
 // Config holds the alert poller's settings: a list of independent sources,
 // each polled on its own schedule and routed to its own mesh channel.
 type Config struct {
-	Enabled bool           `yaml:"enabled"`
 	Sources []SourceConfig `yaml:"sources"`
 }
 
 // SourceConfig describes one alert source to poll.
 type SourceConfig struct {
+	Enabled         bool   `yaml:"enabled"`
 	Name            string `yaml:"name"` // used for logging and the seen-ids file name, e.g. "bpla", "mchs"
 	Type            string `yaml:"type"` // "html_cards" (bplarussia.ru-style incident cards) | "rss"
 	URL             string `yaml:"url"`

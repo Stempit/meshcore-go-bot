@@ -167,7 +167,7 @@ func main() {
 
 	// ─── FPV/UAV alert bridge ──────────────────────────────────────────────────
 
-	if alertsCfg := config.Get().Alerts; alertsCfg.Enabled {
+	if alertsCfg := config.Get().Alerts; len(alertsCfg.Sources) > 0 {
 		ab, err := alerts.New(alertsCfg, slog.Default(), proxy.HTTPClient())
 		if err != nil {
 			log().Error("Failed to start alerts bridge", "error", err)
