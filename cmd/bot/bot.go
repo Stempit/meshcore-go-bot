@@ -16,15 +16,15 @@ import (
 	"meshbot/internal/commands/ticket"
 	"meshbot/internal/config"
 	"meshbot/internal/dispatch"
-	"meshbot/internal/support/games"
 	"meshbot/internal/greeter"
-	"meshbot/internal/support/historylog"
 	"meshbot/internal/logging"
 	"meshbot/internal/meshcore"
 	"meshbot/internal/migrator"
 	"meshbot/internal/proxy"
-	"meshbot/internal/support/registry"
 	"meshbot/internal/shrink"
+	"meshbot/internal/support/games"
+	"meshbot/internal/support/historylog"
+	"meshbot/internal/support/registry"
 )
 
 var log = logging.For("bot")
@@ -178,7 +178,7 @@ func main() {
 					log().Warn("Alerts bridge: meshcore channel not found", "source", sourceName, "name", channelName)
 					return
 				}
-				text := ev.Date[:5] + " " + ev.Time + " " + ev.Title
+				text := ev.Title
 				if postfix != "" {
 					text += postfix
 				}
