@@ -16,4 +16,5 @@ type SourceConfig struct {
 	PollIntervalSec int    `yaml:"poll_interval_sec"` // default 60
 	MaxPerPoll      int    `yaml:"max_per_poll"`      // default 3
 	TitlePrefix     string `yaml:"title_prefix"`      // optional: skip items whose title doesn't start with this (e.g. "Внимание")
+	Postfix         string `yaml:"postfix"`           // optional: appended as-is to the announced message text (include your own separator, e.g. " #bpla")
 }

@@ -105,6 +105,7 @@ Alerts:
       channel: "#alerts"         # must already exist as a MeshCore channel on the device
       poll_interval_sec: 60
       max_per_poll: 3            # cap on new items announced per poll, to avoid flooding after downtime
+      postfix: " #БПЛА"          # optional: appended as-is to the announced message text
     - enabled: false
       name: mchs
       type: rss
@@ -113,6 +114,7 @@ Alerts:
       poll_interval_sec: 300
       max_per_poll: 3
       title_prefix: "Внимание"   # only forward genuine hazard warnings, skip routine daily reports
+      postfix: " #МЧС"
 
 Trace:
   use_config_coords: false  # использование предзаданных координат

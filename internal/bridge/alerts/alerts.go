@@ -38,7 +38,7 @@ type Bridge struct {
 	httpClient *http.Client
 	logger     *slog.Logger
 	sources    []*source
-	onEvent    func(sourceName, channel string, ev Event)
+	onEvent    func(sourceName, channel, postfix string, ev Event)
 	done       chan struct{}
 	wg         sync.WaitGroup
 }
@@ -85,8 +85,10 @@ func New(cfg Config, logger *slog.Logger, httpClient *http.Client) (*Bridge, err
 }
 
 // OnEvent registers the callback invoked for each new item (oldest first per
-// poll), identifying which source and channel it came from.
-func (b *Bridge) OnEvent(fn func(sourceName, channel string, ev Event)) {
+// poll), identifying which source and channel it came from. postfix is the
+// source's configured Postfix (may be empty) for the caller to append to the
+// announced message text.
+func (b *Bridge) OnEvent(fn func(sourceName, channel, postfix string, ev Event)) {
 	b.onEvent = fn
 }
 
@@ -172,7 +174,7 @@ func (b *Bridge) poll(s *source) {
 
 	for _, ev := range fresh {
 		if b.onEvent != nil {
-			b.onEvent(s.cfg.Name, s.cfg.Channel, ev)
+			b.onEvent(s.cfg.Name, s.cfg.Channel, s.cfg.Postfix, ev)
 		}
 	}
 }

@@ -172,13 +172,16 @@ func main() {
 		if err != nil {
 			log().Error("Failed to start alerts bridge", "error", err)
 		} else {
-			ab.OnEvent(func(sourceName, channelName string, ev alerts.Event) {
+			ab.OnEvent(func(sourceName, channelName, postfix string, ev alerts.Event) {
 				ch := client.GetChannelByName(channelName)
 				if ch == nil {
 					log().Warn("Alerts bridge: meshcore channel not found", "source", sourceName, "name", channelName)
 					return
 				}
 				text := ev.Date[:5] + " " + ev.Time + " " + ev.Title
+				if postfix != "" {
+					text += postfix
+				}
 				for _, part := range shrink.Fit("alerts", "", []string{text}) {
 					d.Enqueue(dispatch.Outgoing{Channel: ch, Text: part, Ack: false})
 				}
