@@ -1,6 +1,6 @@
 // Package shrink centralizes fitting bot replies into the MeshCore 140-byte
 // message limit. Its entire public surface is Fit: every send path calls it
-// once. See docs/SHRINK.md for the design.
+// once. See README.md for the design.
 package shrink
 
 import (
