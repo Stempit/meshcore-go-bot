@@ -1,4 +1,9 @@
 ---
+# Bot-wide UI language for command replies and help text: "en" or "ru".
+# Empty/omitted defaults to "en". Commands not yet migrated to i18n keep their
+# own hardcoded text regardless of this setting. Restart to apply.
+Language: ru
+
 Connection:
   # Transport type: "bt" (Bluetooth LE, default) or "serial" (USB/UART)
   type: bt

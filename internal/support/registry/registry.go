@@ -47,6 +47,14 @@ type Matcher interface {
 	Matches(Ctx) bool
 }
 
+// Localized is an optional interface for a command that translates its own long
+// help (".<cmd> help") per language. A non-empty return overrides Meta().HelpLong;
+// an empty return (or not implementing this at all) falls back to the static
+// Meta().HelpLong, so un-migrated commands keep working unchanged.
+type Localized interface {
+	LocalizedHelp(lang string) string
+}
+
 // Configurable is an optional interface for a per-plugin config section and an
 // enable gate. Disabled plugins are invisible to both routing and help.
 type Configurable interface {

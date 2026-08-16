@@ -95,6 +95,7 @@ type MigrationConfig struct {
 }
 
 type Config struct {
+	Language   string                  `yaml:"Language"` // bot-wide UI language ("en" | "ru"); empty → i18n.Base ("en")
 	Connection ConnectionConfig        `yaml:"Connection"`
 	Proxy      ProxyConfig             `yaml:"Proxy"`
 	MQTT       mqttbridge.MQTTConfig   `yaml:"MQTT"`

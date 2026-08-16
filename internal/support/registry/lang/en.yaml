@@ -1,0 +1,8 @@
+# Help-index labels rendered by registry.HelpIndex. Keys: group.<GroupName> for
+# each Meta().Group, plus help.footer. Positional %s/%d must keep their order.
+group.Games: "Games"
+group.Info: "Info"
+group.AI: "AI"
+group.Service: "Service"
+group.Other: "Other"
+help.footer: '"<cmd> help" for details'
