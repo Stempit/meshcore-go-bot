@@ -4,6 +4,7 @@ package ticket
 
 import (
 	"bufio"
+	"embed"
 	"encoding/hex"
 	"fmt"
 	"math/rand/v2"
@@ -11,26 +12,14 @@ import (
 	"strings"
 	"sync"
 
+	"meshbot/internal/support/i18n"
 	"meshbot/internal/support/registry"
 )
 
-var firstWords = []string{
-	"Весёлый", "Хитрый", "Бодрый", "Ленивый", "Загадочный",
-	"Дребезжащий", "Шипящий", "Свистящий", "Гудящий", "Потрескивающий",
-	"Кряхтящий", "Фонящий", "Несущий", "Заземлённый", "Перегруженный",
-	"Обесточенный", "Заряженный", "Разряженный", "Колеблющийся", "Резонансный",
-	"Усиленный", "Ослабленный", "Согласованный", "Закорачивающий", "Искрящий",
-	"Радиоактивный", "Самодельный", "Паяный", "Канифольный", "Импульсный",
-}
+//go:embed lang/*.yaml
+var langFS embed.FS
 
-var secondWords = []string{
-	"Транзистор", "Конденсатор", "Резистор", "Диод", "Светодиод",
-	"Дроссель", "Трансформатор", "Кварц", "Резонатор", "Гетеродин",
-	"Смеситель", "Усилитель", "Генератор", "Модулятор", "Детектор",
-	"Приёмник", "Передатчик", "Трансивер", "Фидер", "Диполь",
-	"Штырь", "Сердечник", "Феррит", "Припой", "Эфир",
-	"Паяльник", "Сигнал", "SNR", "Моксон",
-}
+var tr = i18n.MustLoad(langFS)
 
 type TicketStore struct {
 	mu      sync.Mutex
@@ -67,14 +56,16 @@ func InitTicketStore(path string) error {
 	return nil
 }
 
-func (ts *TicketStore) getOrCreate(senderKey string) (string, error) {
+func (ts *TicketStore) getOrCreate(lang, senderKey string) (string, error) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	key := printableKey(senderKey)
 	if phrase, ok := ts.tickets[key]; ok {
 		return phrase, nil
 	}
-	phrase := firstWords[rand.IntN(len(firstWords))] + " " + secondWords[rand.IntN(len(secondWords))]
+	first := tr.TList(lang, "first")
+	second := tr.TList(lang, "second")
+	phrase := first[rand.IntN(len(first))] + " " + second[rand.IntN(len(second))]
 	ts.tickets[key] = phrase
 	f, err := os.OpenFile(ts.path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644)
 	if err != nil {
@@ -124,31 +115,31 @@ func (plugin) Meta() registry.Meta {
 }
 
 func (plugin) Handle(c registry.Ctx) ([]string, error) {
-	reply, err := processTicket(c.Text, c.SenderKey)
+	reply, err := processTicket(c.Lang, c.Text, c.SenderKey)
 	if err != nil {
-		return []string{"ошибка"}, err
+		return []string{tr.T(c.Lang, "error")}, err
 	}
 	return []string{reply}, nil
 }
 
-func processTicket(text, senderKey string) (string, error) {
+func processTicket(lang, text, senderKey string) (string, error) {
 	if ticketStore == nil {
-		return "ticket store not initialized", nil
+		return tr.T(lang, "not_initialized"), nil
 	}
 	arg := strings.TrimSpace(strings.TrimPrefix(strings.ToLower(strings.TrimSpace(text)), ".ticket"))
 	if arg == "random" {
 		phrase, ok := ticketStore.random()
 		if !ok {
-			return "Нет позывных", nil
+			return tr.T(lang, "no_callsigns"), nil
 		}
-		return "Выбран " + phrase, nil
+		return tr.T(lang, "chosen", phrase), nil
 	}
 	if senderKey == "" {
-		return "Нет твоего ключа, отправь адверт", nil
+		return tr.T(lang, "no_key"), nil
 	}
-	phrase, err := ticketStore.getOrCreate(senderKey)
+	phrase, err := ticketStore.getOrCreate(lang, senderKey)
 	if err != nil {
 		return "", err
 	}
-	return "Твой позывной - " + phrase, nil
+	return tr.T(lang, "your_callsign", phrase), nil
 }

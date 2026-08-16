@@ -2,13 +2,20 @@
 package llm
 
 import (
+	"embed"
 	"strings"
 
-	"meshbot/internal/support/registry"
-	"meshbot/internal/config"
 	provider "meshbot/internal/bridge/llm"
+	"meshbot/internal/config"
 	"meshbot/internal/logging"
+	"meshbot/internal/support/i18n"
+	"meshbot/internal/support/registry"
 )
+
+//go:embed lang/*.yaml
+var langFS embed.FS
+
+var tr = i18n.MustLoad(langFS)
 
 var log = logging.For("commands")
 
@@ -27,27 +34,40 @@ func (plugin) Meta() registry.Meta {
 	}
 }
 
+// LocalizedHelp returns the per-language long help for ".llm help".
+func (plugin) LocalizedHelp(lang string) string { return tr.T(lang, "help.long") }
+
 func (plugin) Handle(c registry.Ctx) ([]string, error) {
 	reply, err := ProcessLLMMessage(c.Text)
 	if err != nil {
-		return []string{"хз"}, nil
+		return []string{tr.T(c.Lang, "error")}, nil
 	}
 	return []string{reply}, nil
 }
 
 // ProcessLLMMessage queries the configured LLM and returns the raw response.
 // Mesh-fit shrinking is applied centrally at the send site (internal/shrink).
-// Exported for the cmd/llm prompt-test utility.
+// Exported for the cmd/llm prompt-test utility. The bot-wide language (global
+// config) steers the model's reply language via an appended system directive.
 func ProcessLLMMessage(text string) (response string, err error) {
 	text = strings.TrimSpace(strings.TrimPrefix(text, ".llm"))
 
 	cfg := config.Get()
 
+	lang := i18n.Base
+	if cfg.Language != "" {
+		lang = cfg.Language
+	}
+	systemPrompt := cfg.LLM.SystemPrompt
+	if d := tr.T(lang, "reply_directive"); d != "" && d != "reply_directive" {
+		systemPrompt = strings.TrimSpace(systemPrompt + "\n" + d)
+	}
+
 	switch cfg.LLM.Type {
 	case "openrouter":
-		response, err = provider.GetRemoteLLMResponse(cfg.LLM.Model, cfg.LLM.SystemPrompt, cfg.LLM.SystemTemperature, text)
+		response, err = provider.GetRemoteLLMResponse(cfg.LLM.Model, systemPrompt, cfg.LLM.SystemTemperature, text)
 	case "ollama":
-		response, err = provider.GetLocalLLMResponse(cfg.LLM.Model, cfg.LLM.SystemPrompt, cfg.LLM.SystemTemperature, text)
+		response, err = provider.GetLocalLLMResponse(cfg.LLM.Model, systemPrompt, cfg.LLM.SystemTemperature, text)
 	}
 
 	if err != nil {

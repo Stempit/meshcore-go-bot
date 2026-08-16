@@ -2,17 +2,24 @@
 package top
 
 import (
+	"embed"
 	"fmt"
 	"math"
 	"sort"
 	"strconv"
 	"strings"
 
-	"meshbot/internal/support/registry"
 	"meshbot/internal/config"
 	"meshbot/internal/support/helpers"
 	"meshbot/internal/support/historylog"
+	"meshbot/internal/support/i18n"
+	"meshbot/internal/support/registry"
 )
+
+//go:embed lang/*.yaml
+var langFS embed.FS
+
+var tr = i18n.MustLoad(langFS)
 
 const (
 	defaultTopScanCount = 100 // recent messages scanned when scan_count is unset
@@ -42,10 +49,13 @@ func (plugin) Meta() registry.Meta {
 		Triggers:  []string{".top"},
 		Match:     registry.Exact,
 		HelpShort: "top authors",
-		HelpLong:  ".top — топ-5 авторов канала по числу сообщений",
+		HelpLong:  ".top — top-5 channel authors by message count",
 		Group:     "Info",
 	}
 }
+
+// LocalizedHelp returns the per-language long help for ".top help".
+func (plugin) LocalizedHelp(lang string) string { return tr.T(lang, "help.long") }
 
 func (plugin) ConfigKey() string { return "Top" }
 
@@ -61,7 +71,7 @@ func (plugin) Enabled() bool { return true }
 // message count. Channels only; in DMs it reports unavailable.
 func (plugin) Handle(c registry.Ctx) ([]string, error) {
 	if c.IsDM() {
-		return []string{"Топ доступен только в каналах"}, nil
+		return []string{tr.T(c.Lang, "channels_only")}, nil
 	}
 	currentChannel := c.Channel
 
@@ -87,7 +97,7 @@ func (plugin) Handle(c registry.Ctx) ([]string, error) {
 		msgs = msgs[len(msgs)-scanCount:]
 	}
 	if len(msgs) == 0 {
-		return []string{"Пока нет сообщений для топа"}, nil
+		return []string{tr.T(c.Lang, "no_messages")}, nil
 	}
 
 	// Tally messages per author, preserving first-seen order for stable ties.
@@ -112,7 +122,7 @@ func (plugin) Handle(c registry.Ctx) ([]string, error) {
 	countWidth := len(strconv.Itoa(leader)) // right-align counts into a column
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "🏆 Топ сообщ из %d:", len(msgs))
+	b.WriteString(tr.T(c.Lang, "header", len(msgs)))
 	for i, name := range ranked {
 		var place string
 		if i < len(topMedals) {

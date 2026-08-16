@@ -2,14 +2,22 @@
 package last
 
 import (
+	"embed"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 
-	"meshbot/internal/support/registry"
 	"meshbot/internal/support/helpers"
 	"meshbot/internal/support/historylog"
+	"meshbot/internal/support/i18n"
+	"meshbot/internal/support/registry"
 )
+
+//go:embed lang/*.yaml
+var langFS embed.FS
+
+var tr = i18n.MustLoad(langFS)
 
 const (
 	defaultLastCount = 3
@@ -31,8 +39,11 @@ func (plugin) Meta() registry.Meta {
 	}
 }
 
+// LocalizedHelp returns the per-language long help for ".last help".
+func (plugin) LocalizedHelp(lang string) string { return tr.T(lang, "help.long") }
+
 func (plugin) Handle(c registry.Ctx) ([]string, error) {
-	count, srcChannel, err := parseLastArgs(c.Text, c.Channel)
+	count, srcChannel, err := parseLastArgs(c.Lang, c.Text, c.Channel)
 	if err != nil {
 		return []string{err.Error()}, nil
 	}
@@ -42,7 +53,7 @@ func (plugin) Handle(c registry.Ctx) ([]string, error) {
 		return nil, fmt.Errorf(".last: %w", err)
 	}
 	if len(entries) == 0 {
-		return []string{fmt.Sprintf("No history for channel %q", srcChannel)}, nil
+		return []string{tr.T(c.Lang, "no_history", srcChannel)}, nil
 	}
 
 	msgs := make([]string, len(entries))
@@ -52,7 +63,7 @@ func (plugin) Handle(c registry.Ctx) ([]string, error) {
 	return msgs, nil
 }
 
-func parseLastArgs(text, currentChannel string) (int, string, error) {
+func parseLastArgs(lang, text, currentChannel string) (int, string, error) {
 	rest := strings.TrimSpace(text[len(".last"):])
 
 	if rest == "" {
@@ -63,7 +74,7 @@ func parseLastArgs(text, currentChannel string) (int, string, error) {
 
 	count, err := strconv.Atoi(parts[0])
 	if err != nil {
-		return 0, "", fmt.Errorf("usage: .last [count] [channel]")
+		return 0, "", errors.New(tr.T(lang, "usage"))
 	}
 	if count < 1 {
 		count = 1

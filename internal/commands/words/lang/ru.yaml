@@ -1,0 +1,18 @@
+# Игра в анаграммы. Словарь остаётся русским (вне scope i18n); здесь UI.
+# started: %s слово, %d минут. status: %s слово, %d мин, %02d сек, %d счёт.
+help.long: |-
+  .words <слово> — слова из слова
+  .words start / status / end / top
+dict_unavailable: "Словарь недоступен"
+already_running: "Игра идёт. .words <слово>"
+started: "🔤 Слова из: %s — %d мин!"
+only_russian: "❌ только русские буквы"
+not_started: "Игра не начата. .words start"
+too_short: "❌ слишком короткое"
+base_itself: "❌ это само слово"
+already_found: "❌ уже было"
+not_found: "❌ слово не найдено"
+scored: "✅ +%d очков"
+status: "%s ⏱%d:%02d ты:%d"
+nobody: "🏁 Никто не успел. Было: %s"
+results_header: "🏁 Итоги «%s»"

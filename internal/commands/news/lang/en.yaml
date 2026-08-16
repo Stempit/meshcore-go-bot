@@ -1,0 +1,10 @@
+# RSS feed reader. %s = feed name / list; %d = counts. Keep placeholder order.
+help.long: |-
+  .news — list feeds
+  .news <feed> [n] [offset] — recent items
+no_feeds: "no feeds yet"
+usage: "usage: .news <feed> [count] [offset]"
+feeds: "feeds: %s"
+not_found: "feed %q not found"
+no_news: "no news in %s"
+offset_exceeds: "offset %d exceeds available %d items"

@@ -3,6 +3,7 @@
 package dice
 
 import (
+	"embed"
 	"fmt"
 	"math/rand"
 	"sort"
@@ -11,8 +12,14 @@ import (
 	"sync"
 	"time"
 
+	"meshbot/internal/support/i18n"
 	"meshbot/internal/support/registry"
 )
+
+//go:embed lang/*.yaml
+var langFS embed.FS
+
+var tr = i18n.MustLoad(langFS)
 
 func init() { registry.Register(plugin{}) }
 
@@ -24,13 +31,16 @@ func (plugin) Meta() registry.Meta {
 		Triggers:  []string{".dice"},
 		Match:     registry.Prefix,
 		HelpShort: "roll dice",
-		HelpLong:  ".dice [NdM] — кинуть кости (def 1d6)\n.dice start [NdM] / roll / end — раунд в канале",
+		HelpLong:  ".dice [NdM] — roll dice (def 1d6)\n.dice start [NdM] / roll / end — round in a channel",
 		Group:     "Games",
 	}
 }
 
+// LocalizedHelp returns the per-language long help for ".dice help".
+func (plugin) LocalizedHelp(lang string) string { return tr.T(lang, "help.long") }
+
 func (plugin) Handle(c registry.Ctx) ([]string, error) {
-	return processDice(c.Text, c.SenderName, c.Channel)
+	return processDice(c.Lang, c.Text, c.SenderName, c.Channel)
 }
 
 const (
@@ -66,7 +76,7 @@ var (
 //	.dice status                 – who has rolled so far
 //
 // senderName attributes rolls; channelName keys the roll-off (empty in DMs).
-func processDice(text, senderName, channelName string) ([]string, error) {
+func processDice(lang, text, senderName, channelName string) ([]string, error) {
 	rest := strings.TrimSpace(strings.TrimPrefix(text, ".dice"))
 	fields := strings.Fields(rest)
 
@@ -77,16 +87,16 @@ func processDice(text, senderName, channelName string) ([]string, error) {
 
 	switch verb {
 	case "start":
-		return diceStart(strings.Join(fields[1:], " "), channelName)
+		return diceStart(lang, strings.Join(fields[1:], " "), channelName)
 	case "roll":
-		return diceRoll(senderName, channelName)
+		return diceRoll(lang, senderName, channelName)
 	case "end":
-		return diceEnd(channelName)
+		return diceEnd(lang, channelName)
 	case "status":
-		return diceStatus(channelName)
+		return diceStatus(lang, channelName)
 	default:
 		// Plain roll: ".dice", ".dice 2d6", ".dice 20".
-		return dicePlainRoll(rest, senderName)
+		return dicePlainRoll(lang, rest, senderName)
 	}
 }
 
@@ -144,43 +154,41 @@ func rollDice(n, sides int) (results []int, total int) {
 	return results, total
 }
 
-const diceUsage = "🎲 .dice [NdM] | .dice start [NdM] / roll / end"
-
 // dicePlainRoll rolls immediately and attributes the result to the sender.
-func dicePlainRoll(spec, senderName string) ([]string, error) {
+func dicePlainRoll(lang, spec, senderName string) ([]string, error) {
 	n, sides, err := parseDiceSpec(spec)
 	if err != nil {
-		return []string{diceUsage}, nil
+		return []string{tr.T(lang, "usage")}, nil
 	}
 	results, total := rollDice(n, sides)
 
 	// The send layer prefixes channel replies with "@[SenderName]", so the
 	// roller's own name is not repeated here.
 	if n == 1 {
-		return []string{fmt.Sprintf("🎲 : %d", total)}, nil
+		return []string{tr.T(lang, "roll_one", total)}, nil
 	}
 	parts := make([]string, len(results))
 	for i, v := range results {
 		parts[i] = strconv.Itoa(v)
 	}
-	return []string{fmt.Sprintf("🎲 : %s = %d", strings.Join(parts, "+"), total)}, nil
+	return []string{tr.T(lang, "roll_many", strings.Join(parts, "+"), total)}, nil
 }
 
 // diceStart opens a roll-off round in the channel.
-func diceStart(spec, channelName string) ([]string, error) {
+func diceStart(lang, spec, channelName string) ([]string, error) {
 	if strings.TrimSpace(channelName) == "" {
-		return []string{"Раунд доступен только в каналах"}, nil
+		return []string{tr.T(lang, "channels_only")}, nil
 	}
 	n, sides, err := parseDiceSpec(spec)
 	if err != nil {
-		return []string{diceUsage}, nil
+		return []string{tr.T(lang, "usage")}, nil
 	}
 
 	diceMu.Lock()
 	defer diceMu.Unlock()
 
 	if s := diceSessions[channelName]; s != nil {
-		return []string{fmt.Sprintf("Раунд %s уже идёт. .dice roll", s.notation)}, nil
+		return []string{tr.T(lang, "already_running", s.notation)}, nil
 	}
 
 	notation := fmt.Sprintf("%dd%d", n, sides)
@@ -190,13 +198,13 @@ func diceStart(spec, channelName string) ([]string, error) {
 		sides:    sides,
 		rolls:    map[string]int{},
 	}
-	return []string{fmt.Sprintf("🎲 Раунд открыт: %s. Бросай: .dice roll", notation)}, nil
+	return []string{tr.T(lang, "opened", notation)}, nil
 }
 
 // diceRoll records the sender's roll in the open round (once per player).
-func diceRoll(senderName, channelName string) ([]string, error) {
+func diceRoll(lang, senderName, channelName string) ([]string, error) {
 	if strings.TrimSpace(channelName) == "" {
-		return []string{"Раунд доступен только в каналах"}, nil
+		return []string{tr.T(lang, "channels_only")}, nil
 	}
 
 	diceMu.Lock()
@@ -204,24 +212,24 @@ func diceRoll(senderName, channelName string) ([]string, error) {
 
 	s := diceSessions[channelName]
 	if s == nil {
-		return []string{"Раунд не открыт. .dice start"}, nil
+		return []string{tr.T(lang, "not_open")}, nil
 	}
 
 	who := diceWho(senderName)
 	if prev, ok := s.rolls[who]; ok {
-		return []string{fmt.Sprintf("Ты уже бросил: %d", prev)}, nil
+		return []string{tr.T(lang, "already_rolled", prev)}, nil
 	}
 
 	_, total := rollDice(s.n, s.sides)
 	s.rolls[who] = total
 	// Name omitted: the send layer prepends "@[SenderName]" on channel replies.
-	return []string{fmt.Sprintf("🎲 : %d", total)}, nil
+	return []string{tr.T(lang, "roll_one", total)}, nil
 }
 
 // diceEnd closes the round and announces the winner. Anyone may end it.
-func diceEnd(channelName string) ([]string, error) {
+func diceEnd(lang, channelName string) ([]string, error) {
 	if strings.TrimSpace(channelName) == "" {
-		return []string{"Раунд доступен только в каналах"}, nil
+		return []string{tr.T(lang, "channels_only")}, nil
 	}
 
 	diceMu.Lock()
@@ -229,20 +237,20 @@ func diceEnd(channelName string) ([]string, error) {
 
 	s := diceSessions[channelName]
 	if s == nil {
-		return []string{"Раунд не открыт. .dice start"}, nil
+		return []string{tr.T(lang, "not_open")}, nil
 	}
 	delete(diceSessions, channelName)
 
 	if len(s.rolls) == 0 {
-		return []string{"Раунд закрыт, никто не бросил"}, nil
+		return []string{tr.T(lang, "closed_no_rolls")}, nil
 	}
-	return []string{diceResult(s)}, nil
+	return []string{diceResult(lang, s)}, nil
 }
 
 // diceStatus reports who has rolled in the open round.
-func diceStatus(channelName string) ([]string, error) {
+func diceStatus(lang, channelName string) ([]string, error) {
 	if strings.TrimSpace(channelName) == "" {
-		return []string{"Раунд доступен только в каналах"}, nil
+		return []string{tr.T(lang, "channels_only")}, nil
 	}
 
 	diceMu.Lock()
@@ -250,16 +258,16 @@ func diceStatus(channelName string) ([]string, error) {
 
 	s := diceSessions[channelName]
 	if s == nil {
-		return []string{"Раунд не открыт. .dice start"}, nil
+		return []string{tr.T(lang, "not_open")}, nil
 	}
 	if len(s.rolls) == 0 {
-		return []string{fmt.Sprintf("Раунд %s: бросков пока нет", s.notation)}, nil
+		return []string{tr.T(lang, "no_rolls_yet", s.notation)}, nil
 	}
-	return []string{diceResult(s)}, nil
+	return []string{diceResult(lang, s)}, nil
 }
 
 // diceResult renders the ranked standings, handling ties at the top.
-func diceResult(s *diceSession) string {
+func diceResult(lang string, s *diceSession) string {
 	type entry struct {
 		name  string
 		total int
@@ -285,9 +293,9 @@ func diceResult(s *diceSession) string {
 
 	var head string
 	if len(winners) > 1 {
-		head = fmt.Sprintf("🤝 Ничья: %s — %d", strings.Join(winners, ", "), best)
+		head = tr.T(lang, "tie", strings.Join(winners, ", "), best)
 	} else {
-		head = fmt.Sprintf("🏆 %s: %d", entries[0].name, best)
+		head = tr.T(lang, "winner", entries[0].name, best)
 	}
 
 	// Append a compact tail of the next places, capped for mesh size.

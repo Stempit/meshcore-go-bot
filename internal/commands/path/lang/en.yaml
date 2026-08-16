@@ -1,0 +1,16 @@
+# Best-path routing. Quality tokens (strong/ok/weak) stay technical.
+# route placeholders: %d hops, %s quality, %d percent, %s route, %s hashlist.
+help.long: |-
+  .path — network summary
+  .path <from> to <to> — best path
+  ex: .path TIM to CHEP
+stats_unavailable: "path: stats not available"
+net_summary: "net: %d repeaters, %d edges"
+usage: "usage: .path <from> to <to>"
+ambiguous_splits: "ambiguous, be explicit: %s"
+ambiguous_node: "ambiguous '%s': %s"
+not_found: "node not found: %s"
+same_node: "%s is the same node"
+not_repeater: "%s is not a repeater"
+no_path: "no path: %s→%s"
+route: "%d hop(s) [%s ~%d%%]: %s %s"

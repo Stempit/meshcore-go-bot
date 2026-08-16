@@ -4,6 +4,7 @@ package path
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,9 +15,15 @@ import (
 	"sync"
 	"time"
 
-	"meshbot/internal/support/registry"
 	"meshbot/internal/proxy"
+	"meshbot/internal/support/i18n"
+	"meshbot/internal/support/registry"
 )
+
+//go:embed lang/*.yaml
+var langFS embed.FS
+
+var tr = i18n.MustLoad(langFS)
 
 type plugin struct{}
 
@@ -31,8 +38,11 @@ func (plugin) Meta() registry.Meta {
 	}
 }
 
+// LocalizedHelp returns the per-language long help for ".path help".
+func (plugin) LocalizedHelp(lang string) string { return tr.T(lang, "help.long") }
+
 func (plugin) Handle(c registry.Ctx) ([]string, error) {
-	return processPath(c.Trimmed)
+	return processPath(c.Lang, c.Trimmed)
 }
 
 // ── JSON models (mirrors Let's Mesh analyzer edge-stats API) ─────────────────
@@ -432,11 +442,11 @@ func trySplits(stats *statsResponse, rawArgs []string) [][2]string {
 //	.path <from> to <to>     — best path; "to" is the explicit separator
 //	.path <from> <to>        — both names may contain spaces; the unique split
 //	                           where both parts match a node is chosen automatically
-func processPath(text string) ([]string, error) {
+func processPath(lang, text string) ([]string, error) {
 	stats, err := getStats()
 	if err != nil {
 		log().Warn("path command: stats unavailable", "error", err)
-		return []string{"path: stats not available"}, nil
+		return []string{tr.T(lang, "stats_unavailable")}, nil
 	}
 
 	// Strip prefix, preserve original case for name matching.
@@ -456,7 +466,7 @@ func processPath(text string) ([]string, error) {
 				eCount++
 			}
 		}
-		return []string{fmt.Sprintf("net: %d repeaters, %d edges", rCount, eCount)}, nil
+		return []string{tr.T(lang, "net_summary", rCount, eCount)}, nil
 	}
 
 	// Find "to" keyword used as explicit separator (e.g. ".path TIM to Repeater GRIN").
@@ -474,14 +484,14 @@ func processPath(text string) ([]string, error) {
 		fromQuery = strings.Join(rawArgs[:toIdx], " ")
 		toQuery = strings.Join(rawArgs[toIdx+1:], " ")
 		if fromQuery == "" || toQuery == "" {
-			return []string{"usage: .path <from> to <to>"}, nil
+			return []string{tr.T(lang, "usage")}, nil
 		}
 	} else {
 		// No explicit separator — try every cut-point and pick the unique match.
 		splits := trySplits(stats, rawArgs)
 		switch len(splits) {
 		case 0:
-			return []string{"usage: .path <from> to <to>"}, nil
+			return []string{tr.T(lang, "usage")}, nil
 		case 1:
 			fromQuery, toQuery = splits[0][0], splits[0][1]
 		default:
@@ -489,43 +499,43 @@ func processPath(text string) ([]string, error) {
 			for i, s := range splits {
 				opts[i] = s[0] + " to " + s[1]
 			}
-			return []string{"ambiguous, be explicit: " + strings.Join(opts, " / ")}, nil
+			return []string{tr.T(lang, "ambiguous_splits", strings.Join(opts, " / "))}, nil
 		}
 	}
 
 	srcKey, srcName, srcAmb := resolveNode(stats, fromQuery)
 	if srcKey == "" {
 		if len(srcAmb) > 0 {
-			return []string{fmt.Sprintf("ambiguous '%s': %s", fromQuery, strings.Join(srcAmb, ", "))}, nil
+			return []string{tr.T(lang, "ambiguous_node", fromQuery, strings.Join(srcAmb, ", "))}, nil
 		}
-		return []string{fmt.Sprintf("node not found: %s", fromQuery)}, nil
+		return []string{tr.T(lang, "not_found", fromQuery)}, nil
 	}
 
 	dstKey, dstName, dstAmb := resolveNode(stats, toQuery)
 	if dstKey == "" {
 		if len(dstAmb) > 0 {
-			return []string{fmt.Sprintf("ambiguous '%s': %s", toQuery, strings.Join(dstAmb, ", "))}, nil
+			return []string{tr.T(lang, "ambiguous_node", toQuery, strings.Join(dstAmb, ", "))}, nil
 		}
-		return []string{fmt.Sprintf("node not found: %s", toQuery)}, nil
+		return []string{tr.T(lang, "not_found", toQuery)}, nil
 	}
 
 	if srcKey == dstKey {
-		return []string{srcName + " is the same node"}, nil
+		return []string{tr.T(lang, "same_node", srcName)}, nil
 	}
 
 	// Verify both endpoints can participate in routing.
 	for _, n := range stats.Nodes {
 		if n.PublicKeyHex == srcKey && !n.IsRepeater {
-			return []string{srcName + " is not a repeater"}, nil
+			return []string{tr.T(lang, "not_repeater", srcName)}, nil
 		}
 		if n.PublicKeyHex == dstKey && !n.IsRepeater {
-			return []string{dstName + " is not a repeater"}, nil
+			return []string{tr.T(lang, "not_repeater", dstName)}, nil
 		}
 	}
 
 	pathNodes, pubkeys, edges, ok := findBestPath(stats, srcKey, dstKey)
 	if !ok {
-		return []string{fmt.Sprintf("no path: %s→%s", srcName, dstName)}, nil
+		return []string{tr.T(lang, "no_path", srcName, dstName)}, nil
 	}
 
 	hops := len(pathNodes) - 1
@@ -540,7 +550,7 @@ func processPath(text string) ([]string, error) {
 	}
 	hashList := "[" + strings.Join(hashes, ",") + "]"
 
-	reply := fmt.Sprintf("%d hop(s) [%s ~%d%%]: %s %s", hops, quality, pct, route, hashList)
+	reply := tr.T(lang, "route", hops, quality, pct, route, hashList)
 
 	// Abbreviate node names to first word when the line is too long for mesh.
 	if len(reply) > 130 {
@@ -550,7 +560,7 @@ func processPath(text string) ([]string, error) {
 			short[i] = parts[0]
 		}
 		route = strings.Join(short, "→")
-		reply = fmt.Sprintf("%d hop(s) [%s ~%d%%]: %s %s", hops, quality, pct, route, hashList)
+		reply = tr.T(lang, "route", hops, quality, pct, route, hashList)
 	}
 
 	return []string{reply}, nil

@@ -12,9 +12,20 @@ import (
 	"sync"
 	"time"
 
+	"meshbot/internal/config"
 	"meshbot/internal/support/games"
 	"meshbot/internal/support/helpers"
+	"meshbot/internal/support/i18n"
 )
+
+// wordsLang resolves the global bot language for code paths without a Ctx
+// (the round-timeout callback fires outside any request).
+func wordsLang() string {
+	if c := config.Get(); c != nil && c.Language != "" {
+		return c.Language
+	}
+	return i18n.Base
+}
 
 // russian words from http://blog.kislenko.net/show.php?id=1678
 
@@ -63,7 +74,7 @@ var (
 //	.words top            – leaderboard for this scope (last 30 days)
 //
 // Works in both channels (shared base word, per-player scores) and DMs (solo).
-func processWords(text, senderKey, senderName, channelName string) ([]string, error) {
+func processWords(lang, text, senderKey, senderName, channelName string) ([]string, error) {
 	rest := strings.TrimSpace(strings.TrimPrefix(text, ".words"))
 	fields := strings.Fields(rest)
 
@@ -75,22 +86,22 @@ func processWords(text, senderKey, senderName, channelName string) ([]string, er
 
 	switch verb {
 	case "", "start":
-		return wordsStart(scope)
+		return wordsStart(lang, scope)
 	case "status":
-		return wordsStatus(scope, games.Who(senderName))
+		return wordsStatus(lang, scope, games.Who(senderName))
 	case "end":
-		return wordsEnd(scope)
+		return wordsEnd(lang, scope)
 	case "top":
 		return games.Top(wordsLogBase, scope), nil
 	default:
-		return wordsSubmit(scope, games.Who(senderName), fields[0])
+		return wordsSubmit(lang, scope, games.Who(senderName), fields[0])
 	}
 }
 
 // wordsStart opens a round in the scope, picking a base word from the pool.
-func wordsStart(scope string) ([]string, error) {
+func wordsStart(lang, scope string) ([]string, error) {
 	if len(wordsPool) == 0 {
-		return []string{"Словарь недоступен"}, nil
+		return []string{tr.T(lang, "dict_unavailable")}, nil
 	}
 
 	wordsMu.Lock()
@@ -100,7 +111,7 @@ func wordsStart(scope string) ([]string, error) {
 	// the caller the game is already running.
 	if g := wordsGames[scope]; g != nil {
 		wordsResetLocked(g)
-		return []string{"Игра идёт. .words <слово>"}, nil
+		return []string{tr.T(lang, "already_running")}, nil
 	}
 
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
@@ -121,15 +132,15 @@ func wordsStart(scope string) ([]string, error) {
 	wordsGames[scope] = g
 
 	slog.Info("words round started", "scope", scope, "base", string(base))
-	return []string{fmt.Sprintf("🔤 Слова из: %s — %d мин!", strings.ToUpper(string(base)), int(ttl.Minutes()))}, nil
+	return []string{tr.T(lang, "started", strings.ToUpper(string(base)), int(ttl.Minutes()))}, nil
 }
 
 // wordsSubmit validates a submission and, on success, scores it. The validation
 // order is cheapest-first; the first failure decides the reply.
-func wordsSubmit(scope, who, arg string) ([]string, error) {
+func wordsSubmit(lang, scope, who, arg string) ([]string, error) {
 	norm := games.NormalizeRu(arg)
 	if norm == "" {
-		return []string{"❌ только русские буквы"}, nil
+		return []string{tr.T(lang, "only_russian")}, nil
 	}
 	word := []rune(norm)
 
@@ -138,27 +149,27 @@ func wordsSubmit(scope, who, arg string) ([]string, error) {
 	g := wordsGames[scope]
 	if g == nil {
 		wordsMu.Unlock()
-		return []string{"Игра не начата. .words start"}, nil
+		return []string{tr.T(lang, "not_started")}, nil
 	}
 	wordsResetLocked(g) // any command keeps the round alive (requirement 6)
 
 	switch {
 	case len(word) < wordsMinSub():
 		wordsMu.Unlock()
-		return []string{"❌ слишком короткое"}, nil
+		return []string{tr.T(lang, "too_short")}, nil
 	case norm == string(g.base):
 		wordsMu.Unlock()
-		return []string{"❌ это само слово"}, nil
+		return []string{tr.T(lang, "base_itself")}, nil
 	case g.found[norm]:
 		wordsMu.Unlock()
-		return []string{"❌ уже было"}, nil
+		return []string{tr.T(lang, "already_found")}, nil
 	case !buildable(word, g.avail):
 		wordsMu.Unlock()
-		return []string{"❌ слово не найдено"}, nil
+		return []string{tr.T(lang, "not_found")}, nil
 	}
 	if _, ok := wordsValid[norm]; !ok {
 		wordsMu.Unlock()
-		return []string{"❌ слово не найдено"}, nil
+		return []string{tr.T(lang, "not_found")}, nil
 	}
 
 	// Score is super-linear in rune length so long finds pay off. Use rune
@@ -171,18 +182,18 @@ func wordsSubmit(scope, who, arg string) ([]string, error) {
 	wordsMu.Unlock()
 
 	slog.Info("words find", "scope", scope, "player", who, "word", norm, "score", score)
-	return []string{fmt.Sprintf("✅ +%d очков", score)}, nil
+	return []string{tr.T(lang, "scored", score)}, nil
 }
 
 // wordsStatus shows the base word, time left, and the caller's score. It also
 // resets the timer (requirement 6).
-func wordsStatus(scope, who string) ([]string, error) {
+func wordsStatus(lang, scope, who string) ([]string, error) {
 	wordsMu.Lock()
 	defer wordsMu.Unlock()
 
 	g := wordsGames[scope]
 	if g == nil {
-		return []string{"Игра не начата. .words start"}, nil
+		return []string{tr.T(lang, "not_started")}, nil
 	}
 	wordsResetLocked(g)
 
@@ -192,22 +203,22 @@ func wordsStatus(scope, who string) ([]string, error) {
 	}
 	m := int(left / time.Minute)
 	s := int(left/time.Second) % 60
-	return []string{fmt.Sprintf("%s ⏱%d:%02d ты:%d", strings.ToUpper(string(g.base)), m, s, g.scores[who])}, nil
+	return []string{tr.T(lang, "status", strings.ToUpper(string(g.base)), m, s, g.scores[who])}, nil
 }
 
 // wordsEnd closes the round early and returns the results synchronously. If the
 // round is already gone (a timeout finalized it microseconds earlier), it is
 // treated as "no active round" rather than double-finalized.
-func wordsEnd(scope string) ([]string, error) {
+func wordsEnd(lang, scope string) ([]string, error) {
 	wordsMu.Lock()
 	defer wordsMu.Unlock()
 
 	g := wordsGames[scope]
 	if g == nil {
-		return []string{"Игра не начата. .words start"}, nil
+		return []string{tr.T(lang, "not_started")}, nil
 	}
 	g.timer.Stop()
-	return wordsFinalizeLocked(scope, g), nil
+	return wordsFinalizeLocked(lang, scope, g), nil
 }
 
 // wordsOnTimeout is the AfterFunc callback. It bails on a stale fire — the round
@@ -222,7 +233,7 @@ func wordsOnTimeout(scope string, token uint64) {
 		wordsMu.Unlock()
 		return
 	}
-	results := wordsFinalizeLocked(scope, g)
+	results := wordsFinalizeLocked(wordsLang(), scope, g)
 	wordsMu.Unlock()
 
 	// Resolve-and-enqueue may be slow; never hold wordsMu across it.
@@ -231,7 +242,7 @@ func wordsOnTimeout(scope string, token uint64) {
 
 // wordsFinalizeLocked ranks players, records the winner(s), deletes the round,
 // and renders the results. The caller must hold wordsMu.
-func wordsFinalizeLocked(scope string, g *wordsGame) []string {
+func wordsFinalizeLocked(lang, scope string, g *wordsGame) []string {
 	base := strings.ToUpper(string(g.base))
 	delete(wordsGames, scope)
 
@@ -247,7 +258,7 @@ func wordsFinalizeLocked(scope string, g *wordsGame) []string {
 	}
 	if len(ranked) == 0 {
 		slog.Info("words round ended", "scope", scope, "winner", "", "score", 0)
-		return []string{"🏁 Никто не успел. Было: " + base}
+		return []string{tr.T(lang, "nobody", base)}
 	}
 
 	sort.Slice(ranked, func(i, j int) bool {
@@ -287,7 +298,7 @@ func wordsFinalizeLocked(scope string, g *wordsGame) []string {
 	}
 	slog.Info("words round ended", "scope", scope, "winner", ranked[0].name, "score", top)
 
-	return []string{"🏁 Итоги «" + base + "»", line}
+	return []string{tr.T(lang, "results_header", base), line}
 }
 
 // wordsResetLocked refreshes the countdown to its full length. The caller must

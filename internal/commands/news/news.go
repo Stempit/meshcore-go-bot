@@ -4,14 +4,21 @@ package news
 
 import (
 	"bufio"
+	"embed"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 
+	"meshbot/internal/support/i18n"
 	"meshbot/internal/support/registry"
 )
+
+//go:embed lang/*.yaml
+var langFS embed.FS
+
+var tr = i18n.MustLoad(langFS)
 
 const newsDir = "log/news"
 const defaultNewsCount = 5
@@ -31,6 +38,9 @@ func (plugin) Meta() registry.Meta {
 	}
 }
 
+// LocalizedHelp returns the per-language long help for ".news help".
+func (plugin) LocalizedHelp(lang string) string { return tr.T(lang, "help.long") }
+
 // Handle implements the .news command variants:
 //
 //	.news                        – list available feeds
@@ -44,7 +54,7 @@ func (plugin) Handle(c registry.Ctx) ([]string, error) {
 	// parts[0] is ".news"
 
 	if len(parts) == 1 {
-		return listFeeds()
+		return listFeeds(c.Lang)
 	}
 
 	feedName := parts[1]
@@ -54,25 +64,25 @@ func (plugin) Handle(c registry.Ctx) ([]string, error) {
 	if len(parts) >= 3 {
 		n, err := strconv.Atoi(parts[2])
 		if err != nil || n <= 0 {
-			return []string{"usage: .news <feed> [count] [offset]"}, nil
+			return []string{tr.T(c.Lang, "usage")}, nil
 		}
 		count = n
 	}
 	if len(parts) >= 4 {
 		o, err := strconv.Atoi(parts[3])
 		if err != nil || o < 0 {
-			return []string{"usage: .news <feed> [count] [offset]"}, nil
+			return []string{tr.T(c.Lang, "usage")}, nil
 		}
 		offset = o
 	}
 
-	return readNews(feedName, count, offset)
+	return readNews(c.Lang, feedName, count, offset)
 }
 
-func listFeeds() ([]string, error) {
+func listFeeds(lang string) ([]string, error) {
 	entries, err := os.ReadDir(newsDir)
 	if os.IsNotExist(err) {
-		return []string{"no feeds yet"}, nil
+		return []string{tr.T(lang, "no_feeds")}, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("read news dir: %w", err)
@@ -88,16 +98,16 @@ func listFeeds() ([]string, error) {
 		}
 	}
 	if len(names) == 0 {
-		return []string{"no feeds yet"}, nil
+		return []string{tr.T(lang, "no_feeds")}, nil
 	}
-	return []string{"feeds: " + strings.Join(names, ", ")}, nil
+	return []string{tr.T(lang, "feeds", strings.Join(names, ", "))}, nil
 }
 
-func readNews(feedName string, count, offset int) ([]string, error) {
+func readNews(lang, feedName string, count, offset int) ([]string, error) {
 	path := filepath.Join(newsDir, feedName+".txt")
 	f, err := os.Open(path)
 	if os.IsNotExist(err) {
-		return []string{fmt.Sprintf("feed %q not found", feedName)}, nil
+		return []string{tr.T(lang, "not_found", feedName)}, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("open news file: %w", err)
@@ -118,14 +128,14 @@ func readNews(feedName string, count, offset int) ([]string, error) {
 
 	total := len(lines)
 	if total == 0 {
-		return []string{fmt.Sprintf("no news in %s", feedName)}, nil
+		return []string{tr.T(lang, "no_news", feedName)}, nil
 	}
 
 	// lines are ordered oldest→newest; we want items from the end.
 	// skip the last <offset> items, then take <count> before that.
 	end := total - offset
 	if end <= 0 {
-		return []string{fmt.Sprintf("offset %d exceeds available %d items", offset, total)}, nil
+		return []string{tr.T(lang, "offset_exceeds", offset, total)}, nil
 	}
 	start := end - count
 	if start < 0 {
@@ -143,7 +153,7 @@ func readNews(feedName string, count, offset int) ([]string, error) {
 	}
 
 	if len(result) == 0 {
-		return []string{fmt.Sprintf("no news in %s", feedName)}, nil
+		return []string{tr.T(lang, "no_news", feedName)}, nil
 	}
 	return result, nil
 }

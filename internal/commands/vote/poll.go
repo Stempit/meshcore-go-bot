@@ -1,7 +1,6 @@
 package vote
 
 import (
-	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -40,12 +39,6 @@ var (
 	pollToken uint64 // monotonic poll-id source, guarded by pollMu
 )
 
-const (
-	voteUsage       = "📊 .vote start вопрос | вариант1 | вариант2 — опрос; .vote <номер> — голос; .vote status / end"
-	voteChannelOnly = "Голосование доступно только в каналах"
-	voteNoPoll      = "Опрос не идёт. .vote start"
-)
-
 // voteRoundDur is the auto-close countdown, defaulted when unconfigured.
 func voteRoundDur() time.Duration {
 	sec := conf.RoundSec
@@ -66,9 +59,9 @@ func voteMaxOptions() int {
 
 // voteStart opens a poll. spec is "вопрос | вариант1 | вариант2 [| ...]": the
 // first pipe-segment is the question, the rest are the options.
-func voteStart(scope, channelName, spec string) ([]string, error) {
+func voteStart(lang, scope, channelName, spec string) ([]string, error) {
 	if strings.TrimSpace(channelName) == "" {
-		return []string{voteChannelOnly}, nil
+		return []string{tr.T(lang, "channels_only")}, nil
 	}
 
 	var parts []string
@@ -78,13 +71,13 @@ func voteStart(scope, channelName, spec string) ([]string, error) {
 		}
 	}
 	if len(parts) < 1+voteMinOptions {
-		return []string{voteUsage}, nil
+		return []string{tr.T(lang, "usage")}, nil
 	}
 
 	question := helpers.ClipRunes(parts[0], voteQuestionRune)
 	options := parts[1:]
 	if len(options) > voteMaxOptions() {
-		return []string{fmt.Sprintf("Максимум %d вариантов", voteMaxOptions())}, nil
+		return []string{tr.T(lang, "max_options", voteMaxOptions())}, nil
 	}
 	for i := range options {
 		options[i] = helpers.ClipRunes(options[i], voteLabelRune)
@@ -94,7 +87,7 @@ func voteStart(scope, channelName, spec string) ([]string, error) {
 	defer pollMu.Unlock()
 
 	if polls[scope] != nil {
-		return []string{"Опрос уже идёт. .vote status"}, nil
+		return []string{tr.T(lang, "already_running")}, nil
 	}
 
 	pollToken++
@@ -113,21 +106,21 @@ func voteStart(scope, channelName, spec string) ([]string, error) {
 	slog.Info("vote started", "scope", scope, "options", len(options))
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "📊 Опрос: %s", question)
+	b.WriteString(tr.T(lang, "started_header", question))
 	for i, opt := range options {
-		fmt.Fprintf(&b, "\n.vote %d - %s", i+1, opt)
+		b.WriteString(tr.T(lang, "started_option", i+1, opt))
 	}
 	return []string{b.String()}, nil
 }
 
 // voteCast records the sender's single vote, replacing any previous choice.
-func voteCast(scope, channelName, senderKey, arg string) ([]string, error) {
+func voteCast(lang, scope, channelName, senderKey, arg string) ([]string, error) {
 	if strings.TrimSpace(channelName) == "" {
-		return []string{voteChannelOnly}, nil
+		return []string{tr.T(lang, "channels_only")}, nil
 	}
 	n, err := strconv.Atoi(arg)
 	if err != nil {
-		return []string{voteUsage}, nil
+		return []string{tr.T(lang, "usage")}, nil
 	}
 
 	pollMu.Lock()
@@ -135,20 +128,20 @@ func voteCast(scope, channelName, senderKey, arg string) ([]string, error) {
 
 	p := polls[scope]
 	if p == nil {
-		return []string{voteNoPoll}, nil
+		return []string{tr.T(lang, "no_poll")}, nil
 	}
 	if n < 1 || n > len(p.options) {
-		return []string{fmt.Sprintf("Вариант 1–%d", len(p.options))}, nil
+		return []string{tr.T(lang, "option_range", len(p.options))}, nil
 	}
 
 	p.votes[senderKey] = n - 1
-	return []string{fmt.Sprintf("✅ Голос за: %s", p.options[n-1])}, nil
+	return []string{tr.T(lang, "voted", p.options[n-1])}, nil
 }
 
 // voteStatus shows the current results plus the remaining time.
-func voteStatus(scope, channelName string) ([]string, error) {
+func voteStatus(lang, scope, channelName string) ([]string, error) {
 	if strings.TrimSpace(channelName) == "" {
-		return []string{voteChannelOnly}, nil
+		return []string{tr.T(lang, "channels_only")}, nil
 	}
 
 	pollMu.Lock()
@@ -156,7 +149,7 @@ func voteStatus(scope, channelName string) ([]string, error) {
 
 	p := polls[scope]
 	if p == nil {
-		return []string{voteNoPoll}, nil
+		return []string{tr.T(lang, "no_poll")}, nil
 	}
 
 	left := time.Until(p.deadline)
@@ -165,13 +158,13 @@ func voteStatus(scope, channelName string) ([]string, error) {
 	}
 	m := int(left / time.Minute)
 	s := int(left/time.Second) % 60
-	return []string{fmt.Sprintf("⏱%d:%02d\n%s", m, s, voteResultLocked(p))}, nil
+	return []string{tr.T(lang, "status", m, s, voteResultLocked(lang, p))}, nil
 }
 
 // voteEnd closes the poll early and returns the final results. Anyone may end it.
-func voteEnd(scope, channelName string) ([]string, error) {
+func voteEnd(lang, scope, channelName string) ([]string, error) {
 	if strings.TrimSpace(channelName) == "" {
-		return []string{voteChannelOnly}, nil
+		return []string{tr.T(lang, "channels_only")}, nil
 	}
 
 	pollMu.Lock()
@@ -179,10 +172,10 @@ func voteEnd(scope, channelName string) ([]string, error) {
 
 	p := polls[scope]
 	if p == nil {
-		return []string{voteNoPoll}, nil
+		return []string{tr.T(lang, "no_poll")}, nil
 	}
 	p.timer.Stop()
-	res := voteResultLocked(p)
+	res := voteResultLocked(lang, p)
 	delete(polls, scope)
 
 	slog.Info("vote ended", "scope", scope, "votes", len(p.votes))
@@ -200,7 +193,7 @@ func voteOnTimeout(scope string, token uint64) {
 		pollMu.Unlock()
 		return
 	}
-	res := voteResultLocked(p)
+	res := voteResultLocked(voteLang(), p)
 	delete(polls, scope)
 	pollMu.Unlock()
 
@@ -211,7 +204,7 @@ func voteOnTimeout(scope string, token uint64) {
 // voteResultLocked renders the full numbered results list. The caller must hold
 // pollMu. The list can exceed the mesh byte limit with many options; the send
 // layer's shrink.Fit splits it across messages.
-func voteResultLocked(p *poll) string {
+func voteResultLocked(lang string, p *poll) string {
 	counts := make([]int, len(p.options))
 	for _, idx := range p.votes {
 		if idx >= 0 && idx < len(counts) {
@@ -220,9 +213,9 @@ func voteResultLocked(p *poll) string {
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "📊 Итоги: %s", p.question)
+	b.WriteString(tr.T(lang, "result_header", p.question))
 	for i, opt := range p.options {
-		fmt.Fprintf(&b, "\n%d) %s: %d", i+1, opt, counts[i])
+		b.WriteString(tr.T(lang, "result_option", i+1, opt, counts[i]))
 	}
 	return b.String()
 }

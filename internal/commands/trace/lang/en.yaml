@@ -1,0 +1,4 @@
+# Trace. Only the leading labels are localized; distances/units stay technical.
+help.long: ".trace — hop count & distance from last ping"
+direct: "Trace direct"
+hops: "Trace %d hops"

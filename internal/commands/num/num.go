@@ -3,16 +3,22 @@
 package num
 
 import (
-	"fmt"
+	"embed"
 	"math/rand"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"meshbot/internal/support/registry"
 	"meshbot/internal/support/games"
+	"meshbot/internal/support/i18n"
+	"meshbot/internal/support/registry"
 )
+
+//go:embed lang/*.yaml
+var langFS embed.FS
+
+var tr = i18n.MustLoad(langFS)
 
 func init() { registry.Register(plugin{}) }
 
@@ -24,13 +30,16 @@ func (plugin) Meta() registry.Meta {
 		Triggers:  []string{".num"},
 		Match:     registry.Prefix,
 		HelpShort: "guess the number",
-		HelpLong:  ".num <число> — угадай число (1–100)\n.num start [max] / status / end / top",
+		HelpLong:  ".num <number> — guess the number (1–100)\n.num start [max] / status / end / top",
 		Group:     "Games",
 	}
 }
 
+// LocalizedHelp returns the per-language long help for ".num help".
+func (plugin) LocalizedHelp(lang string) string { return tr.T(lang, "help.long") }
+
 func (plugin) Handle(c registry.Ctx) ([]string, error) {
-	return processNum(c.Text, c.SenderKey, c.SenderName, c.Channel)
+	return processNum(c.Lang, c.Text, c.SenderKey, c.SenderName, c.Channel)
 }
 
 const (
@@ -55,8 +64,6 @@ var (
 	numLog     = games.NewLog("num")
 )
 
-const numUsage = "🎯 .num start [max] | .num <число> | .num top"
-
 // processNum handles ".num" and its sub-verbs.
 //
 //	.num / .num start [max] – open a game (bot picks 1..max, default 100)
@@ -66,7 +73,7 @@ const numUsage = "🎯 .num start [max] | .num <число> | .num top"
 //	.num top                – leaderboard for this scope (last 30 days)
 //
 // Works in both channels (shared game) and DMs (private game).
-func processNum(text, senderKey, senderName, channelName string) ([]string, error) {
+func processNum(lang, text, senderKey, senderName, channelName string) ([]string, error) {
 	rest := strings.TrimSpace(strings.TrimPrefix(text, ".num"))
 	fields := strings.Fields(rest)
 
@@ -84,29 +91,29 @@ func processNum(text, senderKey, senderName, channelName string) ([]string, erro
 		if len(fields) > 1 {
 			arg = strings.Join(fields[1:], " ")
 		}
-		return numStart(scope, arg)
+		return numStart(lang, scope, arg)
 	case "status":
-		return numStatus(scope)
+		return numStatus(lang, scope)
 	case "end":
-		return numEnd(scope)
+		return numEnd(lang, scope)
 	case "top":
 		return games.Top(numLogBase, scope), nil
 	default:
 		// A bare argument is treated as a guess.
-		return numGuess(scope, senderName, fields[0])
+		return numGuess(lang, scope, senderName, fields[0])
 	}
 }
 
 // numStart opens a round in the scope, picking a secret in 1..max.
-func numStart(scope, spec string) ([]string, error) {
+func numStart(lang, scope, spec string) ([]string, error) {
 	max := numDefaultMax
 	if s := strings.TrimSpace(spec); s != "" {
 		m, err := strconv.Atoi(s)
 		if err != nil {
-			return []string{numUsage}, nil
+			return []string{tr.T(lang, "usage")}, nil
 		}
 		if m < numMinMax || m > numMaxMax {
-			return []string{fmt.Sprintf("max %d–%d", numMinMax, numMaxMax)}, nil
+			return []string{tr.T(lang, "max_range", numMinMax, numMaxMax)}, nil
 		}
 		max = m
 	}
@@ -115,7 +122,7 @@ func numStart(scope, spec string) ([]string, error) {
 	defer numMu.Unlock()
 
 	if numGames[scope] != nil {
-		return []string{"Игра идёт. .num <число>"}, nil
+		return []string{tr.T(lang, "already_running")}, nil
 	}
 
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
@@ -124,14 +131,14 @@ func numStart(scope, spec string) ([]string, error) {
 		lo:     1,
 		hi:     max,
 	}
-	return []string{fmt.Sprintf("🎯 Загадал 1–%d. .num <число>", max)}, nil
+	return []string{tr.T(lang, "started", max)}, nil
 }
 
-// numGuess records a guess and replies больше/меньше or a win.
-func numGuess(scope, senderName, arg string) ([]string, error) {
+// numGuess records a guess and replies higher/lower or a win.
+func numGuess(lang, scope, senderName, arg string) ([]string, error) {
 	guess, err := strconv.Atoi(arg)
 	if err != nil {
-		return []string{numUsage}, nil
+		return []string{tr.T(lang, "usage")}, nil
 	}
 
 	numMu.Lock()
@@ -139,10 +146,10 @@ func numGuess(scope, senderName, arg string) ([]string, error) {
 	g := numGames[scope]
 	if g == nil {
 		numMu.Unlock()
-		return []string{"Игра не начата. .num start"}, nil
+		return []string{tr.T(lang, "not_started")}, nil
 	}
 	if guess < g.lo || guess > g.hi {
-		reply := fmt.Sprintf("Вне диапазона %d–%d", g.lo, g.hi)
+		reply := tr.T(lang, "out_of_range", g.lo, g.hi)
 		numMu.Unlock()
 		return []string{reply}, nil
 	}
@@ -152,42 +159,42 @@ func numGuess(scope, senderName, arg string) ([]string, error) {
 	case guess < g.secret:
 		g.lo = guess + 1
 		numMu.Unlock()
-		return []string{"больше"}, nil
+		return []string{tr.T(lang, "higher")}, nil
 	case guess > g.secret:
 		g.hi = guess - 1
 		numMu.Unlock()
-		return []string{"меньше"}, nil
+		return []string{tr.T(lang, "lower")}, nil
 	default:
 		attempts, secret := g.attempts, g.secret
 		delete(numGames, scope)
 		numMu.Unlock()
 		games.LogWin(numLog, scope, games.Who(senderName), strconv.Itoa(attempts))
-		return []string{fmt.Sprintf("🎯 Угадал за %d! Это %d", attempts, secret)}, nil
+		return []string{tr.T(lang, "guessed", attempts, secret)}, nil
 	}
 }
 
 // numStatus reports the current range and attempt count.
-func numStatus(scope string) ([]string, error) {
+func numStatus(lang, scope string) ([]string, error) {
 	numMu.Lock()
 	defer numMu.Unlock()
 
 	g := numGames[scope]
 	if g == nil {
-		return []string{"Игра не начата. .num start"}, nil
+		return []string{tr.T(lang, "not_started")}, nil
 	}
-	return []string{fmt.Sprintf("Диапазон %d–%d, попыток: %d", g.lo, g.hi, g.attempts)}, nil
+	return []string{tr.T(lang, "status", g.lo, g.hi, g.attempts)}, nil
 }
 
 // numEnd reveals the secret and closes the game.
-func numEnd(scope string) ([]string, error) {
+func numEnd(lang, scope string) ([]string, error) {
 	numMu.Lock()
 	defer numMu.Unlock()
 
 	g := numGames[scope]
 	if g == nil {
-		return []string{"Игра не начата. .num start"}, nil
+		return []string{tr.T(lang, "not_started")}, nil
 	}
 	secret := g.secret
 	delete(numGames, scope)
-	return []string{fmt.Sprintf("Было %d", secret)}, nil
+	return []string{tr.T(lang, "ended", secret)}, nil
 }

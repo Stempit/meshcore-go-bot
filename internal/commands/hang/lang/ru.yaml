@@ -1,0 +1,12 @@
+# Виселица. Банк слов остаётся русским (вне scope i18n); здесь только UI.
+# %s — слово, %c — буква.
+help.long: |-
+  .hang <буква> — виселица
+  .hang start / <слово> / status / end / top
+dict_empty: "Словарь пуст"
+already_running: "Игра идёт. .hang <буква>"
+only_russian: "Только русские буквы"
+not_started: "Игра не начата. .hang start"
+won: "🎉 %s"
+letter_used: "Буква '%c' уже была"
+lost: "💀 Было: %s"

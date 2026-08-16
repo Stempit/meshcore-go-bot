@@ -3,7 +3,7 @@
 package hang
 
 import (
-	_ "embed"
+	"embed"
 	"fmt"
 	"math/rand"
 	"sort"
@@ -11,9 +11,15 @@ import (
 	"sync"
 	"time"
 
-	"meshbot/internal/support/registry"
 	"meshbot/internal/support/games"
+	"meshbot/internal/support/i18n"
+	"meshbot/internal/support/registry"
 )
+
+//go:embed lang/*.yaml
+var langFS embed.FS
+
+var tr = i18n.MustLoad(langFS)
 
 func init() { registry.Register(plugin{}) }
 
@@ -25,13 +31,16 @@ func (plugin) Meta() registry.Meta {
 		Triggers:  []string{".hang"},
 		Match:     registry.Prefix,
 		HelpShort: "hangman",
-		HelpLong:  ".hang <буква> — виселица\n.hang start / <слово> / status / end / top",
+		HelpLong:  ".hang <letter> — hangman\n.hang start / <word> / status / end / top",
 		Group:     "Games",
 	}
 }
 
+// LocalizedHelp returns the per-language long help for ".hang help".
+func (plugin) LocalizedHelp(lang string) string { return tr.T(lang, "help.long") }
+
 func (plugin) Handle(c registry.Ctx) ([]string, error) {
-	return processHang(c.Text, c.SenderKey, c.SenderName, c.Channel)
+	return processHang(c.Lang, c.Text, c.SenderKey, c.SenderName, c.Channel)
 }
 
 //go:embed words_ru.txt
@@ -72,7 +81,7 @@ var (
 //	.hang top           – leaderboard for this scope (last 30 days)
 //
 // Works in both channels (collaborative) and DMs (solo).
-func processHang(text, senderKey, senderName, channelName string) ([]string, error) {
+func processHang(lang, text, senderKey, senderName, channelName string) ([]string, error) {
 	rest := strings.TrimSpace(strings.TrimPrefix(text, ".hang"))
 	fields := strings.Fields(rest)
 
@@ -84,30 +93,30 @@ func processHang(text, senderKey, senderName, channelName string) ([]string, err
 
 	switch verb {
 	case "", "start":
-		return hangStart(scope)
+		return hangStart(lang, scope)
 	case "status":
-		return hangStatus(scope)
+		return hangStatus(lang, scope)
 	case "end":
-		return hangEnd(scope)
+		return hangEnd(lang, scope)
 	case "top":
 		return games.Top(hangLogBase, scope), nil
 	default:
 		// Anything else is a letter or whole-word guess.
-		return hangGuess(scope, senderName, fields[0])
+		return hangGuess(lang, scope, senderName, fields[0])
 	}
 }
 
 // hangStart picks a random word and opens a game in the scope.
-func hangStart(scope string) ([]string, error) {
+func hangStart(lang, scope string) ([]string, error) {
 	if len(hangWords) == 0 {
-		return []string{"Словарь пуст"}, nil
+		return []string{tr.T(lang, "dict_empty")}, nil
 	}
 
 	hangMu.Lock()
 	defer hangMu.Unlock()
 
 	if hangGames[scope] != nil {
-		return []string{"Игра идёт. .hang <буква>"}, nil
+		return []string{tr.T(lang, "already_running")}, nil
 	}
 
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
@@ -121,10 +130,10 @@ func hangStart(scope string) ([]string, error) {
 }
 
 // hangGuess applies a single-letter or whole-word guess.
-func hangGuess(scope, senderName, arg string) ([]string, error) {
+func hangGuess(lang, scope, senderName, arg string) ([]string, error) {
 	norm := games.NormalizeRu(arg)
 	if norm == "" {
-		return []string{"Только русские буквы"}, nil
+		return []string{tr.T(lang, "only_russian")}, nil
 	}
 	letters := []rune(norm)
 
@@ -133,7 +142,7 @@ func hangGuess(scope, senderName, arg string) ([]string, error) {
 	g := hangGames[scope]
 	if g == nil {
 		hangMu.Unlock()
-		return []string{"Игра не начата. .hang start"}, nil
+		return []string{tr.T(lang, "not_started")}, nil
 	}
 
 	// Whole-word guess.
@@ -143,22 +152,22 @@ func hangGuess(scope, senderName, arg string) ([]string, error) {
 			delete(hangGames, scope)
 			hangMu.Unlock()
 			games.LogWin(hangLog, scope, games.Who(senderName), word)
-			return []string{"🎉 " + strings.ToUpper(word)}, nil
+			return []string{tr.T(lang, "won", strings.ToUpper(word))}, nil
 		}
-		return hangPenalize(scope, g)
+		return hangPenalize(lang, scope, g)
 	}
 
 	// Single-letter guess.
 	letter := letters[0]
 	if g.guessed[letter] {
-		reply := fmt.Sprintf("Буква '%c' уже была", letter)
+		reply := tr.T(lang, "letter_used", letter)
 		hangMu.Unlock()
 		return []string{reply}, nil
 	}
 	g.guessed[letter] = true
 
 	if !runeIn(g.word, letter) {
-		return hangPenalize(scope, g)
+		return hangPenalize(lang, scope, g)
 	}
 
 	if hangSolved(g) {
@@ -166,7 +175,7 @@ func hangGuess(scope, senderName, arg string) ([]string, error) {
 		delete(hangGames, scope)
 		hangMu.Unlock()
 		games.LogWin(hangLog, scope, games.Who(senderName), word)
-		return []string{"🎉 " + strings.ToUpper(word)}, nil
+		return []string{tr.T(lang, "won", strings.ToUpper(word))}, nil
 	}
 
 	reply := hangRender(g)
@@ -176,13 +185,13 @@ func hangGuess(scope, senderName, arg string) ([]string, error) {
 
 // hangPenalize docks a life for a wrong guess and ends the game on a loss.
 // The caller must hold hangMu; hangPenalize releases it.
-func hangPenalize(scope string, g *hangGame) ([]string, error) {
+func hangPenalize(lang, scope string, g *hangGame) ([]string, error) {
 	g.lives--
 	if g.lives <= 0 {
 		word := string(g.word)
 		delete(hangGames, scope)
 		hangMu.Unlock()
-		return []string{"💀 Было: " + strings.ToUpper(word)}, nil
+		return []string{tr.T(lang, "lost", strings.ToUpper(word))}, nil
 	}
 	reply := hangRender(g)
 	hangMu.Unlock()
@@ -190,29 +199,29 @@ func hangPenalize(scope string, g *hangGame) ([]string, error) {
 }
 
 // hangStatus shows the current board.
-func hangStatus(scope string) ([]string, error) {
+func hangStatus(lang, scope string) ([]string, error) {
 	hangMu.Lock()
 	defer hangMu.Unlock()
 
 	g := hangGames[scope]
 	if g == nil {
-		return []string{"Игра не начата. .hang start"}, nil
+		return []string{tr.T(lang, "not_started")}, nil
 	}
 	return []string{hangRender(g)}, nil
 }
 
 // hangEnd gives up and reveals the word.
-func hangEnd(scope string) ([]string, error) {
+func hangEnd(lang, scope string) ([]string, error) {
 	hangMu.Lock()
 	defer hangMu.Unlock()
 
 	g := hangGames[scope]
 	if g == nil {
-		return []string{"Игра не начата. .hang start"}, nil
+		return []string{tr.T(lang, "not_started")}, nil
 	}
 	word := string(g.word)
 	delete(hangGames, scope)
-	return []string{"💀 Было: " + strings.ToUpper(word)}, nil
+	return []string{tr.T(lang, "lost", strings.ToUpper(word))}, nil
 }
 
 // hangRender draws the masked word, the wrong letters, and remaining lives,

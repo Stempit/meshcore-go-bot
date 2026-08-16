@@ -1,0 +1,16 @@
+# Кости. %s — нотация/имя/список, %d — суммы. Порядок плейсхолдеров важен.
+help.long: |-
+  .dice [NdM] — кинуть кости (def 1d6)
+  .dice start [NdM] / roll / end — раунд в канале
+usage: "🎲 .dice [NdM] | .dice start [NdM] / roll / end"
+roll_one: "🎲 : %d"
+roll_many: "🎲 : %s = %d"
+channels_only: "Раунд доступен только в каналах"
+already_running: "Раунд %s уже идёт. .dice roll"
+opened: "🎲 Раунд открыт: %s. Бросай: .dice roll"
+not_open: "Раунд не открыт. .dice start"
+already_rolled: "Ты уже бросил: %d"
+closed_no_rolls: "Раунд закрыт, никто не бросил"
+no_rolls_yet: "Раунд %s: бросков пока нет"
+tie: "🤝 Ничья: %s — %d"
+winner: "🏆 %s: %d"
