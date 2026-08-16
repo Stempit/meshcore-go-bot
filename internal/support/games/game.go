@@ -149,3 +149,17 @@ func NormalizeRu(s string) string {
 	}
 	return b.String()
 }
+
+// NormalizeEn lowercases s and keeps only English letters. The English-language
+// dictionary variant of .words uses it for both word-bank entries and player
+// guesses so they compare consistently.
+func NormalizeEn(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	var b strings.Builder
+	for _, r := range s {
+		if r >= 'a' && r <= 'z' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}

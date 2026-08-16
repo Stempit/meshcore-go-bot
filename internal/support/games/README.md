@@ -21,6 +21,7 @@ share. It imports no command package.
   which resolves a scope back to a channel/contact. Decoupled: `games` exposes a func
   type and never imports `dispatch`/`meshcore`.
 - **`NormalizeRu`** — lowercase, `ё→е`, keep only `а–я` (shared by the word games).
+- **`NormalizeEn`** — lowercase, keep only `a–z` (English variant, shared by the word games).
 
 `BaseDir` (`log/games`) is the root for per-game result logs.
 

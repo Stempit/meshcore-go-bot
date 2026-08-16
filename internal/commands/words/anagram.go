@@ -1,11 +1,10 @@
 package words
 
 import (
-	"bufio"
+	_ "embed"
 	"fmt"
 	"log/slog"
 	"math/rand"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,6 +17,12 @@ import (
 	"meshbot/internal/support/i18n"
 )
 
+//go:embed words_anagram_ru.txt
+var wordsDictRuRaw string
+
+//go:embed words_en.txt
+var wordsDictEnRaw string
+
 // wordsLang resolves the global bot language for code paths without a Ctx
 // (the round-timeout callback fires outside any request).
 func wordsLang() string {
@@ -27,14 +32,23 @@ func wordsLang() string {
 	return i18n.Base
 }
 
-// russian words from http://blog.kislenko.net/show.php?id=1678
+// wordsNormalize normalizes s for the dictionary matching the given language:
+// Russian (ё-folded Cyrillic) for "ru", English (a-z) otherwise.
+func wordsNormalize(lang, s string) string {
+	if lang == "ru" {
+		return games.NormalizeRu(s)
+	}
+	return games.NormalizeEn(s)
+}
+
+// Russian words from http://blog.kislenko.net/show.php?id=1678
+// English words from https://github.com/dwyl/english-words
 
 const (
-	wordsDefRoundSec = 300                    // countdown length when unset (5 min)
-	wordsDefMinSub   = 3                      // shortest valid submission (runes)
-	wordsDefBaseMin  = 8                      // shortest base word (runes)
-	wordsDefBaseMax  = 10                     // longest base word (runes)
-	wordsDefDictPath = "words_anagram_ru.txt" // runtime dictionary in CWD
+	wordsDefRoundSec = 300 // countdown length when unset (5 min)
+	wordsDefMinSub   = 3   // shortest valid submission (runes)
+	wordsDefBaseMin  = 8   // shortest base word (runes)
+	wordsDefBaseMax  = 10  // longest base word (runes)
 )
 
 // wordsGame is an open round in one scope (channel or DM). In a channel it is
@@ -138,9 +152,9 @@ func wordsStart(lang, scope string) ([]string, error) {
 // wordsSubmit validates a submission and, on success, scores it. The validation
 // order is cheapest-first; the first failure decides the reply.
 func wordsSubmit(lang, scope, who, arg string) ([]string, error) {
-	norm := games.NormalizeRu(arg)
+	norm := wordsNormalize(lang, arg)
 	if norm == "" {
-		return []string{tr.T(lang, "only_russian")}, nil
+		return []string{tr.T(lang, "invalid_chars")}, nil
 	}
 	word := []rune(norm)
 
@@ -332,31 +346,24 @@ func runeCounts(rs []rune) map[rune]int {
 	return m
 }
 
-// loadWordsDict loads the runtime dictionary into the validation set and the
-// base-word pool. It is defensive: every line is run through games.NormalizeRu
-// and the ≥3-rune / pure-Cyrillic filter, so pointing it at a raw singular.txt
-// also works. On a missing/empty file it logs a warning, leaves the indexes
-// empty (so .words start replies "Словарь недоступен"), and returns the error —
-// the rest of the bot keeps running. Called once at startup, from Configure.
-func loadWordsDict(path string) error {
-	if path == "" {
-		path = wordsDefDictPath
+// loadWordsDict parses the embedded dictionary matching the bot's configured
+// language (Russian for "ru", English otherwise) into the validation set and
+// the base-word pool. Every line is run through wordsNormalize and the
+// ≥3-rune filter. Called once at startup, from Configure, after config is
+// decoded so Language and base_min_len/base_max_len are in effect.
+func loadWordsDict() {
+	lang := wordsLang()
+	raw := wordsDictEnRaw
+	if lang == "ru" {
+		raw = wordsDictRuRaw
 	}
-	f, err := os.Open(path)
-	if err != nil {
-		slog.Warn("words: dictionary not loaded", "path", path, "error", err)
-		return err
-	}
-	defer f.Close()
 
 	bmin, bmax := wordsBaseMin(), wordsBaseMax()
 	valid := make(map[string]struct{})
 	var pool []string
 
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 64*1024), 1024*1024)
-	for sc.Scan() {
-		w := games.NormalizeRu(sc.Text())
+	for _, line := range strings.Split(raw, "\n") {
+		w := wordsNormalize(lang, line)
 		n := len([]rune(w))
 		if n < wordsDefMinSub {
 			continue
@@ -366,15 +373,10 @@ func loadWordsDict(path string) error {
 			pool = append(pool, w)
 		}
 	}
-	if err := sc.Err(); err != nil {
-		slog.Warn("words: error reading dictionary", "path", path, "error", err)
-		return err
-	}
 
 	wordsValid = valid
 	wordsPool = pool
-	slog.Info("words dictionary loaded", "path", path, "words", len(valid), "pool", len(pool))
-	return nil
+	slog.Info("words dictionary loaded", "words", len(valid), "pool", len(pool))
 }
 
 // Config accessors with use-site defaults (no central config defaulter); they

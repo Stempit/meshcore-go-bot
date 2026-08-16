@@ -1,4 +1,4 @@
-# Игра в анаграммы. Словарь остаётся русским (вне scope i18n); здесь UI.
+# Игра в анаграммы. Словарь на этом языке (русский) при Language: ru.
 # started: %s слово, %d минут. status: %s слово, %d мин, %02d сек, %d счёт.
 help.long: |-
   .words <слово> — слова из слова
@@ -6,7 +6,7 @@ help.long: |-
 dict_unavailable: "Словарь недоступен"
 already_running: "Игра идёт. .words <слово>"
 started: "🔤 Слова из: %s — %d мин!"
-only_russian: "❌ только русские буквы"
+invalid_chars: "❌ только русские буквы"
 not_started: "Игра не начата. .words start"
 too_short: "❌ слишком короткое"
 base_itself: "❌ это само слово"

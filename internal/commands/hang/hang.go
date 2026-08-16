@@ -1,4 +1,5 @@
-// Package hang answers .hang: hangman in Russian from an embedded word bank.
+// Package hang answers .hang: hangman from an embedded word bank, Russian or
+// English depending on the bot's Language setting.
 // Channels are collaborative (shared word and lives), DMs solo; 30-day leaderboard.
 package hang
 
@@ -11,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"meshbot/internal/config"
 	"meshbot/internal/support/games"
 	"meshbot/internal/support/i18n"
 	"meshbot/internal/support/registry"
@@ -44,16 +46,54 @@ func (plugin) Handle(c registry.Ctx) ([]string, error) {
 }
 
 //go:embed words_ru.txt
-var hangWordsRaw string
+var hangWordsRuRaw string
 
-// hangWords is the playable word bank: normalized, length-filtered, loaded once.
-var hangWords = loadHangWords(hangWordsRaw)
+//go:embed words_en.txt
+var hangWordsEnRaw string
+
+// hangWords is the playable word bank: normalized, length-filtered, loaded
+// once by Configure after config.Get().Language is known.
+var hangWords []string
 
 const (
 	hangLives  = 6 // wrong guesses allowed
 	hangMinLen = 4 // shortest playable word (runes)
 	hangMaxLen = 8 // longest, so mask + status fits the 140-byte limit
 )
+
+// hangLang resolves the global bot language, same convention as words.wordsLang.
+func hangLang() string {
+	if c := config.Get(); c != nil && c.Language != "" {
+		return c.Language
+	}
+	return i18n.Base
+}
+
+// hangNormalize normalizes s for the word bank matching lang: Russian
+// (ё-folded Cyrillic) for "ru", English (a-z) otherwise.
+func hangNormalize(lang, s string) string {
+	if lang == "ru" {
+		return games.NormalizeRu(s)
+	}
+	return games.NormalizeEn(s)
+}
+
+func (plugin) ConfigKey() string { return "hang" }
+
+// Configure loads the word bank matching the bot's configured language. Hang
+// has no config fields of its own; this exists only to run after config.Load
+// so Language is in effect. It runs once at startup, before any round.
+func (plugin) Configure(config.Sectioner) error {
+	lang := hangLang()
+	raw := hangWordsEnRaw
+	if lang == "ru" {
+		raw = hangWordsRuRaw
+	}
+	hangWords = loadHangWords(lang, raw)
+	return nil
+}
+
+func (plugin) Enabled() bool { return true }
 
 // hangGame is an open hangman round in one scope (channel or DM). In a channel
 // it is collaborative: shared word and shared lives.
@@ -131,9 +171,9 @@ func hangStart(lang, scope string) ([]string, error) {
 
 // hangGuess applies a single-letter or whole-word guess.
 func hangGuess(lang, scope, senderName, arg string) ([]string, error) {
-	norm := games.NormalizeRu(arg)
+	norm := hangNormalize(lang, arg)
 	if norm == "" {
-		return []string{tr.T(lang, "only_russian")}, nil
+		return []string{tr.T(lang, "invalid_chars")}, nil
 	}
 	letters := []rune(norm)
 
@@ -271,11 +311,11 @@ func runeIn(rs []rune, r rune) bool {
 	return false
 }
 
-// loadHangWords normalizes and length-filters the embedded word list.
-func loadHangWords(raw string) []string {
+// loadHangWords normalizes and length-filters the embedded word list matching lang.
+func loadHangWords(lang, raw string) []string {
 	var words []string
 	for _, line := range strings.Split(raw, "\n") {
-		w := games.NormalizeRu(line)
+		w := hangNormalize(lang, line)
 		if n := len([]rune(w)); n < hangMinLen || n > hangMaxLen {
 			continue
 		}

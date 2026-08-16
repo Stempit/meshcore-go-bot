@@ -1,11 +1,11 @@
-# Hangman. The word bank stays Russian (out of i18n scope); only UI text here.
+# Hangman. Word bank matches this language (English) at Language: en.
 # %s = the word, %c = a letter.
 help.long: |-
   .hang <letter> — hangman
   .hang start / <word> / status / end / top
 dict_empty: "Dictionary is empty"
 already_running: "Game in progress. .hang <letter>"
-only_russian: "Russian letters only"
+invalid_chars: "Letters only"
 not_started: "No game running. .hang start"
 won: "🎉 %s"
 letter_used: "Letter '%c' already tried"

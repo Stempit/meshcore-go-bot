@@ -1,4 +1,4 @@
-# Anagram game. Dictionary stays Russian (out of i18n scope); UI text here.
+# Anagram game. Dictionary matches this language (English) at Language: en.
 # started: %s base word, %d minutes. status: %s base, %d min, %02d sec, %d score.
 help.long: |-
   .words <word> — words from a word
@@ -6,7 +6,7 @@ help.long: |-
 dict_unavailable: "Dictionary unavailable"
 already_running: "Game in progress. .words <word>"
 started: "🔤 Words from: %s — %d min!"
-only_russian: "❌ Russian letters only"
+invalid_chars: "❌ letters only"
 not_started: "No game running. .words start"
 too_short: "❌ too short"
 base_itself: "❌ that's the base word"
