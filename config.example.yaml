@@ -96,6 +96,26 @@ Weather:
   default_location: "Moscow"  # used when .w is called with no argument
   units: metric               # metric (°C, m/s) or imperial (°F, mph)
 
+Alerts:
+  sources:
+    - enabled: false
+      name: bpla                 # used for logging and the seen-ids file (log/alerts/bpla.txt)
+      type: html_cards           # bplarussia.ru-style incident cards
+      url: "https://bplarussia.ru/region/kirovskaya-oblast"
+      channel: "#alerts"         # must already exist as a MeshCore channel on the device
+      poll_interval_sec: 60
+      max_per_poll: 3            # cap on new items announced per poll, to avoid flooding after downtime
+      postfix: " #БПЛА"          # optional: appended as-is to the announced message text
+    - enabled: false
+      name: mchs
+      type: rss
+      url: "https://43.mchs.gov.ru/deyatelnost/press-centr/operativnaya-informaciya/rss"
+      channel: "#alerts"
+      poll_interval_sec: 300
+      max_per_poll: 3
+      title_prefix: "Внимание"   # only forward genuine hazard warnings, skip routine daily reports
+      postfix: " #МЧС"
+
 Trace:
   use_config_coords: false  # использование предзаданных координат
   lat: 0

@@ -43,6 +43,10 @@ internal/
     llm/                – Ollama and OpenRouter LLM providers
     mqttbridge/         – MQTT publishing to custom broker + Let's Mesh analyzer
     tgbridge/           – Telegram bot bridge (long-poll)
+    alerts/             – polls one or more hazard-alert sources (bplarussia.ru FPV/UAV
+                          incident cards, МЧС RSS feeds) and announces new items to a mesh
+                          channel; no meshcore/dispatch dependency, delivery via an injected
+                          OnEvent callback (same shape as tgbridge)
     picoclaw/           – picoclaw AI agent WebSocket client (used by .claw)
 ```
 
@@ -61,6 +65,8 @@ Key environment variables:
 **Note:** the yaml key for LLM shrink retries is `shrink_max_retries` (fixed from the original typo `shrink_max_reties`).
 
 **Channel redirect:** the `Redirect` section steers flood-prone commands off busy channels — when a rule's command arrives on a listed channel, the bot replies with the rule's notice instead of running the command (DMs exempt). The gate lives in `registry.Dispatch` (before the handler runs, so no state mutates) with a per-channel cooldown on the notice itself. Rules match by canonical command name (`Meta().Name`).
+
+**Hazard alerts:** the `Alerts` section configures `internal/bridge/alerts` with a list of independent `sources`, each opt-in via its own `enabled` flag (default false) and with its own `type` (`html_cards` for bplarussia.ru-style incident pages, `rss` for standard RSS feeds), `url`, target `channel` (must already exist on the MeshCore device), `poll_interval_sec`, and `max_per_poll`. An optional `title_prefix` filters an RSS/HTML source down to items whose title starts with it — e.g. the shipped `mchs` source uses `title_prefix: "Внимание"` to keep only genuine МЧС hazard warnings and skip routine daily reports. An optional `postfix` is appended as-is to the announced message text (include your own separator, e.g. `" #БПЛА"`). Each source silently seeds its own seen-set from whatever's already there on first run (so history isn't dumped into the channel), then announces only new items — title only, no description, to stay within the mesh's tight per-message byte limit — capped at `max_per_poll` per poll to avoid flooding after downtime. Dedup state lives in `log/alerts/<source name>.txt`.
 
 ## Key conventions
 
@@ -82,13 +88,14 @@ log/
     dm/<name>.txt         – direct-message history
   known.txt               – greeted node public keys (hex, one per line)
   news/<feed>.txt         – RSS items written by the separate newswire app (https://github.com/Stempit/newswire); read by .news
+  alerts/<name>.txt       – ids of alert items already seen/announced, one file per configured source
 ```
 
 ## Packages that need care
 
 - **`internal/meshcore/client.go`** (~2300 lines) – BLE protocol state machine. The `sentConfirmCh` channel is a single shared slot; only one send can be in flight at a time, so concurrent senders must serialise their sends.
 - **`internal/bridge/mqttbridge/bridge.go`** (~1700 lines) – manages multiple MQTT connections (custom broker + EU/US analyzers) with JWT auth (Ed25519). Changes here affect network-visible state.
-- **`internal/config/model.go`** – holds only **infra** config (Connection, Proxy, MQTT, Telegram, Security, Shrink, LLM, Trace, Migration). Adding a field requires a YAML tag; check for typos. **Per-command** config lives in the plugin folder instead: the plugin implements `registry.Configurable` and decodes its own section via `config.Sectioner` (two-pass YAML over the same single `config.yaml`).
+- **`internal/config/model.go`** – holds only **infra** config (Connection, Proxy, MQTT, Telegram, Alerts, Security, Shrink, LLM, Trace, Migration). Adding a field requires a YAML tag; check for typos. **Per-command** config lives in the plugin folder instead: the plugin implements `registry.Configurable` and decodes its own section via `config.Sectioner` (two-pass YAML over the same single `config.yaml`).
 
 ## What the commands do
 

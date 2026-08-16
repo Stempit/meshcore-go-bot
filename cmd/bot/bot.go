@@ -9,21 +9,22 @@ import (
 	"syscall"
 	"time"
 
+	"meshbot/internal/bridge/alerts"
 	"meshbot/internal/bridge/mqttbridge"
 	"meshbot/internal/bridge/tgbridge"
 	_ "meshbot/internal/commands/allcommands" // self-registering command plugins
 	"meshbot/internal/commands/ticket"
 	"meshbot/internal/config"
 	"meshbot/internal/dispatch"
-	"meshbot/internal/support/games"
 	"meshbot/internal/greeter"
-	"meshbot/internal/support/historylog"
 	"meshbot/internal/logging"
 	"meshbot/internal/meshcore"
 	"meshbot/internal/migrator"
 	"meshbot/internal/proxy"
-	"meshbot/internal/support/registry"
 	"meshbot/internal/shrink"
+	"meshbot/internal/support/games"
+	"meshbot/internal/support/historylog"
+	"meshbot/internal/support/registry"
 )
 
 var log = logging.For("bot")
@@ -163,6 +164,32 @@ func main() {
 		}
 	}
 	d.SetTelegram(tgb)
+
+	// ─── FPV/UAV alert bridge ──────────────────────────────────────────────────
+
+	if alertsCfg := config.Get().Alerts; len(alertsCfg.Sources) > 0 {
+		ab, err := alerts.New(alertsCfg, slog.Default(), proxy.HTTPClient())
+		if err != nil {
+			log().Error("Failed to start alerts bridge", "error", err)
+		} else {
+			ab.OnEvent(func(sourceName, channelName, postfix string, ev alerts.Event) {
+				ch := client.GetChannelByName(channelName)
+				if ch == nil {
+					log().Warn("Alerts bridge: meshcore channel not found", "source", sourceName, "name", channelName)
+					return
+				}
+				text := ev.Title
+				if postfix != "" {
+					text += postfix
+				}
+				for _, part := range shrink.Fit("alerts", "", []string{text}) {
+					d.Enqueue(dispatch.Outgoing{Channel: ch, Text: part, Ack: false})
+				}
+			})
+			go ab.Start()
+			defer ab.Stop()
+		}
+	}
 
 	// Start the engine now that all subsystems are wired in.
 	d.Run(ctx)

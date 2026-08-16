@@ -1,6 +1,7 @@
 package config
 
 import (
+	"meshbot/internal/bridge/alerts"
 	"meshbot/internal/bridge/mqttbridge"
 	"meshbot/internal/bridge/tgbridge"
 )
@@ -98,6 +99,7 @@ type Config struct {
 	Proxy      ProxyConfig             `yaml:"Proxy"`
 	MQTT       mqttbridge.MQTTConfig   `yaml:"MQTT"`
 	Telegram   tgbridge.TelegramConfig `yaml:"Telegram"`
+	Alerts     alerts.Config           `yaml:"Alerts"`
 	Trace      TraceConfig             `yaml:"Trace"`
 	Security   SecurityConfig          `yaml:"Security"`
 	Redirect   RedirectConfig          `yaml:"Redirect"`
