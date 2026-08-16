@@ -2,7 +2,7 @@
 
 Commands are **self-registering plugins**: one folder that owns its handler,
 its config, its help text, and its assets. Adding a command is "create a folder
-+ add one import line." See [PLUGINS.md](PLUGINS.md) for the full design.
++ add one import line." See [internal/support/registry/README.md](../internal/support/registry/README.md) for the framework design.
 
 ## How commands work
 
