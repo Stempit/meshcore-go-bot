@@ -1,0 +1,6 @@
+# Recent channel history. %q = channel name.
+help.long: |-
+  .last [n] [channel]
+  show last n msgs (def 3, max 7) in channel
+usage: "usage: .last [count] [channel]"
+no_history: "No history for channel %q"

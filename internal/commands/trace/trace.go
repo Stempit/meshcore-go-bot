@@ -2,14 +2,21 @@
 package trace
 
 import (
+	"embed"
 	"encoding/hex"
 	"fmt"
 	"math"
 	"strings"
 	"time"
 
+	"meshbot/internal/support/i18n"
 	"meshbot/internal/support/registry"
 )
+
+//go:embed lang/*.yaml
+var langFS embed.FS
+
+var tr = i18n.MustLoad(langFS)
 
 func init() { registry.Register(plugin{}) }
 
@@ -26,8 +33,11 @@ func (plugin) Meta() registry.Meta {
 	}
 }
 
+// LocalizedHelp returns the per-language long help for ".trace help".
+func (plugin) LocalizedHelp(lang string) string { return tr.T(lang, "help.long") }
+
 func (plugin) Handle(c registry.Ctx) ([]string, error) {
-	return []string{formatTechPong(c.PingMeta)}, nil
+	return []string{formatTechPong(c.Lang, c.PingMeta)}, nil
 }
 
 // haversineKm returns the great-circle distance in km between two lat/lon points.
@@ -41,14 +51,14 @@ func haversineKm(lat1, lon1, lat2, lon2 float64) float64 {
 	return r * 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
 }
 
-func formatTechPong(meta *registry.PingMeta) string {
+func formatTechPong(lang string, meta *registry.PingMeta) string {
 	var sb strings.Builder
 
 	// 0xFF means direct delivery (no repeaters)
 	if meta.PathLength == 0xFF {
-		sb.WriteString("Pong direct")
+		sb.WriteString(tr.T(lang, "direct"))
 	} else {
-		fmt.Fprintf(&sb, "Pong %d hops", meta.PathLength)
+		sb.WriteString(tr.T(lang, "hops", meta.PathLength))
 		if len(meta.PathBytes) > 0 && meta.PathLength > 0 {
 			totalBytes := len(meta.PathBytes)
 			hops := meta.PathLength

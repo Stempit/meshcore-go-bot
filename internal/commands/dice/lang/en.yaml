@@ -1,0 +1,16 @@
+# Dice. %s = notation/name/list, %d = totals. Keep placeholder order.
+help.long: |-
+  .dice [NdM] — roll dice (def 1d6)
+  .dice start [NdM] / roll / end — round in a channel
+usage: "🎲 .dice [NdM] | .dice start [NdM] / roll / end"
+roll_one: "🎲 : %d"
+roll_many: "🎲 : %s = %d"
+channels_only: "Round is available in channels only"
+already_running: "Round %s in progress. .dice roll"
+opened: "🎲 Round open: %s. Roll: .dice roll"
+not_open: "Round not open. .dice start"
+already_rolled: "You already rolled: %d"
+closed_no_rolls: "Round closed, nobody rolled"
+no_rolls_yet: "Round %s: no rolls yet"
+tie: "🤝 Tie: %s — %d"
+winner: "🏆 %s: %d"

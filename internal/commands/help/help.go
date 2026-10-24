@@ -20,6 +20,6 @@ func (plugin) Meta() registry.Meta {
 	}
 }
 
-func (plugin) Handle(registry.Ctx) ([]string, error) {
-	return []string{registry.HelpIndex()}, nil
+func (plugin) Handle(c registry.Ctx) ([]string, error) {
+	return []string{registry.HelpIndex(c.Lang)}, nil
 }

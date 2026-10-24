@@ -2,13 +2,20 @@
 package stat
 
 import (
+	"embed"
 	"fmt"
 	"time"
 
-	"meshbot/internal/support/registry"
 	"meshbot/internal/support/helpers"
 	"meshbot/internal/support/historylog"
+	"meshbot/internal/support/i18n"
+	"meshbot/internal/support/registry"
 )
+
+//go:embed lang/*.yaml
+var langFS embed.FS
+
+var tr = i18n.MustLoad(langFS)
 
 // statWindow is the trailing period summarised by ".stat".
 const statWindow = 24 * time.Hour
@@ -23,10 +30,13 @@ func (plugin) Meta() registry.Meta {
 		Triggers:  []string{".stat"},
 		Match:     registry.Exact,
 		HelpShort: "channel traffic",
-		HelpLong:  ".stat — трафик канала за 24ч: сообщений, пик, участники",
+		HelpLong:  ".stat — channel traffic over 24h: messages, peak, participants",
 		Group:     "Info",
 	}
 }
+
+// LocalizedHelp returns the per-language long help for ".stat help".
+func (plugin) LocalizedHelp(lang string) string { return tr.T(lang, "help.long") }
 
 // Handle reports traffic stats for the channel where ".stat" was called:
 // message count over the last 24h, the busiest clock hour, and the number of
@@ -34,7 +44,7 @@ func (plugin) Meta() registry.Meta {
 // in DMs it reports unavailable.
 func (plugin) Handle(c registry.Ctx) ([]string, error) {
 	if c.IsDM() {
-		return []string{"Статистика доступна только в каналах"}, nil
+		return []string{tr.T(c.Lang, "channels_only")}, nil
 	}
 
 	entries, err := historylog.ReadAllChannel(helpers.HistoryDir, c.Channel)
@@ -57,7 +67,7 @@ func (plugin) Handle(c registry.Ctx) ([]string, error) {
 	}
 
 	if total == 0 {
-		return []string{"📊 3a 24ч cooбщeний нeт"}, nil
+		return []string{tr.T(c.Lang, "no_messages")}, nil
 	}
 
 	// Busiest clock hour; ties resolve to the earliest hour.
@@ -68,9 +78,6 @@ func (plugin) Handle(c registry.Ctx) ([]string, error) {
 		}
 	}
 
-	msg := fmt.Sprintf(
-		"📊 Kaнaл зa 24ч:\n✉️ %d cooбщ\n👥 %d yчacт\n⏰ пик %02d:00 (%d)",
-		total, len(users), peakHour, peakCount,
-	)
+	msg := tr.T(c.Lang, "summary", total, len(users), peakHour, peakCount)
 	return []string{msg}, nil
 }

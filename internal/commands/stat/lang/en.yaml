@@ -1,0 +1,5 @@
+# Channel 24h stats. summary order: %d msgs, %d users, %02d peak hour, %d peak count.
+help.long: ".stat — channel traffic over 24h: messages, peak, participants"
+channels_only: "Stats are available in channels only"
+no_messages: "📊 No messages in 24h"
+summary: "📊 Channel over 24h:\n✉️ %d msg\n👥 %d users\n⏰ peak %02d:00 (%d)"

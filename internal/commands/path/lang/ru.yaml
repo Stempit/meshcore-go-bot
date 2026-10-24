@@ -1,0 +1,16 @@
+# Поиск маршрута. Токены качества (strong/ok/weak) остаются техническими.
+# плейсхолдеры route: %d хопов, %s качество, %d процент, %s маршрут, %s хеши.
+help.long: |-
+  .path — сводка по сети
+  .path <откуда> to <куда> — лучший маршрут
+  прим: .path TIM to CHEP
+stats_unavailable: "path: статистика недоступна"
+net_summary: "сеть: %d репитеров, %d рёбер"
+usage: "формат: .path <откуда> to <куда>"
+ambiguous_splits: "неоднозначно, уточни: %s"
+ambiguous_node: "неоднозначно '%s': %s"
+not_found: "узел не найден: %s"
+same_node: "%s — это тот же узел"
+not_repeater: "%s не репитер"
+no_path: "нет маршрута: %s→%s"
+route: "%d хоп(ов) [%s ~%d%%]: %s %s"

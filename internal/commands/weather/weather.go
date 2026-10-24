@@ -3,6 +3,7 @@ package weather
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,9 +13,15 @@ import (
 	"strings"
 	"time"
 
-	"meshbot/internal/support/registry"
 	"meshbot/internal/proxy"
+	"meshbot/internal/support/i18n"
+	"meshbot/internal/support/registry"
 )
+
+//go:embed lang/*.yaml
+var langFS embed.FS
+
+var tr = i18n.MustLoad(langFS)
 
 type plugin struct{}
 
@@ -28,6 +35,9 @@ func (plugin) Meta() registry.Meta {
 		Group:     "Info",
 	}
 }
+
+// LocalizedHelp returns the per-language long help for ".w help".
+func (plugin) LocalizedHelp(lang string) string { return tr.T(lang, "help.long") }
 
 // Handle implements .w [завтра|tomorrow] [location].
 func (plugin) Handle(c registry.Ctx) ([]string, error) {
@@ -48,7 +58,7 @@ func (plugin) Handle(c registry.Ctx) ([]string, error) {
 		location = conf.DefaultLocation
 	}
 	if location == "" {
-		return []string{"погода: не указан город"}, nil
+		return []string{tr.T(c.Lang, "no_city")}, nil
 	}
 
 	var (
@@ -56,13 +66,13 @@ func (plugin) Handle(c registry.Ctx) ([]string, error) {
 		err   error
 	)
 	if day == 0 {
-		reply, err = fetchCurrentWeather(location, conf.Units)
+		reply, err = fetchCurrentWeather(c.Lang, location, conf.Units)
 	} else {
-		reply, err = fetchTomorrowWeather(location, conf.Units)
+		reply, err = fetchTomorrowWeather(c.Lang, location, conf.Units)
 	}
 	if err != nil {
 		log().Warn("weather fetch error", "error", err, "location", location)
-		return []string{"погода: сервис недоступен"}, nil
+		return []string{tr.T(c.Lang, "unavailable")}, nil
 	}
 
 	log().Info("weather reply", "reply", reply, "bytes", len(reply))
@@ -154,7 +164,7 @@ func wttrFetchJSON(location string) (*wttrResponse, []byte, error) {
 	return &data, body, nil
 }
 
-func fetchCurrentWeather(location, units string) (string, error) {
+func fetchCurrentWeather(lang, location, units string) (string, error) {
 	data, body, err := wttrFetchJSON(location)
 	if err != nil {
 		return "", err
@@ -168,13 +178,13 @@ func fetchCurrentWeather(location, units string) (string, error) {
 	cur := data.CurrentCondition[0]
 	emoji := weatherCodeEmoji(cur.WeatherCode)
 	temp := formatTemp(cur.TempC, cur.TempF, units)
-	cond := conditionText(cur.WeatherCode)
-	wind := buildWindStr(cur.WindspeedKmph, cur.WindspeedMiles, cur.Winddir16Point, units)
+	cond := conditionText(lang, cur.WeatherCode)
+	wind := buildWindStr(lang, cur.WindspeedKmph, cur.WindspeedMiles, cur.Winddir16Point, units)
 
 	return fmt.Sprintf("%s %s: %s, %s, 💨 %s", emoji, location, temp, cond, wind), nil
 }
 
-func fetchTomorrowWeather(location, units string) (string, error) {
+func fetchTomorrowWeather(lang, location, units string) (string, error) {
 	data, body, err := wttrFetchJSON(location)
 	if err != nil {
 		return "", err
@@ -193,12 +203,12 @@ func fetchTomorrowWeather(location, units string) (string, error) {
 		code = d.Hourly[4].WeatherCode
 	}
 	emoji := weatherCodeEmoji(code)
-	cond := conditionText(code)
+	cond := conditionText(lang, code)
 
 	wind := ""
 	if len(d.Hourly) > 4 {
 		h := d.Hourly[4]
-		wind = buildWindStr(h.WindspeedKmph, h.WindspeedMiles, h.Winddir16Point, units)
+		wind = buildWindStr(lang, h.WindspeedKmph, h.WindspeedMiles, h.Winddir16Point, units)
 	}
 
 	return fmt.Sprintf("%s %s: %s, %s, 💨 %s", emoji, location, temp, cond, wind), nil
@@ -216,14 +226,14 @@ func formatTemp(cVal, f, units string) string {
 	return fmt.Sprintf("%d%s", t, unit)
 }
 
-func buildWindStr(kmph, miles, dir16pt, units string) string {
-	dir := compassRU(dir16pt)
+func buildWindStr(lang, kmph, miles, dir16pt, units string) string {
+	dir := compassDir(lang, dir16pt)
 	if units == "imperial" {
-		return fmt.Sprintf("%smph %s", miles, dir)
+		return tr.T(lang, "wind_imperial", miles, dir)
 	}
 	kmphInt, _ := strconv.Atoi(kmph)
 	ms := int(float64(kmphInt)/3.6 + 0.5)
-	return fmt.Sprintf("%dм/с %s", ms, dir)
+	return tr.T(lang, "wind_metric", ms, dir)
 }
 
 // conditionRU maps wttr.in weather codes to Russian condition descriptions.
@@ -281,9 +291,66 @@ var conditionRU = map[int]string{
 	395: "сильный снег с грозой",
 }
 
-func conditionText(code string) string {
+// conditionEN maps wttr.in weather codes to English condition descriptions.
+// English base parallel to conditionRU.
+var conditionEN = map[int]string{
+	113: "clear",
+	116: "partly cloudy",
+	119: "cloudy",
+	122: "overcast",
+	143: "mist",
+	176: "patchy rain",
+	179: "patchy snow",
+	182: "patchy sleet",
+	185: "patchy freezing drizzle",
+	200: "thundery outbreaks",
+	227: "blowing snow",
+	230: "blizzard",
+	248: "fog",
+	260: "freezing fog",
+	263: "light drizzle",
+	266: "drizzle",
+	281: "freezing drizzle",
+	284: "heavy freezing drizzle",
+	293: "light rain",
+	296: "rain",
+	299: "moderate rain",
+	302: "rain",
+	305: "heavy rain",
+	308: "very heavy rain",
+	311: "freezing rain",
+	314: "heavy freezing rain",
+	317: "sleet",
+	320: "heavy sleet",
+	323: "light snow",
+	326: "snow",
+	329: "moderate snow",
+	332: "snowfall",
+	335: "heavy snow",
+	338: "very heavy snow",
+	350: "ice pellets",
+	353: "rain shower",
+	356: "heavy rain shower",
+	359: "torrential rain shower",
+	362: "sleet shower",
+	365: "heavy sleet shower",
+	368: "snow shower",
+	371: "heavy snow shower",
+	374: "ice shower",
+	377: "heavy ice shower",
+	386: "thunderstorm",
+	389: "thunderstorm with rain",
+	392: "snow with thunder",
+	395: "heavy snow with thunder",
+}
+
+func conditionText(lang, code string) string {
 	cVal, _ := strconv.Atoi(code)
-	if desc, ok := conditionRU[cVal]; ok {
+	table := conditionRU
+	if lang == "en" {
+		table = conditionEN
+	}
+	if desc, ok := table[cVal]; ok {
 		return desc
 	}
 	return ""
@@ -332,7 +399,12 @@ var compassToRU = map[string]string{
 	"NNW": "ССЗ",
 }
 
-func compassRU(dir string) string {
+// compassDir localizes a 16-point compass direction. English keeps the raw
+// Latin abbreviation (N, NNE, …); Russian maps to Cyrillic.
+func compassDir(lang, dir string) string {
+	if lang == "en" {
+		return dir
+	}
 	if ru, ok := compassToRU[dir]; ok {
 		return ru
 	}

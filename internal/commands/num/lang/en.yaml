@@ -1,0 +1,15 @@
+# Guess-the-number. Positional %d must keep their order across languages.
+help.long: |-
+  .num <number> — guess the number (1–100)
+  .num start [max] / status / end / top
+usage: "🎯 .num start [max] | .num <number> | .num top"
+max_range: "max %d–%d"
+already_running: "Game in progress. .num <number>"
+started: "🎯 Picked 1–%d. .num <number>"
+not_started: "No game running. .num start"
+out_of_range: "Out of range %d–%d"
+higher: "higher"
+lower: "lower"
+guessed: "🎯 Got it in %d! It was %d"
+status: "Range %d–%d, tries: %d"
+ended: "It was %d"

@@ -1,0 +1,8 @@
+# Метки индекса помощи (registry.HelpIndex). Ключи: group.<ИмяГруппы> для
+# каждого Meta().Group и help.footer. Порядок позиционных %s/%d менять нельзя.
+group.Games: "Игры"
+group.Info: "Инфо"
+group.AI: "ИИ"
+group.Service: "Сервис"
+group.Other: "Разное"
+help.footer: '"<команда> help" для подробностей'

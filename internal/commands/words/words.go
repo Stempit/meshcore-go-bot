@@ -5,8 +5,16 @@
 package words
 
 import (
+	"embed"
+
+	"meshbot/internal/support/i18n"
 	"meshbot/internal/support/registry"
 )
+
+//go:embed lang/*.yaml
+var langFS embed.FS
+
+var tr = i18n.MustLoad(langFS)
 
 func init() { registry.Register(plugin{}) }
 
@@ -18,11 +26,14 @@ func (plugin) Meta() registry.Meta {
 		Triggers:  []string{".words"},
 		Match:     registry.Prefix,
 		HelpShort: "anagram game",
-		HelpLong:  ".words <слово> — слова из слова\n.words start / status / end / top",
+		HelpLong:  ".words <word> — words from a word\n.words start / status / end / top",
 		Group:     "Games",
 	}
 }
 
+// LocalizedHelp returns the per-language long help for ".words help".
+func (plugin) LocalizedHelp(lang string) string { return tr.T(lang, "help.long") }
+
 func (plugin) Handle(c registry.Ctx) ([]string, error) {
-	return processWords(c.Text, c.SenderKey, c.SenderName, c.Channel)
+	return processWords(c.Lang, c.Text, c.SenderKey, c.SenderName, c.Channel)
 }

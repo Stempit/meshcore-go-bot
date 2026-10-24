@@ -1,0 +1,17 @@
+# Опрос. started_option: %d индекс, %s метка. status: %d мин, %02d сек, %s итоги.
+# result_option: %d индекс, %s метка, %d счёт.
+help.long: |-
+  .vote start вопрос | вариант1 | вариант2 — опрос
+  .vote <номер> — голос; .vote status / end
+usage: "📊 .vote start вопрос | вариант1 | вариант2 — опрос; .vote <номер> — голос; .vote status / end"
+channels_only: "Голосование доступно только в каналах"
+no_poll: "Опрос не идёт. .vote start"
+max_options: "Максимум %d вариантов"
+already_running: "Опрос уже идёт. .vote status"
+started_header: "📊 Опрос: %s"
+started_option: "\n.vote %d - %s"
+option_range: "Вариант 1–%d"
+voted: "✅ Голос за: %s"
+status: "⏱%d:%02d\n%s"
+result_header: "📊 Итоги: %s"
+result_option: "\n%d) %s: %d"

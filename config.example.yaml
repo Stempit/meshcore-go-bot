@@ -1,4 +1,9 @@
 ---
+# Bot-wide UI language for command replies and help text: "en" or "ru".
+# Empty/omitted defaults to "en". Commands not yet migrated to i18n keep their
+# own hardcoded text regardless of this setting. Restart to apply.
+Language: ru
+
 Connection:
   # Transport type: "bt" (Bluetooth LE, default) or "serial" (USB/UART)
   type: bt
@@ -176,10 +181,10 @@ Top:
 
 words:
   # ".words" — timed anagram game ("Слова из слова"). Opt-in: stays off until
-  # enabled. The dictionary is a runtime file in CWD (not compiled in); a
-  # missing file disables the game ("Словарь недоступен"), the bot runs anyway.
+  # enabled. Both dictionaries are embedded in the binary (no runtime file
+  # needed); the one loaded at startup follows the top-level Language setting
+  # (ru = Russian nouns, otherwise English).
   enabled: false
-  dict_path: "words_anagram_ru.txt"  # runtime word list; 0/unset = this default
   round_sec: 300     # countdown length per round; 0 or unset = default 300 (5 min)
   min_sub_len: 3     # shortest valid submission in letters; 0/unset = default 3
   base_min_len: 8    # shortest base word in letters; 0/unset = default 8

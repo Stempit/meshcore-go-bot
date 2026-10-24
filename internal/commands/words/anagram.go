@@ -1,29 +1,54 @@
 package words
 
 import (
-	"bufio"
+	_ "embed"
 	"fmt"
 	"log/slog"
 	"math/rand"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"meshbot/internal/config"
 	"meshbot/internal/support/games"
 	"meshbot/internal/support/helpers"
+	"meshbot/internal/support/i18n"
 )
 
-// russian words from http://blog.kislenko.net/show.php?id=1678
+//go:embed words_anagram_ru.txt
+var wordsDictRuRaw string
+
+//go:embed words_en.txt
+var wordsDictEnRaw string
+
+// wordsLang resolves the global bot language for code paths without a Ctx
+// (the round-timeout callback fires outside any request).
+func wordsLang() string {
+	if c := config.Get(); c != nil && c.Language != "" {
+		return c.Language
+	}
+	return i18n.Base
+}
+
+// wordsNormalize normalizes s for the dictionary matching the given language:
+// Russian (ё-folded Cyrillic) for "ru", English (a-z) otherwise.
+func wordsNormalize(lang, s string) string {
+	if lang == "ru" {
+		return games.NormalizeRu(s)
+	}
+	return games.NormalizeEn(s)
+}
+
+// Russian words from http://blog.kislenko.net/show.php?id=1678
+// English words from https://github.com/dwyl/english-words
 
 const (
-	wordsDefRoundSec = 300                    // countdown length when unset (5 min)
-	wordsDefMinSub   = 3                      // shortest valid submission (runes)
-	wordsDefBaseMin  = 8                      // shortest base word (runes)
-	wordsDefBaseMax  = 10                     // longest base word (runes)
-	wordsDefDictPath = "words_anagram_ru.txt" // runtime dictionary in CWD
+	wordsDefRoundSec = 300 // countdown length when unset (5 min)
+	wordsDefMinSub   = 3   // shortest valid submission (runes)
+	wordsDefBaseMin  = 8   // shortest base word (runes)
+	wordsDefBaseMax  = 10  // longest base word (runes)
 )
 
 // wordsGame is an open round in one scope (channel or DM). In a channel it is
@@ -63,7 +88,7 @@ var (
 //	.words top            – leaderboard for this scope (last 30 days)
 //
 // Works in both channels (shared base word, per-player scores) and DMs (solo).
-func processWords(text, senderKey, senderName, channelName string) ([]string, error) {
+func processWords(lang, text, senderKey, senderName, channelName string) ([]string, error) {
 	rest := strings.TrimSpace(strings.TrimPrefix(text, ".words"))
 	fields := strings.Fields(rest)
 
@@ -75,22 +100,22 @@ func processWords(text, senderKey, senderName, channelName string) ([]string, er
 
 	switch verb {
 	case "", "start":
-		return wordsStart(scope)
+		return wordsStart(lang, scope)
 	case "status":
-		return wordsStatus(scope, games.Who(senderName))
+		return wordsStatus(lang, scope, games.Who(senderName))
 	case "end":
-		return wordsEnd(scope)
+		return wordsEnd(lang, scope)
 	case "top":
 		return games.Top(wordsLogBase, scope), nil
 	default:
-		return wordsSubmit(scope, games.Who(senderName), fields[0])
+		return wordsSubmit(lang, scope, games.Who(senderName), fields[0])
 	}
 }
 
 // wordsStart opens a round in the scope, picking a base word from the pool.
-func wordsStart(scope string) ([]string, error) {
+func wordsStart(lang, scope string) ([]string, error) {
 	if len(wordsPool) == 0 {
-		return []string{"Словарь недоступен"}, nil
+		return []string{tr.T(lang, "dict_unavailable")}, nil
 	}
 
 	wordsMu.Lock()
@@ -100,7 +125,7 @@ func wordsStart(scope string) ([]string, error) {
 	// the caller the game is already running.
 	if g := wordsGames[scope]; g != nil {
 		wordsResetLocked(g)
-		return []string{"Игра идёт. .words <слово>"}, nil
+		return []string{tr.T(lang, "already_running")}, nil
 	}
 
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
@@ -121,15 +146,15 @@ func wordsStart(scope string) ([]string, error) {
 	wordsGames[scope] = g
 
 	slog.Info("words round started", "scope", scope, "base", string(base))
-	return []string{fmt.Sprintf("🔤 Слова из: %s — %d мин!", strings.ToUpper(string(base)), int(ttl.Minutes()))}, nil
+	return []string{tr.T(lang, "started", strings.ToUpper(string(base)), int(ttl.Minutes()))}, nil
 }
 
 // wordsSubmit validates a submission and, on success, scores it. The validation
 // order is cheapest-first; the first failure decides the reply.
-func wordsSubmit(scope, who, arg string) ([]string, error) {
-	norm := games.NormalizeRu(arg)
+func wordsSubmit(lang, scope, who, arg string) ([]string, error) {
+	norm := wordsNormalize(lang, arg)
 	if norm == "" {
-		return []string{"❌ только русские буквы"}, nil
+		return []string{tr.T(lang, "invalid_chars")}, nil
 	}
 	word := []rune(norm)
 
@@ -138,27 +163,27 @@ func wordsSubmit(scope, who, arg string) ([]string, error) {
 	g := wordsGames[scope]
 	if g == nil {
 		wordsMu.Unlock()
-		return []string{"Игра не начата. .words start"}, nil
+		return []string{tr.T(lang, "not_started")}, nil
 	}
 	wordsResetLocked(g) // any command keeps the round alive (requirement 6)
 
 	switch {
 	case len(word) < wordsMinSub():
 		wordsMu.Unlock()
-		return []string{"❌ слишком короткое"}, nil
+		return []string{tr.T(lang, "too_short")}, nil
 	case norm == string(g.base):
 		wordsMu.Unlock()
-		return []string{"❌ это само слово"}, nil
+		return []string{tr.T(lang, "base_itself")}, nil
 	case g.found[norm]:
 		wordsMu.Unlock()
-		return []string{"❌ уже было"}, nil
+		return []string{tr.T(lang, "already_found")}, nil
 	case !buildable(word, g.avail):
 		wordsMu.Unlock()
-		return []string{"❌ слово не найдено"}, nil
+		return []string{tr.T(lang, "not_found")}, nil
 	}
 	if _, ok := wordsValid[norm]; !ok {
 		wordsMu.Unlock()
-		return []string{"❌ слово не найдено"}, nil
+		return []string{tr.T(lang, "not_found")}, nil
 	}
 
 	// Score is super-linear in rune length so long finds pay off. Use rune
@@ -171,18 +196,18 @@ func wordsSubmit(scope, who, arg string) ([]string, error) {
 	wordsMu.Unlock()
 
 	slog.Info("words find", "scope", scope, "player", who, "word", norm, "score", score)
-	return []string{fmt.Sprintf("✅ +%d очков", score)}, nil
+	return []string{tr.T(lang, "scored", score)}, nil
 }
 
 // wordsStatus shows the base word, time left, and the caller's score. It also
 // resets the timer (requirement 6).
-func wordsStatus(scope, who string) ([]string, error) {
+func wordsStatus(lang, scope, who string) ([]string, error) {
 	wordsMu.Lock()
 	defer wordsMu.Unlock()
 
 	g := wordsGames[scope]
 	if g == nil {
-		return []string{"Игра не начата. .words start"}, nil
+		return []string{tr.T(lang, "not_started")}, nil
 	}
 	wordsResetLocked(g)
 
@@ -192,22 +217,22 @@ func wordsStatus(scope, who string) ([]string, error) {
 	}
 	m := int(left / time.Minute)
 	s := int(left/time.Second) % 60
-	return []string{fmt.Sprintf("%s ⏱%d:%02d ты:%d", strings.ToUpper(string(g.base)), m, s, g.scores[who])}, nil
+	return []string{tr.T(lang, "status", strings.ToUpper(string(g.base)), m, s, g.scores[who])}, nil
 }
 
 // wordsEnd closes the round early and returns the results synchronously. If the
 // round is already gone (a timeout finalized it microseconds earlier), it is
 // treated as "no active round" rather than double-finalized.
-func wordsEnd(scope string) ([]string, error) {
+func wordsEnd(lang, scope string) ([]string, error) {
 	wordsMu.Lock()
 	defer wordsMu.Unlock()
 
 	g := wordsGames[scope]
 	if g == nil {
-		return []string{"Игра не начата. .words start"}, nil
+		return []string{tr.T(lang, "not_started")}, nil
 	}
 	g.timer.Stop()
-	return wordsFinalizeLocked(scope, g), nil
+	return wordsFinalizeLocked(lang, scope, g), nil
 }
 
 // wordsOnTimeout is the AfterFunc callback. It bails on a stale fire — the round
@@ -222,7 +247,7 @@ func wordsOnTimeout(scope string, token uint64) {
 		wordsMu.Unlock()
 		return
 	}
-	results := wordsFinalizeLocked(scope, g)
+	results := wordsFinalizeLocked(wordsLang(), scope, g)
 	wordsMu.Unlock()
 
 	// Resolve-and-enqueue may be slow; never hold wordsMu across it.
@@ -231,7 +256,7 @@ func wordsOnTimeout(scope string, token uint64) {
 
 // wordsFinalizeLocked ranks players, records the winner(s), deletes the round,
 // and renders the results. The caller must hold wordsMu.
-func wordsFinalizeLocked(scope string, g *wordsGame) []string {
+func wordsFinalizeLocked(lang, scope string, g *wordsGame) []string {
 	base := strings.ToUpper(string(g.base))
 	delete(wordsGames, scope)
 
@@ -247,7 +272,7 @@ func wordsFinalizeLocked(scope string, g *wordsGame) []string {
 	}
 	if len(ranked) == 0 {
 		slog.Info("words round ended", "scope", scope, "winner", "", "score", 0)
-		return []string{"🏁 Никто не успел. Было: " + base}
+		return []string{tr.T(lang, "nobody", base)}
 	}
 
 	sort.Slice(ranked, func(i, j int) bool {
@@ -287,7 +312,7 @@ func wordsFinalizeLocked(scope string, g *wordsGame) []string {
 	}
 	slog.Info("words round ended", "scope", scope, "winner", ranked[0].name, "score", top)
 
-	return []string{"🏁 Итоги «" + base + "»", line}
+	return []string{tr.T(lang, "results_header", base), line}
 }
 
 // wordsResetLocked refreshes the countdown to its full length. The caller must
@@ -321,31 +346,24 @@ func runeCounts(rs []rune) map[rune]int {
 	return m
 }
 
-// loadWordsDict loads the runtime dictionary into the validation set and the
-// base-word pool. It is defensive: every line is run through games.NormalizeRu
-// and the ≥3-rune / pure-Cyrillic filter, so pointing it at a raw singular.txt
-// also works. On a missing/empty file it logs a warning, leaves the indexes
-// empty (so .words start replies "Словарь недоступен"), and returns the error —
-// the rest of the bot keeps running. Called once at startup, from Configure.
-func loadWordsDict(path string) error {
-	if path == "" {
-		path = wordsDefDictPath
+// loadWordsDict parses the embedded dictionary matching the bot's configured
+// language (Russian for "ru", English otherwise) into the validation set and
+// the base-word pool. Every line is run through wordsNormalize and the
+// ≥3-rune filter. Called once at startup, from Configure, after config is
+// decoded so Language and base_min_len/base_max_len are in effect.
+func loadWordsDict() {
+	lang := wordsLang()
+	raw := wordsDictEnRaw
+	if lang == "ru" {
+		raw = wordsDictRuRaw
 	}
-	f, err := os.Open(path)
-	if err != nil {
-		slog.Warn("words: dictionary not loaded", "path", path, "error", err)
-		return err
-	}
-	defer f.Close()
 
 	bmin, bmax := wordsBaseMin(), wordsBaseMax()
 	valid := make(map[string]struct{})
 	var pool []string
 
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 64*1024), 1024*1024)
-	for sc.Scan() {
-		w := games.NormalizeRu(sc.Text())
+	for _, line := range strings.Split(raw, "\n") {
+		w := wordsNormalize(lang, line)
 		n := len([]rune(w))
 		if n < wordsDefMinSub {
 			continue
@@ -355,15 +373,10 @@ func loadWordsDict(path string) error {
 			pool = append(pool, w)
 		}
 	}
-	if err := sc.Err(); err != nil {
-		slog.Warn("words: error reading dictionary", "path", path, "error", err)
-		return err
-	}
 
 	wordsValid = valid
 	wordsPool = pool
-	slog.Info("words dictionary loaded", "path", path, "words", len(valid), "pool", len(pool))
-	return nil
+	slog.Info("words dictionary loaded", "words", len(valid), "pool", len(pool))
 }
 
 // Config accessors with use-site defaults (no central config defaulter); they

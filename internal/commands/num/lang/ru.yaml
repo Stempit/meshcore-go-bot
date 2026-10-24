@@ -1,0 +1,15 @@
+# Угадай число. Порядок позиционных %d менять нельзя.
+help.long: |-
+  .num <число> — угадай число (1–100)
+  .num start [max] / status / end / top
+usage: "🎯 .num start [max] | .num <число> | .num top"
+max_range: "max %d–%d"
+already_running: "Игра идёт. .num <число>"
+started: "🎯 Загадал 1–%d. .num <число>"
+not_started: "Игра не начата. .num start"
+out_of_range: "Вне диапазона %d–%d"
+higher: "больше"
+lower: "меньше"
+guessed: "🎯 Угадал за %d! Это %d"
+status: "Диапазон %d–%d, попыток: %d"
+ended: "Было %d"

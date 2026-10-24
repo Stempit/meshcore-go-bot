@@ -1,0 +1,17 @@
+# Poll. started_option: %d index, %s label. status: %d min, %02d sec, %s results.
+# result_option: %d index, %s label, %d count.
+help.long: |-
+  .vote start question | opt1 | opt2 — poll
+  .vote <n> — vote; .vote status / end
+usage: "📊 .vote start question | opt1 | opt2 — poll; .vote <n> — vote; .vote status / end"
+channels_only: "Voting is available in channels only"
+no_poll: "No poll running. .vote start"
+max_options: "Maximum %d options"
+already_running: "Poll already running. .vote status"
+started_header: "📊 Poll: %s"
+started_option: "\n.vote %d - %s"
+option_range: "Option 1–%d"
+voted: "✅ Voted for: %s"
+status: "⏱%d:%02d\n%s"
+result_header: "📊 Results: %s"
+result_option: "\n%d) %s: %d"

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"meshbot/internal/config"
+	"meshbot/internal/support/i18n"
 )
 
 // PingMeta holds path, timing, and location metadata from the incoming message.
@@ -33,11 +34,16 @@ type Ctx struct {
 	SenderName string         // human-readable author; may be ""
 	PingMeta   *PingMeta      // path/timing/location metadata
 	Cfg        *config.Config // shared/infra config (read-only)
+	Lang       string         // resolved bot-wide UI language (see NewCtx); handlers key i18n lookups on this
 }
 
 // NewCtx builds a Ctx, filling Trimmed/Lower from Text.
 func NewCtx(text, channel, senderKey, senderName string, pm *PingMeta, cfg *config.Config) Ctx {
 	t := strings.TrimSpace(text)
+	lang := i18n.Base
+	if cfg != nil && cfg.Language != "" {
+		lang = cfg.Language
+	}
 	return Ctx{
 		Text:       text,
 		Trimmed:    t,
@@ -47,6 +53,7 @@ func NewCtx(text, channel, senderKey, senderName string, pm *PingMeta, cfg *conf
 		SenderName: senderName,
 		PingMeta:   pm,
 		Cfg:        cfg,
+		Lang:       lang,
 	}
 }
 

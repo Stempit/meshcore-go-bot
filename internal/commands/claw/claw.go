@@ -5,13 +5,20 @@ package claw
 
 import (
 	"context"
+	"embed"
 	"fmt"
 	"strings"
 	"time"
 
-	"meshbot/internal/support/registry"
 	"meshbot/internal/bridge/picoclaw"
+	"meshbot/internal/support/i18n"
+	"meshbot/internal/support/registry"
 )
+
+//go:embed lang/*.yaml
+var langFS embed.FS
+
+var tr = i18n.MustLoad(langFS)
 
 // clawPriority sits above bbs (10) so a @[BotName] mention beats BBS mode.
 const clawPriority = 20
@@ -24,11 +31,14 @@ func (plugin) Meta() registry.Meta {
 		Triggers:  []string{".claw"},
 		Match:     registry.Prefix,
 		HelpShort: "ask picoclaw",
-		HelpLong:  ".claw <вопрос>\nспросить picoclaw AI агента",
+		HelpLong:  ".claw <question>\nask the picoclaw AI agent",
 		Group:     "AI",
 		Priority:  clawPriority,
 	}
 }
+
+// LocalizedHelp returns the per-language long help for ".claw help".
+func (plugin) LocalizedHelp(lang string) string { return tr.T(lang, "help.long") }
 
 // Matches handles both the @[BotName] mention (when configured) and the .claw
 // trigger, reproducing the command's two original entry points.
@@ -48,20 +58,20 @@ func (plugin) Handle(c registry.Ctx) ([]string, error) {
 		mentionPrefix := "@[" + conf.BotName + "]"
 		if strings.HasPrefix(c.Lower, strings.ToLower(mentionPrefix)) {
 			prompt := strings.TrimSpace(c.Trimmed[len(mentionPrefix):])
-			return processClaw(".claw "+prompt, c.SenderKey, c.Channel)
+			return processClaw(c.Lang, ".claw "+prompt, c.SenderKey, c.Channel)
 		}
 	}
-	return processClaw(c.Text, c.SenderKey, c.Channel)
+	return processClaw(c.Lang, c.Text, c.SenderKey, c.Channel)
 }
 
-func processClaw(text, senderKey, channelName string) ([]string, error) {
+func processClaw(lang, text, senderKey, channelName string) ([]string, error) {
 	prompt := strings.TrimSpace(strings.TrimPrefix(text, ".claw"))
 	if prompt == "" {
-		return []string{"usage: .claw <вопрос>"}, nil
+		return []string{tr.T(lang, "usage")}, nil
 	}
 
 	if !conf.Enabled {
-		return []string{"picoclaw не настроен"}, nil
+		return []string{tr.T(lang, "not_configured")}, nil
 	}
 
 	timeoutSec := conf.TimeoutSec
@@ -75,7 +85,7 @@ func processClaw(text, senderKey, channelName string) ([]string, error) {
 	parts, err := picoclaw.Ask(ctx, conf.URL, conf.Token, sessionID, prompt)
 	if err != nil {
 		log().Warn("picoclaw request failed", "error", err)
-		return []string{"ошибка соединения с picoclaw"}, nil
+		return []string{tr.T(lang, "connection_error")}, nil
 	}
 	log().Info("picoclaw response", "parts", len(parts))
 

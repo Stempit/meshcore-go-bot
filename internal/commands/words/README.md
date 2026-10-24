@@ -1,11 +1,13 @@
 # words — anagram (Слова из слова)
 
 Package `words` registers the `.words` command: a timed word-building game playable in
-**DMs and channels**. The bot picks one long Russian noun (the *base word*); players
-race to build shorter words from its letters before a countdown runs out. Scoring is
-super-linear (`score = len²`), so the game rewards digging for long, hard words.
+**DMs and channels**. The bot picks one long base word; players race to build shorter
+words from its letters before a countdown runs out. Scoring is super-linear
+(`score = len²`), so the game rewards digging for long, hard words. The dictionary
+follows the bot's global `Language` setting: Russian nouns for `ru`, English words
+otherwise — see [Dictionary](#dictionary-embedded) below.
 
-> Example: base word `кальвадос` → `.words лава` → `✅ +16 очков` (4 letters, `4² = 16`).
+> Example (`Language: ru`): base word `кальвадос` → `.words лава` → `✅ +16 очков` (4 letters, `4² = 16`).
 
 `.words` is the first game with a **self-firing timer**: when the round expires the bot
 *pushes* results to the channel/DM with no triggering message, via the injected
@@ -28,23 +30,29 @@ collaborative-competitive (shared base word, per-player scores), DMs are solo.
 
 ### Submission validation (in order, cheapest first)
 
-1. Normalize (lowercase, `ё→е`, keep only `а–я`); empty → `❌ только русские буквы`.
-2. Length ≥ `min_sub_len` → else `❌ слишком короткое`.
-3. Not the base word itself → `❌ это само слово`.
-4. Not already found this round → `❌ уже было`.
-5. **Multiset-buildable** from the base letters (one base letter backs one submission letter) → else `❌ слово не найдено`.
-6. In the dictionary → else `❌ слово не найдено`.
+1. Normalize (lowercase; `ru` folds `ё→е` and keeps only `а–я`, `en` keeps only `a–z`); empty → `❌ only Russian letters` / `❌ letters only`.
+2. Length ≥ `min_sub_len` → else `❌ too short`.
+3. Not the base word itself → `❌ that's the base word`.
+4. Not already found this round → `❌ already found`.
+5. **Multiset-buildable** from the base letters (one base letter backs one submission letter) → else `❌ word not found`.
+6. In the dictionary → else `❌ word not found`.
 
 Scoring uses **rune length**, not byte length. State is in-memory (lost on restart).
 
-## Dictionary (runtime file)
+## Dictionary (embedded)
 
-Loaded once at startup from `dict_path` (default `words_anagram_ru.txt`, ~67k
-ё-folded lowercase nouns) into two indexes: a validation set, and a base-word pool of
-entries `base_min_len..base_max_len` runes long (default 8–10). The loader is
-defensive (re-normalizes every line), so a raw `singular.txt` also works. A
-missing/empty file leaves the indexes empty and `.words start` replies
-`Словарь недоступен` — the rest of the bot runs normally.
+Two word lists are compiled into the binary via `go:embed`, and `Configure` picks one
+at startup based on `config.Get().Language`:
+
+- `words_anagram_ru.txt` (~67k ё-folded lowercase Russian nouns) for `Language: ru`.
+- `words_en.txt` (~370k lowercase English words, from
+  [dwyl/english-words](https://github.com/dwyl/english-words)) otherwise.
+
+The chosen list is parsed once into two indexes: a validation set, and a base-word pool
+of entries `base_min_len..base_max_len` runes long (default 8–10). The parser is
+defensive (re-normalizes every line, drops anything under 3 runes or outside the
+language's letter set). The bot only ever loads one language's dictionary per run —
+switching `Language` requires a restart, same as the rest of the bot's i18n.
 
 ## Leaderboard (`.words top`)
 
@@ -60,7 +68,6 @@ defaulted at their use sites.
 ```yaml
 words:
   enabled: false            # opt-in
-  dict_path: words_anagram_ru.txt
   round_sec: 300            # countdown length (default 300 = 5 min)
   min_sub_len: 3            # shortest valid submission
   base_min_len: 8           # shortest base word

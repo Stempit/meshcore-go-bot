@@ -1,0 +1,7 @@
+# LLM query. reply_directive steers the model's free-form output language;
+# it is appended to the configured system prompt.
+help.long: |-
+  .llm <query>
+  ask AI, auto-shrunk to <130 chars
+error: "dunno"
+reply_directive: "Answer in English."

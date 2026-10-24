@@ -1,0 +1,9 @@
+# Weather UI strings. Condition/compass tables live in Go (content tables),
+# selected by language. wind_*: %s speed then %s direction.
+help.long: |-
+  .w [tomorrow] [city]
+  current or next-day weather
+no_city: "weather: no city given"
+unavailable: "weather: service unavailable"
+wind_metric: "%dm/s %s"
+wind_imperial: "%smph %s"

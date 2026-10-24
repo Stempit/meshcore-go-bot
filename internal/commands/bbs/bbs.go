@@ -4,6 +4,7 @@
 package bbs
 
 import (
+	"embed"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -13,8 +14,14 @@ import (
 	"sync"
 	"time"
 
+	"meshbot/internal/support/i18n"
 	"meshbot/internal/support/registry"
 )
+
+//go:embed lang/*.yaml
+var langFS embed.FS
+
+var tr = i18n.MustLoad(langFS)
 
 const (
 	bbsDir          = "log/2ch"
@@ -69,6 +76,9 @@ func (plugin) Meta() registry.Meta {
 	}
 }
 
+// LocalizedHelp returns the per-language long help for ".2ch help".
+func (plugin) LocalizedHelp(lang string) string { return tr.T(lang, "help.long") }
+
 // Matches claims ".2ch" (enter) plus any input while the sender is in BBS mode.
 func (plugin) Matches(c registry.Ctx) bool {
 	return isBBSMode(c.SenderKey) || c.Lower == ".2ch"
@@ -78,13 +88,13 @@ func (plugin) Handle(c registry.Ctx) ([]string, error) {
 	if isBBSMode(c.SenderKey) {
 		if c.Lower == ".exit" {
 			exitBBSMode(c.SenderKey)
-			return []string{"Left BBS. Bye!"}, nil
+			return []string{tr.T(c.Lang, "left")}, nil
 		}
-		return processBBSCommand(c.Text, c.SenderKey, c.SenderName)
+		return processBBSCommand(c.Lang, c.Text, c.SenderKey, c.SenderName)
 	}
 	// Enter BBS mode.
 	enterBBSMode(c.SenderKey)
-	return []string{"Welcome to BBS!\n/hl for help\n.exit to leave"}, nil
+	return []string{tr.T(c.Lang, "welcome")}, nil
 }
 
 // isBBSMode returns true when the session key is in BBS mode.
@@ -109,43 +119,43 @@ func exitBBSMode(sessionKey string) {
 }
 
 // processBBSCommand routes a command while in BBS mode.
-func processBBSCommand(text, authorKey, authorName string) ([]string, error) {
+func processBBSCommand(lang, text, authorKey, authorName string) ([]string, error) {
 	bbsThreadsMu.Lock()
 	defer bbsThreadsMu.Unlock()
 
 	if err := bbsLoad(); err != nil {
-		return []string{"ERR: cannot load threads"}, err
+		return []string{tr.T(lang, "err_load")}, err
 	}
 
 	lower := strings.ToLower(strings.TrimSpace(text))
 
 	switch {
 	case lower == "/hl" || strings.HasPrefix(lower, "/hl "):
-		return bbsHelp(), nil
+		return bbsHelp(lang), nil
 	case lower == "/ls" || strings.HasPrefix(lower, "/ls "):
-		return bbsList(text), nil
+		return bbsList(lang, text), nil
 	case strings.HasPrefix(lower, "/rd"):
-		return bbsRead(text), nil
+		return bbsRead(lang, text), nil
 	case strings.HasPrefix(lower, "/nw"):
-		return bbsNew(text, authorKey, authorName), nil
+		return bbsNew(lang, text, authorKey, authorName), nil
 	case strings.HasPrefix(lower, "/rp"):
-		return bbsReply(text, authorKey, authorName), nil
+		return bbsReply(lang, text, authorKey, authorName), nil
 	default:
-		return []string{"Unknown cmd. /hl for help"}, nil
+		return []string{tr.T(lang, "unknown_cmd")}, nil
 	}
 }
 
-func bbsHelp() []string {
+func bbsHelp(lang string) []string {
 	return []string{
-		"/ls [page] - list threads",
-		"/rd <id> [page] - read thread",
-		"/nw <title>|<text> - new thread",
-		"/rp <id>|<text> - reply to thread",
-		".exit - leave BBS",
+		tr.T(lang, "help.hl_ls"),
+		tr.T(lang, "help.hl_rd"),
+		tr.T(lang, "help.hl_nw"),
+		tr.T(lang, "help.hl_rp"),
+		tr.T(lang, "help.hl_exit"),
 	}
 }
 
-func bbsList(text string) []string {
+func bbsList(lang, text string) []string {
 	parts := strings.Fields(text)
 	page := 1
 	if len(parts) >= 2 {
@@ -156,7 +166,7 @@ func bbsList(text string) []string {
 	}
 
 	if len(bbsThreads) == 0 {
-		return []string{"No threads yet. /nw title|text"}
+		return []string{tr.T(lang, "no_threads")}
 	}
 
 	// Sort by last activity (newest first).
@@ -188,35 +198,35 @@ func bbsList(text string) []string {
 	}
 
 	var lines []string
-	lines = append(lines, fmt.Sprintf("Page %d/%d:", page, totalPages))
+	lines = append(lines, tr.T(lang, "page_header", page, totalPages))
 	for _, t := range sorted[start:end] {
-		label := "NEW"
+		label := tr.T(lang, "label_new")
 		if len(t.Posts) > 1 {
-			label = fmt.Sprintf("RE:%d", len(t.Posts)-1)
+			label = tr.T(lang, "label_re", len(t.Posts)-1)
 		}
 		author := bbsAuthor(t.Posts[0].AuthorKey, t.Posts[0].AuthorName)
 		title := t.Title
 		if len(title) > 20 {
 			title = title[:18] + ".."
 		}
-		lines = append(lines, fmt.Sprintf("[%d][%s] %s (%s)", t.ID, label, title, author))
+		lines = append(lines, tr.T(lang, "list_line", t.ID, label, title, author))
 	}
 	if page < totalPages {
-		lines = append(lines, fmt.Sprintf("/ls %d - next page", page+1))
+		lines = append(lines, tr.T(lang, "next_page", page+1))
 	}
 
 	return bbsPackLines(lines)
 }
 
-func bbsRead(text string) []string {
+func bbsRead(lang, text string) []string {
 	parts := strings.Fields(text)
 	if len(parts) < 2 {
-		return []string{"Usage: /rd <id> [page]"}
+		return []string{tr.T(lang, "usage_rd")}
 	}
 
 	var id int
 	if _, err := fmt.Sscanf(parts[1], "%d", &id); err != nil {
-		return []string{"Invalid thread ID"}
+		return []string{tr.T(lang, "invalid_id")}
 	}
 
 	var thread *BBSThread
@@ -227,7 +237,7 @@ func bbsRead(text string) []string {
 		}
 	}
 	if thread == nil {
-		return []string{fmt.Sprintf("Thread %d not found", id)}
+		return []string{tr.T(lang, "thread_not_found", id)}
 	}
 
 	totalPages := int(math.Ceil(float64(len(thread.Posts)) / float64(bbsPostsPerPage)))
@@ -257,33 +267,33 @@ func bbsRead(text string) []string {
 	if len(title) > 25 {
 		title = title[:23] + ".."
 	}
-	msgs = append(msgs, fmt.Sprintf("[Thr %d] %s (p%d/%d)", id, title, page, totalPages))
+	msgs = append(msgs, tr.T(lang, "thread_header", id, title, page, totalPages))
 
 	for _, post := range thread.Posts[start:end] {
 		author := bbsAuthor(post.AuthorKey, post.AuthorName)
-		ago := bbsTimeAgo(post.CreatedAt)
-		header := fmt.Sprintf("Post #%d by %s (%s):", post.Num, author, ago)
+		ago := bbsTimeAgo(lang, post.CreatedAt)
+		header := tr.T(lang, "post_header", post.Num, author, ago)
 		// One logical message per post; long posts are split at the send site.
 		msgs = append(msgs, header+"\n"+post.Text)
 	}
 
-	msgs = append(msgs, fmt.Sprintf("Reply: /rp %d|text", id))
+	msgs = append(msgs, tr.T(lang, "reply_hint", id))
 	return msgs
 }
 
-func bbsNew(text, authorKey, authorName string) []string {
+func bbsNew(lang, text, authorKey, authorName string) []string {
 	rest := strings.TrimSpace(text[3:])
 	if rest == "" {
-		return []string{"Usage: /nw title|text"}
+		return []string{tr.T(lang, "usage_nw")}
 	}
 	idx := strings.Index(rest, "|")
 	if idx < 0 {
-		return []string{"Usage: /nw title|text"}
+		return []string{tr.T(lang, "usage_nw")}
 	}
 	title := strings.TrimSpace(rest[:idx])
 	body := strings.TrimSpace(rest[idx+1:])
 	if title == "" || body == "" {
-		return []string{"Title and text required"}
+		return []string{tr.T(lang, "title_text_required")}
 	}
 
 	now := time.Now()
@@ -302,29 +312,29 @@ func bbsNew(text, authorKey, authorName string) []string {
 	bbsNextID++
 	bbsThreads = append(bbsThreads, t)
 	if err := bbsSave(); err != nil {
-		return []string{"ERR: cannot save thread"}
+		return []string{tr.T(lang, "err_save_thread")}
 	}
-	return []string{fmt.Sprintf("Thread %d created: %s", t.ID, title)}
+	return []string{tr.T(lang, "thread_created", t.ID, title)}
 }
 
-func bbsReply(text, authorKey, authorName string) []string {
+func bbsReply(lang, text, authorKey, authorName string) []string {
 	rest := strings.TrimSpace(text[3:])
 	if rest == "" {
-		return []string{"Usage: /rp id|text"}
+		return []string{tr.T(lang, "usage_rp")}
 	}
 	idx := strings.Index(rest, "|")
 	if idx < 0 {
-		return []string{"Usage: /rp id|text"}
+		return []string{tr.T(lang, "usage_rp")}
 	}
 	idStr := strings.TrimSpace(rest[:idx])
 	body := strings.TrimSpace(rest[idx+1:])
 	if body == "" {
-		return []string{"Reply text required"}
+		return []string{tr.T(lang, "reply_text_required")}
 	}
 
 	var id int
 	if _, err := fmt.Sscanf(idStr, "%d", &id); err != nil {
-		return []string{"Invalid thread ID"}
+		return []string{tr.T(lang, "invalid_id")}
 	}
 
 	for _, t := range bbsThreads {
@@ -338,12 +348,12 @@ func bbsReply(text, authorKey, authorName string) []string {
 				Text:       body,
 			})
 			if err := bbsSave(); err != nil {
-				return []string{"ERR: cannot save reply"}
+				return []string{tr.T(lang, "err_save_reply")}
 			}
-			return []string{fmt.Sprintf("Reply #%d added to thread %d", num, id)}
+			return []string{tr.T(lang, "reply_added", num, id)}
 		}
 	}
-	return []string{fmt.Sprintf("Thread %d not found", id)}
+	return []string{tr.T(lang, "thread_not_found", id)}
 }
 
 // bbsAuthor returns a display name: username or first 6 hex chars of key.
@@ -360,17 +370,17 @@ func bbsAuthor(key, name string) string {
 	return key
 }
 
-func bbsTimeAgo(t time.Time) string {
+func bbsTimeAgo(lang string, t time.Time) string {
 	d := time.Since(t)
 	switch {
 	case d < time.Minute:
-		return "now"
+		return tr.T(lang, "ago_now")
 	case d < time.Hour:
-		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+		return tr.T(lang, "ago_min", int(d.Minutes()))
 	case d < 24*time.Hour:
-		return fmt.Sprintf("%dh ago", int(d.Hours()))
+		return tr.T(lang, "ago_hour", int(d.Hours()))
 	default:
-		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+		return tr.T(lang, "ago_day", int(d.Hours()/24))
 	}
 }
 
