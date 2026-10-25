@@ -84,6 +84,23 @@ type ProxyConfig struct {
 	URL     string `yaml:"url"` // e.g. "socks5://user:pass@host:1080"
 }
 
+// ServerConfig configures the HTTP gateway (cmd/web). Listen is the
+// http.Server bind address (":8080" when empty). Token, when non-empty,
+// requires every request to carry "Authorization: Bearer <token>".
+type ServerConfig struct {
+	Listen string `yaml:"listen"`
+	Token  string `yaml:"token"`
+}
+
+// MCPConfig configures the XiaoZhi MCP bridge (cmd/meshmcp). EndpointURL is
+// the agent's MCP access point from the xiaozhi.me console — the bridge dials
+// OUT to it over WebSocket, so no inbound ports are needed. The bridge is a
+// standalone feature: it connects to the meshcore device itself via the
+// Connection section, independently of the HTTP gateway (cmd/web).
+type MCPConfig struct {
+	EndpointURL string `yaml:"endpoint_url"`
+}
+
 // MigrationConfig controls the "switch to 2-byte hash" nudge: when a received
 // advert or public-channel message reveals a node still using 1-byte routing
 // hashes, the bot posts a reminder on the channel, at most once per CooldownSec
@@ -97,6 +114,8 @@ type MigrationConfig struct {
 type Config struct {
 	Language   string                  `yaml:"Language"` // bot-wide UI language ("en" | "ru"); empty → i18n.Base ("en")
 	Connection ConnectionConfig        `yaml:"Connection"`
+	Server     ServerConfig            `yaml:"Server"`
+	MCP        MCPConfig               `yaml:"MCP"`
 	Proxy      ProxyConfig             `yaml:"Proxy"`
 	MQTT       mqttbridge.MQTTConfig   `yaml:"MQTT"`
 	Telegram   tgbridge.TelegramConfig `yaml:"Telegram"`

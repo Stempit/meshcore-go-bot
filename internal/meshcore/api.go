@@ -259,7 +259,8 @@ func (c *MeshCoreClient) SendMessageWithRetry(contact *Contact, text string, wai
 	if rejections >= totalAttempts {
 		return fmt.Errorf("%w after %d attempts", ErrDeviceRejected, totalAttempts)
 	}
-	return fmt.Errorf("no %s confirmation after %d attempts (%d saved-path, %d reset-path)",
+	return fmt.Errorf("%w: no %s confirmation after %d attempts (%d saved-path, %d reset-path)",
+		ErrNoConfirmation,
 		map[bool]string{true: "delivery", false: "sent"}[waitForDelivery],
 		totalAttempts, savedPathTries, resetPathTries)
 }
