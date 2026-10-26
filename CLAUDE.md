@@ -36,7 +36,7 @@ internal/
   commands/             – self-registering command plugins (one folder each; no loose files)
     allcommands/        – aggregator: blank-imports every plugin so they self-register
     ping/ trace/ last/ news/ llm/ weather/ path/ top/ stat/ eightball/
-    ticket/ help/ claw/ bbs/ dice/ num/ hang/ words/  – one command per folder
+    ticket/ help/ claw/ bbs/ dice/ num/ hang/ words/ poker/  – one command per folder
     advert/             – .advert parser; handled in the dispatch layer (needs the
                           client's SendSelfAdvert), so it is not a registry plugin
   support/              – shared framework + support layer sitting above commands/
@@ -141,6 +141,7 @@ Each command is a self-registering plugin in its own folder; the table's **Plugi
 | `.hang [start/<буква>/<слово>/status/end/top]` | `commands/hang` → `hang` | Hangman from an embedded word bank (`words_ru.txt`/`words_en.txt`, picked by `Language`; 6 lives). Channels are collaborative, DMs solo; `.hang top` is a 30-day leaderboard. See [internal/commands/hang/README.md](internal/commands/hang/README.md) |
 | `.words [start/<слово>/status/end/top]` | `commands/words` → `words` | Anagram ("Слова из слова"): timed round, build words from one long base word's letters; `score = len²`. Opt-in (`words.enabled`), embedded dict (`words_anagram_ru.txt` for `Language: ru`, `words_en.txt` otherwise). Self-firing timer pushes results via the injected `games.Announcer`. Channels collaborative-competitive, DMs solo; `.words top` is a 30-day leaderboard. See [internal/commands/words/README.md](internal/commands/words/README.md) |
 | `.vote [start <q> \| a \| b / <n> / status / end]` | `commands/vote` → `vote` | Group poll: open with a question and pipe-separated options, one changeable anonymous vote per sender (keyed by `SenderKey`), numbered results. Channels only. Opt-in (`vote.enabled`); auto-closes after `vote.round_sec` (default 180s), pushing results via the injected `games.Announcer`, or via `.vote end`. No leaderboard |
+| `.poker [start/join/leave/end/top]` | `commands/poker` → `poker` | Fixed-limit Hold'em on a channel (2–6): the channel gets dealer commentary only, betting actions go via DM (`Matcher` intercept for seated players; priced dynamic turn prompts). Opt-in (`poker.enabled`); blinds 5/10, 90s turn timeout (auto check/fold), 20s deal pause, 15-min idle close, `.poker end` opener-only. `.poker top` is a 30-day leaderboard. See [internal/commands/poker/README.md](internal/commands/poker/README.md) |
 
 New commands are self-registering plugins: create `internal/commands/<name>/` implementing `registry.Command` (+ `Configurable`/`Matcher` if needed) and add one blank import to `internal/commands/allcommands`. There is no central switch or help list to edit — `.help` and routing are generated from each plugin's `Meta`. See [docs/NEW_COMMAND.md](docs/NEW_COMMAND.md) and the framework in [internal/support/registry/README.md](internal/support/registry/README.md).
 
