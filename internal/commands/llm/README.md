@@ -12,7 +12,8 @@ here.
 ```
 
 On any provider error the reply is `хз`. `ProcessLLMMessage` is exported so the
-`cmd/llm` prompt-test utility can reuse it.
+manual prompt harness can reuse it: `manual_test.go` (build tag `manual`),
+run with `go test -tags manual ./internal/commands/llm -v`.
 
 ## Configuration
 

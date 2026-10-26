@@ -47,8 +47,9 @@ func (plugin) Handle(c registry.Ctx) ([]string, error) {
 
 // ProcessLLMMessage queries the configured LLM and returns the raw response.
 // Mesh-fit shrinking is applied centrally at the send site (internal/shrink).
-// Exported for the cmd/llm prompt-test utility. The bot-wide language (global
-// config) steers the model's reply language via an appended system directive.
+// Exported for the manual_test.go prompt harness (-tags manual). The
+// bot-wide language (global config) steers the model's reply language via an
+// appended system directive.
 func ProcessLLMMessage(text string) (response string, err error) {
 	text = strings.TrimSpace(strings.TrimPrefix(text, ".llm"))
 

@@ -9,18 +9,22 @@ go build ./...                    # build everything
 go build ./cmd/bot                # build the main bot
 
 go run ./cmd/bot                  # run the bot (reads config.yaml in CWD)
-go run ./cmd/say                  # run the log-tail TTS announcer
-go run ./cmd/llm                  # run the LLM prompt test utility
 
 go vet ./...                      # static analysis
 go test ./...                     # unit tests (shrink; driver/runtime tests
                                   # live in the meshcore-go and
                                   # meshcore-kit repos, voice-bridge
                                   # tests in meshcore-mcp-gateway)
+go test -tags manual ./internal/commands/llm   # manual LLM prompt/model harness
+                                               # (real API calls, not part of go test ./...)
 ```
 
 Manual radio testing uses the `examples/basic` harness in the
-[meshcore-go](https://github.com/stempit/meshcore-go) repo and `cmd/llm` here.
+[meshcore-go](https://github.com/stempit/meshcore-go) repo; manual LLM
+prompt/model testing uses the `-tags manual` harness in
+`internal/commands/llm`. The log-tail TTS announcer lives in its own repo:
+[file-to-speech](https://github.com/stempit/file-to-speech) (local checkout
+at `../file-to-speech`).
 
 ## Architecture
 
