@@ -13,25 +13,37 @@ import (
 	"log/slog"
 	"time"
 
-	"meshbot/internal/config"
 	"meshbot/internal/meshcore"
 )
 
-// Connect opens the meshcore companion device per cfg — BLE scan by default,
-// or USB serial when cfg.Type is "serial" — and returns a ready client. The
+// ConnectOptions selects the device transport. It mirrors the Connection
+// config section of the applications so they can map their own config onto
+// this package without a shared config dependency.
+type ConnectOptions struct {
+	// Type selects the transport: "bt" (Bluetooth LE, default) or "serial" (USB/UART).
+	Type string
+	// SerialPort is the OS device path used when Type is "serial"
+	// (e.g. "/dev/ttyUSB0", "/dev/tty.usbmodem14101", "COM3").
+	SerialPort string
+	// SerialBaud sets the baud rate for the serial transport (default 115200).
+	SerialBaud int
+}
+
+// Connect opens the meshcore companion device per opts — BLE scan by default,
+// or USB serial when opts.Type is "serial" — and returns a ready client. The
 // underlying constructors log and panic when the transport itself cannot be
 // established; only configuration errors come back as an error.
-func Connect(cfg config.ConnectionConfig) (*meshcore.MeshCoreClient, error) {
-	switch cfg.Type {
+func Connect(opts ConnectOptions) (*meshcore.MeshCoreClient, error) {
+	switch opts.Type {
 	case "serial":
-		if cfg.SerialPort == "" {
+		if opts.SerialPort == "" {
 			return nil, errors.New(`Connection.serial_port must be set when Connection.type is "serial"`)
 		}
-		baud := cfg.SerialBaud
+		baud := opts.SerialBaud
 		if baud == 0 {
 			baud = 115200
 		}
-		return meshcore.CreateSerialClient(cfg.SerialPort, baud), nil
+		return meshcore.CreateSerialClient(opts.SerialPort, baud), nil
 	default:
 		return meshcore.CreateClient(), nil
 	}

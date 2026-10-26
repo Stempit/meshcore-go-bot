@@ -32,7 +32,12 @@ func main() {
 	defer stop()
 
 	// Meshcore client — BLE (default) or USB serial depending on config.
-	client, err := companion.Connect(config.Get().Connection)
+	conn := config.Get().Connection
+	client, err := companion.Connect(companion.ConnectOptions{
+		Type:       conn.Type,
+		SerialPort: conn.SerialPort,
+		SerialBaud: conn.SerialBaud,
+	})
 	if err != nil {
 		log().Error("Failed to connect to device", "error", err)
 		os.Exit(1)
