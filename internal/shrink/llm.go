@@ -3,8 +3,8 @@ package shrink
 import (
 	"strings"
 
-	"meshbot/internal/bridge/llm"
-	"meshbot/internal/config"
+	"github.com/stempit/meshcore-go-bot/internal/bridge/llm"
+	"github.com/stempit/meshcore-go-bot/internal/config"
 	"github.com/stempit/meshcore-kit/fit"
 )
 

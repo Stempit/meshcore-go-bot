@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"meshbot/internal/support/games"
-	"meshbot/internal/support/helpers"
+	"github.com/stempit/meshcore-go-bot/internal/support/games"
+	"github.com/stempit/meshcore-go-bot/internal/support/helpers"
 )
 
 const (

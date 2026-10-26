@@ -11,8 +11,8 @@ import (
 	"strconv"
 	"strings"
 
-	"meshbot/internal/support/i18n"
-	"meshbot/internal/support/registry"
+	"github.com/stempit/meshcore-go-bot/internal/support/i18n"
+	"github.com/stempit/meshcore-go-bot/internal/support/registry"
 )
 
 //go:embed lang/*.yaml

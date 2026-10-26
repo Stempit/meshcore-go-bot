@@ -6,11 +6,11 @@ import (
 	"sync"
 	"time"
 
-	"meshbot/internal/commands/advert"
-	"meshbot/internal/config"
+	"github.com/stempit/meshcore-go-bot/internal/commands/advert"
+	"github.com/stempit/meshcore-go-bot/internal/config"
 	"github.com/stempit/meshcore-go"
-	"meshbot/internal/shrink"
-	"meshbot/internal/support/registry"
+	"github.com/stempit/meshcore-go-bot/internal/shrink"
+	"github.com/stempit/meshcore-go-bot/internal/support/registry"
 )
 
 // inflightSet tracks senders that currently have a command being processed, so

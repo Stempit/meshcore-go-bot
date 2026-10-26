@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"meshbot/internal/support/helpers"
-	"meshbot/internal/support/historylog"
+	"github.com/stempit/meshcore-go-bot/internal/support/helpers"
+	"github.com/stempit/meshcore-go-bot/internal/support/historylog"
 )
 
 // BaseDir is the root for per-game result logs (leaderboards).

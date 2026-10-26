@@ -1,6 +1,6 @@
 package vote
 
-import "meshbot/internal/config"
+import "github.com/stempit/meshcore-go-bot/internal/config"
 
 // cfg is the .vote config section (yaml key "vote"). It is opt-in via Enabled
 // (same convention as .words). The int fields are defaulted at their use sites

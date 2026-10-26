@@ -5,11 +5,11 @@ import (
 	"embed"
 	"strings"
 
-	provider "meshbot/internal/bridge/llm"
-	"meshbot/internal/config"
-	"meshbot/internal/logging"
-	"meshbot/internal/support/i18n"
-	"meshbot/internal/support/registry"
+	provider "github.com/stempit/meshcore-go-bot/internal/bridge/llm"
+	"github.com/stempit/meshcore-go-bot/internal/config"
+	"github.com/stempit/meshcore-go-bot/internal/logging"
+	"github.com/stempit/meshcore-go-bot/internal/support/i18n"
+	"github.com/stempit/meshcore-go-bot/internal/support/registry"
 )
 
 //go:embed lang/*.yaml

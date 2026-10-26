@@ -1,10 +1,10 @@
-# meshbot 📻🤖
+# meshcore-go-bot 📻🤖
 
 **Your off-grid mesh radio, but it talks back.**
 
 *[🇷🇺 Русская версия](README_RU.md)*
 
-meshbot turns a [MeshCore](https://meshcore.io) LoRa device into a full-featured
+meshcore-go-bot turns a [MeshCore](https://meshcore.io) LoRa device into a full-featured
 chat bot that lives **on the mesh** — no cell tower, no Wi-Fi, no internet required for
 the radio side. Ping it, ask it questions, play games with your neighbours, read the
 news, check the weather, or route a message to Telegram — all over long-range radio, all
@@ -15,7 +15,7 @@ from a single tiny Go binary.
 ## Why you'll want it
 
 - 📡 **Works where nothing else does.** Pure LoRa mesh. Off-grid campsites, dead zones,
-  emergencies, field ops — if two MeshCore nodes can hear each other, meshbot is there.
+  emergencies, field ops — if two MeshCore nodes can hear each other, meshcore-go-bot is there.
 - 🧠 **AI on the mesh.** `.llm` and `.claw` bring an LLM / AI agent to a network with no
   internet in sight (the bot's host bridges out; the mesh stays radio-only).
 - 🎮 **It's actually fun.** Dice roll-offs, hangman, guess-the-number, anagram races, and
@@ -94,7 +94,7 @@ send `.help`.
 
 ## The meshcore family
 
-meshbot is the bot itself; the radio stack and the other device frontends live
+meshcore-go-bot is the bot itself; the radio stack and the other device frontends live
 in sibling repos:
 
 | Repo | What it is |

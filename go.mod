@@ -1,4 +1,4 @@
-module meshbot
+module github.com/stempit/meshcore-go-bot
 
 go 1.27.1
 

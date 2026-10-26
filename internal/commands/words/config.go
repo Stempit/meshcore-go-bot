@@ -1,6 +1,6 @@
 package words
 
-import "meshbot/internal/config"
+import "github.com/stempit/meshcore-go-bot/internal/config"
 
 // cfg is the .words config section (yaml key "words"). It is opt-in via Enabled
 // (same convention as Claw). The int fields are defaulted at their use sites

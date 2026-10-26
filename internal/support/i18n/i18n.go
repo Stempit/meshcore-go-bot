@@ -1,8 +1,8 @@
-// Package i18n is meshbot's tiny message-catalog layer. Each command (and the
+// Package i18n is meshcore-go-bot's tiny message-catalog layer. Each command (and the
 // registry) embeds its own lang/<code>.yaml files and builds a Localizer over
 // them; handlers then resolve strings by key for the language on Ctx.Lang.
 //
-// It depends on nothing else in meshbot (only the stdlib + yaml), so any package
+// It depends on nothing else in meshcore-go-bot (only the stdlib + yaml), so any package
 // can use it without risking an import cycle. Values are plain data: a key maps
 // to either a string (T) or a list of strings (TList, for random pools).
 package i18n

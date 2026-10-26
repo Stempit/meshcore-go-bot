@@ -4,7 +4,7 @@
 package help
 
 import (
-	"meshbot/internal/support/registry"
+	"github.com/stempit/meshcore-go-bot/internal/support/registry"
 )
 
 func init() { registry.Register(plugin{}) }

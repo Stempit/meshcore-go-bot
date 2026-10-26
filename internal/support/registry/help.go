@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"meshbot/internal/support/i18n"
+	"github.com/stempit/meshcore-go-bot/internal/support/i18n"
 )
 
 //go:embed lang/*.yaml

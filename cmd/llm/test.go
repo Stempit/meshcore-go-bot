@@ -2,9 +2,9 @@ package main
 
 import (
 	"fmt"
-	"meshbot/internal/commands/llm"
-	"meshbot/internal/config"
-	"meshbot/internal/logging"
+	"github.com/stempit/meshcore-go-bot/internal/commands/llm"
+	"github.com/stempit/meshcore-go-bot/internal/config"
+	"github.com/stempit/meshcore-go-bot/internal/logging"
 	"os"
 )
 

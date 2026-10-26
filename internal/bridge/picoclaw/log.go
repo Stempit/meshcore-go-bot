@@ -1,5 +1,5 @@
 package picoclaw
 
-import "meshbot/internal/logging"
+import "github.com/stempit/meshcore-go-bot/internal/logging"
 
 var log = logging.For("picoclaw")

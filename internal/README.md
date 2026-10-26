@@ -1,6 +1,6 @@
 # internal
 
-All of meshbot's non-`main` code. Each subpackage has its own `README.md` covering its
+All of meshcore-go-bot's non-`main` code. Each subpackage has its own `README.md` covering its
 purpose, abilities, and config options. The MeshCore protocol driver now lives in the
 sibling repo [meshcore-go](https://github.com/stempit/meshcore-go); the shared device
 runtime and the pure message fitter live in

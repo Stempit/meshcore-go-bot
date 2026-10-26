@@ -3,7 +3,7 @@ package llm
 import (
 	"context"
 	"fmt"
-	"meshbot/internal/proxy"
+	"github.com/stempit/meshcore-go-bot/internal/proxy"
 	"os"
 
 	"github.com/revrost/go-openrouter"

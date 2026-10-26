@@ -4,8 +4,8 @@ import (
 	"strings"
 	"time"
 
-	"meshbot/internal/config"
-	"meshbot/internal/support/i18n"
+	"github.com/stempit/meshcore-go-bot/internal/config"
+	"github.com/stempit/meshcore-go-bot/internal/support/i18n"
 )
 
 // PingMeta holds path, timing, and location metadata from the incoming message.

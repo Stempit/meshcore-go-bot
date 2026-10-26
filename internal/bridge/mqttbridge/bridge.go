@@ -22,7 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"meshbot/internal/proxy"
+	"github.com/stempit/meshcore-go-bot/internal/proxy"
 
 	"filippo.io/edwards25519"
 	mqtt "github.com/eclipse/paho.mqtt.golang"

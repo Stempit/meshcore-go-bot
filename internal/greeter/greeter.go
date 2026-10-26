@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"sync"
 
-	"meshbot/internal/logging"
+	"github.com/stempit/meshcore-go-bot/internal/logging"
 	"github.com/stempit/meshcore-go"
 )
 

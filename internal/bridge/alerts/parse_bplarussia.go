@@ -28,7 +28,7 @@ func fetchHTMLCards(ctx context.Context, httpClient *http.Client, pageURL string
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; meshbot-alerts/1.0)")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; meshcore-go-bot-alerts/1.0)")
 
 	resp, err := httpClient.Do(req)
 	if err != nil {

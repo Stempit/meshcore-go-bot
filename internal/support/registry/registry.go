@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"meshbot/internal/config"
+	"github.com/stempit/meshcore-go-bot/internal/config"
 )
 
 // MatchMode selects how a command's Triggers are compared against Ctx.Lower.

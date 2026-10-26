@@ -9,7 +9,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"meshbot/internal/config"
+	"github.com/stempit/meshcore-go-bot/internal/config"
 	"github.com/stempit/meshcore-kit/fit"
 )
 

@@ -5,7 +5,7 @@ side effect (each plugin's `init()` calls `registry.Register`). `cmd/bot` blank-
 this one package so that all commands self-register at startup.
 
 ```go
-import _ "meshbot/internal/commands/allcommands"
+import _ "github.com/stempit/meshcore-go-bot/internal/commands/allcommands"
 ```
 
 ## Adding a command

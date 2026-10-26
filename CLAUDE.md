@@ -1,4 +1,4 @@
-# meshbot
+# meshcore-go-bot
 
 A MeshCore mesh-radio bot. Bridges a MeshCore device to Telegram, MQTT brokers, RSS feeds, and an LLM. Responds to `.ping`, `.trace`, `.last`, `.llm`, and `.news` commands over mesh radio.
 

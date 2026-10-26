@@ -1,9 +1,9 @@
 package path
 
 import (
-	"meshbot/internal/support/registry"
-	"meshbot/internal/config"
-	"meshbot/internal/logging"
+	"github.com/stempit/meshcore-go-bot/internal/support/registry"
+	"github.com/stempit/meshcore-go-bot/internal/config"
+	"github.com/stempit/meshcore-go-bot/internal/logging"
 )
 
 var log = logging.For("commands")

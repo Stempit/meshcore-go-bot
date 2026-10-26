@@ -7,10 +7,10 @@ import (
 	"embed"
 	"strings"
 
-	"meshbot/internal/config"
-	"meshbot/internal/support/games"
-	"meshbot/internal/support/i18n"
-	"meshbot/internal/support/registry"
+	"github.com/stempit/meshcore-go-bot/internal/config"
+	"github.com/stempit/meshcore-go-bot/internal/support/games"
+	"github.com/stempit/meshcore-go-bot/internal/support/i18n"
+	"github.com/stempit/meshcore-go-bot/internal/support/registry"
 )
 
 //go:embed lang/*.yaml

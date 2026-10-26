@@ -11,11 +11,11 @@ import (
 	"strings"
 	"time"
 
-	"meshbot/internal/config"
-	"meshbot/internal/logging"
+	"github.com/stempit/meshcore-go-bot/internal/config"
+	"github.com/stempit/meshcore-go-bot/internal/logging"
 	"github.com/stempit/meshcore-go"
-	"meshbot/internal/shrink"
-	"meshbot/internal/bridge/tgbridge"
+	"github.com/stempit/meshcore-go-bot/internal/shrink"
+	"github.com/stempit/meshcore-go-bot/internal/bridge/tgbridge"
 )
 
 var log = logging.For("bot")

@@ -9,22 +9,22 @@ import (
 	"syscall"
 	"time"
 
-	"meshbot/internal/bridge/alerts"
-	"meshbot/internal/bridge/mqttbridge"
-	"meshbot/internal/bridge/tgbridge"
-	_ "meshbot/internal/commands/allcommands" // self-registering command plugins
-	"meshbot/internal/commands/ticket"
-	"meshbot/internal/config"
-	"meshbot/internal/dispatch"
-	"meshbot/internal/greeter"
-	"meshbot/internal/logging"
+	"github.com/stempit/meshcore-go-bot/internal/bridge/alerts"
+	"github.com/stempit/meshcore-go-bot/internal/bridge/mqttbridge"
+	"github.com/stempit/meshcore-go-bot/internal/bridge/tgbridge"
+	_ "github.com/stempit/meshcore-go-bot/internal/commands/allcommands" // self-registering command plugins
+	"github.com/stempit/meshcore-go-bot/internal/commands/ticket"
+	"github.com/stempit/meshcore-go-bot/internal/config"
+	"github.com/stempit/meshcore-go-bot/internal/dispatch"
+	"github.com/stempit/meshcore-go-bot/internal/greeter"
+	"github.com/stempit/meshcore-go-bot/internal/logging"
 	"github.com/stempit/meshcore-go"
-	"meshbot/internal/migrator"
-	"meshbot/internal/proxy"
-	"meshbot/internal/shrink"
-	"meshbot/internal/support/games"
-	"meshbot/internal/support/historylog"
-	"meshbot/internal/support/registry"
+	"github.com/stempit/meshcore-go-bot/internal/migrator"
+	"github.com/stempit/meshcore-go-bot/internal/proxy"
+	"github.com/stempit/meshcore-go-bot/internal/shrink"
+	"github.com/stempit/meshcore-go-bot/internal/support/games"
+	"github.com/stempit/meshcore-go-bot/internal/support/historylog"
+	"github.com/stempit/meshcore-go-bot/internal/support/registry"
 )
 
 var log = logging.For("bot")

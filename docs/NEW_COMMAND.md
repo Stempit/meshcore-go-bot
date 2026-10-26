@@ -46,7 +46,7 @@ package mycmd
 import (
 	"strings"
 
-	"meshbot/internal/support/registry"
+	"github.com/stempit/meshcore-go-bot/internal/support/registry"
 )
 
 func init() { registry.Register(plugin{}) }
@@ -91,7 +91,7 @@ Add one blank import to
 [internal/commands/allcommands/allcommands.go](../internal/commands/allcommands/allcommands.go):
 
 ```go
-_ "meshbot/internal/commands/mycmd"
+_ "github.com/stempit/meshcore-go-bot/internal/commands/mycmd"
 ```
 
 That's the only edit outside your folder. The `init()` in your package calls
@@ -107,7 +107,7 @@ two-pass YAML. Add `internal/commands/mycmd/config.go`:
 ```go
 package mycmd
 
-import "meshbot/internal/config"
+import "github.com/stempit/meshcore-go-bot/internal/config"
 
 type cfg struct {
 	Enabled    bool   `yaml:"enabled"`
