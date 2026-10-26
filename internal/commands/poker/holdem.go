@@ -759,9 +759,7 @@ func (t *table) actCheck(si int, lang string, o *out) {
 	s := t.players[si]
 	delete(t.pending, si)
 	s.timeouts = 0
-	txt := tr.T(lang, "confirm.check")
-	o.replyRaw(txt)
-	s.pushLog(txt)
+	o.dmRaw(s, tr.T(lang, "confirm.check"))
 	o.line(lang, "act.check", s.name)
 }
 
@@ -770,9 +768,7 @@ func (t *table) actFold(si int, lang string, o *out) {
 	s.folded = true
 	delete(t.pending, si)
 	s.timeouts = 0
-	txt := tr.T(lang, "confirm.fold")
-	o.replyRaw(txt)
-	s.pushLog(txt)
+	o.dmRaw(s, tr.T(lang, "confirm.fold"))
 	o.line(lang, "act.fold", s.name)
 }
 
@@ -788,16 +784,13 @@ func (t *table) actCall(si int, lang string, o *out) {
 	}
 	delete(t.pending, si)
 	s.timeouts = 0
-	var txt string
 	if s.allin {
-		txt = tr.T(lang, "confirm.allin", pay)
+		o.dmRaw(s, tr.T(lang, "confirm.allin", pay))
 		o.line(lang, "act.allin", s.name, s.streetBet, t.potTotal())
 	} else {
-		txt = tr.T(lang, "confirm.call", pay)
+		o.dmRaw(s, tr.T(lang, "confirm.call", pay))
 		o.line(lang, "act.call", s.name, pay, t.potTotal())
 	}
-	o.replyRaw(txt)
-	s.pushLog(txt)
 }
 
 func (t *table) actRaise(si int, lang string, o *out) {
@@ -814,9 +807,7 @@ func (t *table) actRaise(si int, lang string, o *out) {
 	t.raiseCnt++
 	t.reopen(si)
 	s.timeouts = 0
-	txt := tr.T(lang, "confirm.raise", target)
-	o.replyRaw(txt)
-	s.pushLog(txt)
+	o.dmRaw(s, tr.T(lang, "confirm.raise", target))
 	o.line(lang, "act.raise", s.name, target, t.potTotal())
 }
 
@@ -836,9 +827,7 @@ func (t *table) actAllin(si int, lang string, o *out) {
 		delete(t.pending, si)
 	}
 	s.timeouts = 0
-	txt := tr.T(lang, "confirm.allin", s.streetBet)
-	o.replyRaw(txt)
-	s.pushLog(txt)
+	o.dmRaw(s, tr.T(lang, "confirm.allin", s.streetBet))
 	o.line(lang, "act.allin", s.name, s.streetBet, t.potTotal())
 }
 

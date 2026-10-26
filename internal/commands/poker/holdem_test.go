@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/stempit/meshcore-go-bot/internal/support/cards"
+	"github.com/stempit/meshcore-go-bot/internal/support/games"
 	"github.com/stempit/meshcore-go-bot/internal/support/registry"
 )
 
@@ -98,8 +99,8 @@ func TestDealThreeHanded(t *testing.T) {
 	if tb.potTotal() != 15 {
 		t.Errorf("pot = %d, want 15", tb.potTotal())
 	}
-	if len(o.dms) != 3 || len(o.chanMsgs) == 0 {
-		t.Errorf("missing announcements: dms=%d chan=%d", len(o.dms), len(o.chanMsgs))
+	if o.dmTargets() != 3 || len(o.chanTexts()) == 0 {
+		t.Errorf("missing announcements: dmTargets=%d chan=%d", o.dmTargets(), len(o.chanTexts()))
 	}
 	for _, s := range tb.players {
 		if !s.dealt {
@@ -180,13 +181,13 @@ func TestEveryoneFoldsRefundsUncalled(t *testing.T) {
 		t.Errorf("winner stack = %d, want 215", got)
 	}
 	found := false
-	for _, m := range o.chanMsgs {
+	for _, m := range o.chanTexts() {
 		if strings.Contains(m, "25") {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("no win line mentioning 25: %v", o.chanMsgs)
+		t.Errorf("no win line mentioning 25: %v", o.chanTexts())
 	}
 }
 
@@ -214,9 +215,9 @@ func TestShowdownSplitOddChip(t *testing.T) {
 	if got := tb.players[2].stack; got != 195 {
 		t.Errorf("P2 stack = %d, want 195", got)
 	}
-	joined := strings.Join(o.chanMsgs, "\n")
+	joined := strings.Join(o.chanTexts(), "\n")
 	if !strings.Contains(joined, "Вскрытие") || !strings.Contains(joined, "Делёжка") {
-		t.Errorf("missing showdown/split lines: %v", o.chanMsgs)
+		t.Errorf("missing showdown/split lines: %v", o.chanTexts())
 	}
 }
 
@@ -278,8 +279,8 @@ func TestTimeoutAutoActionsAndRemoval(t *testing.T) {
 	if tb.toAct != 1 {
 		t.Errorf("action moved to P%d, want P1", tb.toAct)
 	}
-	if !containsAll(strings.Join(o.chanMsgs, "\n"), "авто-фолд", "1/3") {
-		t.Errorf("missing timeout notice: %v", o.chanMsgs)
+	if !containsAll(strings.Join(o.chanTexts(), "\n"), "авто-фолд", "1/3") {
+		t.Errorf("missing timeout notice: %v", o.chanTexts())
 	}
 
 	// Second timeout for P1 folds them too; P2 takes the hand, pause opens.
@@ -312,8 +313,8 @@ func TestTimeoutAutoActionsAndRemoval(t *testing.T) {
 	if len(tb.players) != 2 || tb.players[0].name != "P1" {
 		t.Fatalf("P0 not removed after 3 timeouts: %v", tb.players)
 	}
-	if !strings.Contains(strings.Join(of.chanMsgs, "\n"), "таймауты") {
-		t.Errorf("missing removal notice: %v", of.chanMsgs)
+	if !strings.Contains(strings.Join(of.chanTexts(), "\n"), "таймауты") {
+		t.Errorf("missing removal notice: %v", of.chanTexts())
 	}
 }
 
@@ -441,8 +442,8 @@ func TestChStartGatesAndJoinWindow(t *testing.T) {
 	if tb == nil || len(tb.players) != 1 || tb.joinT == nil {
 		t.Fatalf("start failed: %v %v", tb, o.replyMsgs)
 	}
-	if len(o.chanMsgs) == 0 || len(o.dms[rawKeyFor(0)]) == 0 {
-		t.Errorf("missing table_open/welcome: chan=%v dms=%v", o.chanMsgs, o.dms)
+	if len(o.chanTexts()) == 0 || len(o.dmTexts(rawKeyFor(0))) == 0 {
+		t.Errorf("missing table_open/welcome: chan=%v dms=%v", o.chanTexts(), o.dmTexts(rawKeyFor(0)))
 	}
 
 	// The join window fires short: polite close.
@@ -577,7 +578,7 @@ func TestTurnPromptByteBudget(t *testing.T) {
 		tb.curBet = 40 // big-bet street prices
 		o := newOut()
 		o.turnDM(tb, 0, lang)
-		msg := o.dms[rawKeyFor(0)][0]
+		msg := o.dmTexts(rawKeyFor(0))[0]
 		if len(msg) > wireBudget {
 			t.Errorf("%s turn prompt %d bytes (max %d): %q", lang, len(msg), wireBudget, msg)
 		}
@@ -646,9 +647,9 @@ func TestHandlePlaysFullHandHeadsUp(t *testing.T) {
 
 	// Heads-up: P0 (button/SB) calls 5 more, P1 (BB) checks; then both check
 	// every street to the showdown. Postflop the non-button (P1) acts first.
-	if r := dm("call", 0); !strings.Contains(r[0], "✅") {
-		t.Fatalf("call reply = %v", r)
-	}
+	// The ✅ confirm now travels as an announce before the dealer line
+	// (verified in TestDeliveryOrder), so the Handle reply carries nothing.
+	dm("call", 0)
 	dm(".poker check", 1) // dotted form through Handle
 	for street := 0; street < 3; street++ {
 		dm("check", 1)
@@ -664,6 +665,55 @@ func TestHandlePlaysFullHandHeadsUp(t *testing.T) {
 	}
 	if sum != 400 {
 		t.Errorf("chips leaked: stacks sum %d, want 400", sum)
+	}
+}
+
+// TestDeliveryOrder pins the announce order over the serialized radio sender:
+// deal DMs in seat order after the channel line, and — for a player action —
+// the actor's ✅ confirm FIRST, then the channel dealer line, then the next
+// player's turn prompt. A previous map-based collector randomized the DM
+// order and replies enqueued after flush put the confirm last.
+func TestDeliveryOrder(t *testing.T) {
+	setupTest(t)
+	var seq []string
+	games.SetAnnouncer(func(scope string, msgs []string) {
+		for _, m := range msgs {
+			seq = append(seq, scope+"|"+m)
+		}
+	})
+	t.Cleanup(func() { games.SetAnnouncer(func(string, []string) {}) })
+
+	tb := mkTable(2)
+	o := newOut()
+	dealHand(tb, "ru", o)
+	o.flush()
+	if len(seq) != 4 {
+		t.Fatalf("deal produced %d messages, want 4 (deal line + 2 hole cards + turn): %v", len(seq), seq)
+	}
+	if !strings.HasPrefix(seq[0], "chan|🎴") ||
+		!strings.HasPrefix(seq[1], "dm:"+rawKeyFor(0)+"|🎴") ||
+		!strings.HasPrefix(seq[2], "dm:"+rawKeyFor(1)+"|🎴") ||
+		!strings.HasPrefix(seq[3], "dm:"+rawKeyFor(0)+"|Твой ход") {
+		t.Fatalf("deal order wrong:\n%s", strings.Join(seq, "\n"))
+	}
+
+	seq = nil
+	o = act(t, tb, 0, "call")
+	o.flush()
+	if len(o.replyMsgs) != 0 {
+		t.Errorf("successful action must confirm via announce, got reply %v", o.replyMsgs)
+	}
+	if len(seq) != 3 {
+		t.Fatalf("call produced %d messages, want 3 (confirm + dealer line + next turn): %v", len(seq), seq)
+	}
+	if !strings.HasPrefix(seq[0], "dm:"+rawKeyFor(0)+"|✅") {
+		t.Errorf("actor confirm must be first, got %q", seq[0])
+	}
+	if !strings.HasPrefix(seq[1], "chan|") {
+		t.Errorf("dealer line must follow the confirm, got %q", seq[1])
+	}
+	if !strings.HasPrefix(seq[2], "dm:"+rawKeyFor(1)+"|Твой ход") {
+		t.Errorf("next turn prompt must be last, got %q", seq[2])
 	}
 }
 

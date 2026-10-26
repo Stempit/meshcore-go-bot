@@ -14,18 +14,28 @@ import (
 // multi-line payloads (stacks, showdown).
 const wireBudget = 130
 
+// outMsg is one queued announcement: a channel dealer line or a DM to a
+// player's rawKey.
+type outMsg struct {
+	dm   bool
+	raw  string
+	text string
+}
+
 // out collects one poker turn's outputs: the direct reply (returned through
-// Handle), channel dealer lines, and player DMs. Everything is buffered while
-// the engine lock is held and actually sent by flush, after the lock is
-// released (games.Announce enqueues without blocking).
+// Handle) plus an ordered announcement list. The list order IS the delivery
+// order over the serialized radio sender: the acting player's confirmation
+// must be queued before the channel dealer line and the next player's turn
+// prompt, and deal DMs must go out in seat order — a map here once randomized
+// the per-player order. Everything is buffered while the engine lock is held
+// and actually sent by flush, after the lock is released.
 type out struct {
 	chanScope string
-	chanMsgs  []string
-	dms       map[string][]string // rawKey -> messages
+	msgs      []outMsg
 	replyMsgs []string
 }
 
-func newOut() *out { return &out{dms: map[string][]string{}} }
+func newOut() *out { return &out{} }
 
 func (o *out) reply(lang, key string, args ...any) {
 	o.replyRaw(tr.T(lang, key, args...))
@@ -37,10 +47,7 @@ func (o *out) replyRaw(text string) { o.replyMsgs = append(o.replyMsgs, text) }
 func (o *out) chanSet(channel string) { o.chanScope = channel }
 
 func (o *out) line(lang, key string, args ...any) {
-	if o.chanScope == "" {
-		return
-	}
-	o.chanMsgs = append(o.chanMsgs, tr.T(lang, key, args...))
+	o.chanRaw(tr.T(lang, key, args...))
 }
 
 // chanRaw buffers a prebuilt channel line (the flavor win templates vary in
@@ -49,7 +56,7 @@ func (o *out) chanRaw(text string) {
 	if o.chanScope == "" {
 		return
 	}
-	o.chanMsgs = append(o.chanMsgs, text)
+	o.msgs = append(o.msgs, outMsg{text: text})
 }
 
 // dm renders and buffers a DM to a player; every DM also lands in the
@@ -60,16 +67,55 @@ func (o *out) dm(s *seat, lang, key string, args ...any) {
 
 func (o *out) dmRaw(s *seat, text string) {
 	s.pushLog(text)
-	o.dms[s.rawKey] = append(o.dms[s.rawKey], text)
+	o.msgs = append(o.msgs, outMsg{dm: true, raw: s.rawKey, text: text})
 }
 
+// flush sends every buffered announcement in order via games.Announce (the
+// injected announcer enqueues without blocking).
 func (o *out) flush() {
-	if o.chanScope != "" && len(o.chanMsgs) > 0 {
-		games.Announce(o.chanScope, o.chanMsgs)
+	for _, m := range o.msgs {
+		if m.dm {
+			games.Announce("dm:"+m.raw, []string{m.text})
+			continue
+		}
+		if o.chanScope != "" {
+			games.Announce(o.chanScope, []string{m.text})
+		}
 	}
-	for raw, msgs := range o.dms {
-		games.Announce("dm:"+raw, msgs)
+	o.msgs = nil
+}
+
+// chanTexts returns the queued channel lines in delivery order (tests).
+func (o *out) chanTexts() []string {
+	var ts []string
+	for _, m := range o.msgs {
+		if !m.dm {
+			ts = append(ts, m.text)
+		}
 	}
+	return ts
+}
+
+// dmTexts returns the queued DM texts for raw in delivery order (tests).
+func (o *out) dmTexts(raw string) []string {
+	var ts []string
+	for _, m := range o.msgs {
+		if m.dm && m.raw == raw {
+			ts = append(ts, m.text)
+		}
+	}
+	return ts
+}
+
+// dmTargets counts distinct DM recipients queued so far (tests).
+func (o *out) dmTargets() int {
+	seen := map[string]bool{}
+	for _, m := range o.msgs {
+		if m.dm {
+			seen[m.raw] = true
+		}
+	}
+	return len(seen)
 }
 
 // pick returns a random template from a TList pool (dealer flavor lines).
