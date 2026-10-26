@@ -63,6 +63,12 @@ Connection:
   type: "bt"             # "bt" (BLE, default) or "serial" — same as everywhere
   # serial_port: "/dev/ttyUSB0"
   # serial_baud: 115200
+
+Shrink:                  # how voice messages are fitted to the mesh
+  cyr_to_lat: true       # squeeze Cyrillic to identical-looking Latin (saves bytes)
+  # max_bytes: 140       # hard mesh limit
+  # overrides:
+  #   xiaozhi: split     # voice already defaults to split; override if you like
 ```
 
 ```sh
@@ -78,6 +84,7 @@ Now just talk to your XiaoZhi device.
 |---|---|---|
 | `MCP.endpoint_url` | *(required)* | The agent's MCP access point URL from the xiaozhi.me console |
 | `Connection.*` | same as all commands | Which MeshCore device to attach to, and how |
+| `Shrink.*` | voice defaults to `split` | Outgoing-message fitting — see the behavior notes below |
 
 ### One command per device
 
@@ -96,6 +103,13 @@ times, or put a second radio on the desk.)
   emoji and punctuation, then falls back to a phonetic fuzzy match with a
   small edit budget. If several contacts match equally well, the assistant
   lists them and asks you to say the full name.
+- **Sends are mesh-fitted.** Outgoing voice messages pass through the same
+  shrink module as every bot send. By default a message longer than the mesh
+  limit is **split** into sequenced `[i/N]` parts, sent one after another
+  (each takes up to ~30 s of radio time). With `Shrink.cyr_to_lat: true`
+  Cyrillic is first squeezed to identical-looking Latin letters, buying
+  extra bytes. Override the strategy per-voice with `Shrink.overrides.xiaozhi`
+  (`truncate`, `split`, `llm`, `skip`).
 - **Voice cursor.** On startup the bridge first syncs messages stored on the
   device, then primes its cursor to the newest ID — so "new messages" means
   *arrived while the bridge is running*; the backlog that existed before
@@ -109,6 +123,10 @@ times, or put a second radio on the desk.)
   repeat it blindly, radio retries may still land it.
 - **Automatic reconnect**, both directions: to xiaozhi.me (exponential
   backoff, 2 s → 60 s) and to the BLE device (periodic stats watchdog).
+  The xiaozhi.me link is kept alive with WebSocket pings every 30 s — idle
+  gaps between voice commands would otherwise get the connection killed by
+  NAT or load-balancer idle timeouts (close 1006), and a silent link is
+  dropped after 90 s without a pong.
 
 ## Source map
 

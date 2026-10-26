@@ -14,6 +14,7 @@ import (
 	"sync"
 
 	"meshbot/internal/meshcore"
+	"meshbot/internal/shrink"
 )
 
 // rpcRequest is an incoming JSON-RPC request or notification.
@@ -244,8 +245,10 @@ type sendRequest struct {
 	Ack  bool   `json:"ack"` // true = wait for delivery confirmation instead of sent
 }
 
-// toolSend validates arguments, delegates to the radio, and maps the distinct
-// failure modes onto speech the user can act on.
+// toolSend validates arguments, fits the text to the mesh (shrink "xiaozhi"
+// variant: split into [i/N] parts by default, optional Cyrillic→Latin squeeze
+// via Shrink.cyr_to_lat), sends every part, and maps the distinct failure
+// modes onto speech the user can act on.
 func (s *Server) toolSend(args json.RawMessage) (string, bool) {
 	var req sendRequest
 	if err := json.Unmarshal(args, &req); err != nil {
@@ -260,28 +263,49 @@ func (s *Server) toolSend(args json.RawMessage) (string, bool) {
 		return `Type must be "dm" or "channel".`, true
 	}
 
+	parts := shrink.Fit("xiaozhi", "", []string{req.Text})
+	sent := 0
 	var err error
-	switch req.Type {
-	case "dm":
-		err = s.mesh.SendDM(req.To, req.Text, req.Ack)
-	case "channel":
-		err = s.mesh.SendChannel(req.To, req.Text, req.Ack)
+	for _, part := range parts {
+		switch req.Type {
+		case "dm":
+			err = s.mesh.SendDM(req.To, part, req.Ack)
+		case "channel":
+			err = s.mesh.SendChannel(req.To, part, req.Ack)
+		}
+		if err != nil {
+			break // stop at the first failure; report exactly what got through
+		}
+		sent++
 	}
 
+	if err == nil {
+		if len(parts) == 1 {
+			return fmt.Sprintf("Message sent to %s.", req.To), false
+		}
+		return fmt.Sprintf("Message sent to %s in %d parts.", req.To, len(parts)), false
+	}
+	failure := sendFailureText(req.To, err)
+	if sent > 0 {
+		return fmt.Sprintf("Only %d of %d parts were sent: %s", sent, len(parts), failure), true
+	}
+	return failure, true
+}
+
+// sendFailureText renders a radio-side send error as a speakable sentence.
+func sendFailureText(to string, err error) string {
 	var amb *meshcore.AmbiguousMatchError
 	switch {
-	case err == nil:
-		return fmt.Sprintf("Message sent to %s.", req.To), false
 	case errors.As(err, &amb):
-		return fmt.Sprintf("Several recipients match %q: %s. Say the full name.", req.To, strings.Join(amb.Names, ", ")), true
+		return fmt.Sprintf("Several recipients match %q: %s. Say the full name.", to, strings.Join(amb.Names, ", "))
 	case errors.Is(err, ErrUnknownRecipient):
-		return fmt.Sprintf("Recipient %q not found. Use mesh_list_contacts or mesh_list_channels to check names.", req.To), true
+		return fmt.Sprintf("Recipient %q not found. Use mesh_list_contacts or mesh_list_channels to check names.", to)
 	case errors.Is(err, meshcore.ErrNoConfirmation):
-		return "Message transmitted but not confirmed by the radio. It may still arrive — don't repeat it right away.", true
+		return "Message transmitted but not confirmed by the radio. It may still arrive — don't repeat it right away."
 	case errors.Is(err, meshcore.ErrDeviceRejected):
-		return fmt.Sprintf("The radio device rejected the message: %v", err), true
+		return fmt.Sprintf("The radio device rejected the message: %v", err)
 	default:
-		return "Send failed: " + err.Error(), true
+		return "Send failed: " + err.Error()
 	}
 }
 

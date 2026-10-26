@@ -2,14 +2,41 @@ package xiaozhi
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"meshbot/internal/companion"
+	"meshbot/internal/config"
 	"meshbot/internal/meshcore"
 )
+
+// TestMain loads a config so shrink.Fit has limits to read. The Shrink section
+// carries no default/override for "xiaozhi" on purpose: with the built-in
+// default the voice path must resolve to Split on its own.
+func TestMain(m *testing.M) {
+	dir, _ := os.MkdirTemp("", "xiaozhicfg")
+	path := filepath.Join(dir, "config.yaml")
+	yaml := `
+Shrink:
+  max_bytes: 140
+  ellipsis: "…"
+  cyr_to_lat: false
+`
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+		panic(err)
+	}
+	if err := config.Load(path); err != nil {
+		panic(err)
+	}
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
+}
 
 func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -251,6 +278,59 @@ func TestToolSendMapsOutcomes(t *testing.T) {
 		}
 		if len(mesh.dmCalls)+len(mesh.chCalls) != 0 {
 			t.Errorf("invalid args reached the radio: %v %v", mesh.dmCalls, mesh.chCalls)
+		}
+	})
+}
+
+func TestToolSendShrink(t *testing.T) {
+	// Long text must be split into [i/N] parts, one radio send each.
+	t.Run("long message splits into parts", func(t *testing.T) {
+		mesh := &fakeMesh{}
+		s := NewServer(mesh, 0, testLogger())
+		long := strings.Repeat("это длинное сообщение для рации ", 10) // ~320 bytes
+		out := callTool(t, s, "mesh_send_message", map[string]any{"type": "dm", "to": "Короед", "text": long})
+		text := resultText(t, out)
+
+		if len(mesh.dmCalls) < 2 {
+			t.Fatalf("long message sent as %d parts, want ≥2: %q", len(mesh.dmCalls), text)
+		}
+		want := len(mesh.dmCalls)
+		for i, call := range mesh.dmCalls {
+			if !strings.HasSuffix(call[1], fmt.Sprintf(" [%d/%d]", i+1, want)) {
+				t.Errorf("part %d missing series marker: %q", i+1, call[1])
+			}
+			if len(call[1]) > 140 {
+				t.Errorf("part %d exceeds the 140-byte mesh limit: %d bytes", i+1, len(call[1]))
+			}
+		}
+		if !contains(text, fmt.Sprintf("in %d parts", want)) {
+			t.Errorf("result should announce the part count: %q", text)
+		}
+	})
+
+	// Short messages go out as a single unchanged send.
+	t.Run("short message is a single send", func(t *testing.T) {
+		mesh := &fakeMesh{}
+		s := NewServer(mesh, 0, testLogger())
+		callTool(t, s, "mesh_send_message", map[string]any{"type": "dm", "to": "Короед", "text": "привет"})
+		if len(mesh.dmCalls) != 1 || mesh.dmCalls[0][1] != "привет" {
+			t.Errorf("unexpected sends: %v", mesh.dmCalls)
+		}
+	})
+
+	// Shrink.cyr_to_lat squeezes Cyrillic homoglyphs before the fit (р→p here).
+	t.Run("cyr_to_lat squeeze", func(t *testing.T) {
+		sh := &config.Get().Shrink
+		old := sh.CyrToLat
+		sh.CyrToLat = true
+		defer func() { sh.CyrToLat = old }()
+
+		mesh := &fakeMesh{}
+		s := NewServer(mesh, 0, testLogger())
+		callTool(t, s, "mesh_send_message", map[string]any{"type": "dm", "to": "Короед", "text": "привет"})
+		// Homoglyphs: Cyrillic р→Latin p, Cyrillic е→Latin e.
+		if len(mesh.dmCalls) != 1 || mesh.dmCalls[0][1] != "пpивeт" {
+			t.Errorf("expected homoglyph squeeze, got: %v", mesh.dmCalls)
 		}
 	})
 }

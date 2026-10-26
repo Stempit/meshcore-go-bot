@@ -20,6 +20,7 @@ import (
 	"meshbot/internal/companion"
 	"meshbot/internal/config"
 	"meshbot/internal/logging"
+	"meshbot/internal/shrink"
 	"meshbot/internal/xiaozhi"
 )
 
@@ -32,6 +33,7 @@ func main() {
 	}
 
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	shrink.ValidateConfig()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
