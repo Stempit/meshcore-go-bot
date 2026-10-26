@@ -74,7 +74,7 @@ routing, forwards Telegram ⇄ mesh, publishes to MQTT analyzers, and fires haza
 - ⚠️ Language is bot-wide (not per-user); switching means an edit + restart
 - ⚠️ Config is a single YAML loaded at startup — restart to apply changes
 - ⚠️ Some games ship Russian-only word banks
-- ⚠️ Replies are terse by design (140-byte mesh limit); no automated test suite yet
+- ⚠️ Replies are terse by design (140-byte mesh limit); the automated test suite is still thin
 
 ---
 
@@ -89,6 +89,23 @@ go build ./cmd/bot
 
 Pair a MeshCore device over BLE (or point it at a serial port), drop into a channel, and
 send `.help`.
+
+---
+
+## The meshcore family
+
+meshbot is the bot itself; the radio stack and the other device frontends live
+in sibling repos:
+
+| Repo | What it is |
+|---|---|
+| [meshcore-go](https://github.com/stempit/meshcore-go) | the protocol driver: BLE/serial, wire format, delivery-confirmed sends |
+| [meshcore-companion](https://github.com/stempit/meshcore-companion) | shared app runtime (connect, sync, inbox, keepalive) + the 140-byte message fitter |
+| [meshcore-http-gateway](https://github.com/stempit/meshcore-http-gateway) | your mesh behind a plain HTTP API (`/get`, `/send`, `/messages`) |
+| [meshcore-mcp-gateway](https://github.com/stempit/meshcore-mcp-gateway) | your mesh as voice tools for the XiaoZhi assistant |
+
+Each app opens its own device connection — don't point two of them at the same
+physical radio at the same time.
 
 ---
 

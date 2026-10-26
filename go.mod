@@ -33,7 +33,7 @@ require (
 	go.bug.st/serial v1.8.0 // indirect
 	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/exp v0.0.0-20260727155853-b88d891fe743 // indirect
-	golang.org/x/sync v0.22.0 // indirect
+	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
 	tinygo.org/x/bluetooth v0.16.0 // indirect
 	tinygo.org/x/espradio v0.3.0 // indirect
