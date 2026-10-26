@@ -85,6 +85,22 @@ routing, forwards Telegram ⇄ mesh, publishes to MQTT analyzers, and fires haza
 cp config.example.yaml config.yaml   # then fill in your device + secrets
 go build ./cmd/bot
 ./bot                                # reads config.yaml in the current dir
+# or grab a prebuilt binary from the Releases page (./release.sh builds them)
+```
+
+A minimal working `config.yaml` — everything else is optional:
+
+```yaml
+Connection:
+  type: "bt"            # "bt" (Bluetooth LE, default) or "serial"
+  # serial_port: "/dev/ttyUSB0"   # when type: "serial"
+  # serial_baud: 115200
+
+Language: "en"          # bot-wide reply language: "en" | "ru"
+
+# Optional features — see config.example.yaml for every section:
+#   Telegram bridge, MQTT / Let's Mesh analyzer, LLM (.llm), picoclaw (.claw),
+#   hazard alerts, weather, per-command settings…
 ```
 
 Pair a MeshCore device over BLE (or point it at a serial port), drop into a channel, and

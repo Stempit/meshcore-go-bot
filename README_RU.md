@@ -90,6 +90,22 @@ MQTT-анализаторы и рассылает оповещения об оп
 cp config.example.yaml config.yaml   # затем впишите устройство и секреты
 go build ./cmd/bot
 ./bot                                # читает config.yaml в текущей папке
+# или возьмите готовый бинарник со страницы Releases (их собирает ./release.sh)
+```
+
+Минимальный рабочий `config.yaml` — всё остальное опционально:
+
+```yaml
+Connection:
+  type: "bt"            # "bt" (Bluetooth LE, по умолчанию) или "serial"
+  # serial_port: "/dev/ttyUSB0"   # когда type: "serial"
+  # serial_baud: 115200
+
+Language: "ru"          # язык ответов бота: "en" | "ru"
+
+# Опциональные фичи — все секции см. в config.example.yaml:
+#   мост Telegram, MQTT / анализатор Let's Mesh, LLM (.llm), picoclaw (.claw),
+#   аварийные алерты, погода, настройки отдельных команд…
 ```
 
 Подключите устройство MeshCore по BLE (или укажите serial-порт), зайдите в канал и

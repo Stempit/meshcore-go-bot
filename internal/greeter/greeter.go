@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/stempit/meshcore-go-bot/internal/logging"
 	"github.com/stempit/meshcore-go"
+	"github.com/stempit/meshcore-go-bot/internal/logging"
 )
 
 var log = logging.For("greeter")

@@ -201,11 +201,6 @@ func NewMQTTBridge(config *MQTTConfig) *MQTTBridge {
 	return bridge
 }
 
-// broker returns the broker for the given id, or nil for an unknown id.
-func (b *MQTTBridge) broker(id string) *broker {
-	return b.brokers[id]
-}
-
 // SetLogger sets a custom logger
 func (b *MQTTBridge) SetLogger(logger *slog.Logger) {
 	b.logger = logger.With("module", "mqttbridge")

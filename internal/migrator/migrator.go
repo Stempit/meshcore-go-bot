@@ -9,8 +9,8 @@ package migrator
 import (
 	"fmt"
 
-	"github.com/stempit/meshcore-go-bot/internal/logging"
 	"github.com/stempit/meshcore-go"
+	"github.com/stempit/meshcore-go-bot/internal/logging"
 )
 
 var log = logging.For("migrator")

@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/stempit/meshcore-go"
 	"github.com/stempit/meshcore-go-bot/internal/bridge/alerts"
 	"github.com/stempit/meshcore-go-bot/internal/bridge/mqttbridge"
 	"github.com/stempit/meshcore-go-bot/internal/bridge/tgbridge"
@@ -18,7 +19,6 @@ import (
 	"github.com/stempit/meshcore-go-bot/internal/dispatch"
 	"github.com/stempit/meshcore-go-bot/internal/greeter"
 	"github.com/stempit/meshcore-go-bot/internal/logging"
-	"github.com/stempit/meshcore-go"
 	"github.com/stempit/meshcore-go-bot/internal/migrator"
 	"github.com/stempit/meshcore-go-bot/internal/proxy"
 	"github.com/stempit/meshcore-go-bot/internal/shrink"

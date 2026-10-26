@@ -8,8 +8,8 @@
 package shrink
 
 import (
-	"github.com/stempit/meshcore-kit/fit"
 	"github.com/stempit/meshcore-go-bot/internal/config"
+	"github.com/stempit/meshcore-kit/fit"
 )
 
 func valid(v string) bool {

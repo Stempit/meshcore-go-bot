@@ -1,9 +1,9 @@
 package weather
 
 import (
-	"github.com/stempit/meshcore-go-bot/internal/support/registry"
 	"github.com/stempit/meshcore-go-bot/internal/config"
 	"github.com/stempit/meshcore-go-bot/internal/logging"
+	"github.com/stempit/meshcore-go-bot/internal/support/registry"
 )
 
 var log = logging.For("commands")

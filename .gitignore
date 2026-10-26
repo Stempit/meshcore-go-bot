@@ -7,3 +7,5 @@ stats.json
 singular.txt
 optimal_params.json
 .zcode/
+release_local.sh
+dist/

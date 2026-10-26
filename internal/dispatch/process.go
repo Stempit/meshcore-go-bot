@@ -6,9 +6,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/stempit/meshcore-go"
 	"github.com/stempit/meshcore-go-bot/internal/commands/advert"
 	"github.com/stempit/meshcore-go-bot/internal/config"
-	"github.com/stempit/meshcore-go"
 	"github.com/stempit/meshcore-go-bot/internal/shrink"
 	"github.com/stempit/meshcore-go-bot/internal/support/registry"
 )
