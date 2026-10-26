@@ -1,4 +1,4 @@
-package shrink
+package fit
 
 import (
 	"strings"
@@ -26,18 +26,17 @@ func cutOnBoundary(s string, limit int) int {
 }
 
 // truncate cuts s to at most max bytes on a rune boundary, appending the
-// configured ellipsis (which also counts toward max).
-func truncate(s string, max int) string {
+// ellipsis (which also counts toward max).
+func truncate(s string, max int, ellipsis string) string {
 	if len(s) <= max {
 		return s
 	}
-	ell := ellipsis()
-	limit := max - len(ell)
+	limit := max - len(ellipsis)
 	if limit < 0 {
 		limit = 0
-		ell = ""
+		ellipsis = ""
 	}
-	return strings.TrimSpace(s[:cutOnBoundary(s, limit)]) + ell
+	return strings.TrimSpace(s[:cutOnBoundary(s, limit)]) + ellipsis
 }
 
 // hardCap is the final, ellipsis-free safety cut applied to every returned

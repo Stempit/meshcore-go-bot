@@ -45,7 +45,12 @@ func main() {
 	}
 
 	// Meshcore client — BLE (default) or USB serial depending on config.
-	client, err := companion.Connect(config.Get().Connection)
+	conn := config.Get().Connection
+	client, err := companion.Connect(companion.ConnectOptions{
+		Type:       conn.Type,
+		SerialPort: conn.SerialPort,
+		SerialBaud: conn.SerialBaud,
+	})
 	if err != nil {
 		log().Error("Failed to connect to device", "error", err)
 		os.Exit(1)
@@ -60,8 +65,10 @@ func main() {
 	// Voice tools backed directly by the device + inbox; the voice cursor is
 	// primed AFTER the startup sync, so "new messages" means arrivals from now
 	// on — the backlog that existed before startup is not read aloud.
-	mesh := xiaozhi.NewDirectMesh(client, svc.Inbox)
-	srv := xiaozhi.NewServer(mesh, svc.Inbox.LastID(), slog.Default())
+	mesh := xiaozhi.NewDirectMesh(client, svc.Inbox, xiaozhi.DirectMeshOptions{
+		ChannelTransmissions: config.Get().Connection.ChannelTransmissions,
+	})
+	srv := xiaozhi.NewServer(mesh, svc.Inbox.LastID(), shrink.OptionsFor("xiaozhi"), slog.Default())
 
 	sess, err := xiaozhi.NewSession(cfg.EndpointURL, srv, slog.Default())
 	if err != nil {

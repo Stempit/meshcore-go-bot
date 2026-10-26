@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"meshbot/internal/config"
+	"meshbot/internal/fit"
 )
 
 // TestMain loads a config with a Shrink section so Fit() has limits to read.
@@ -185,30 +186,6 @@ func withCyrToLat(t *testing.T, on bool, fn func()) {
 	fn()
 }
 
-func TestCyrToLatMappingAndByteSavings(t *testing.T) {
-	// All-mapped letters: "соре" → "cope", 4 Cyrillic (8 B) → 4 ASCII (4 B).
-	in := "соре"
-	got := cyrToLat(in)
-	if got != "cope" {
-		t.Fatalf("cyrToLat(%q) = %q, want %q", in, got, "cope")
-	}
-	if saved := len(in) - len(got); saved != 4 {
-		t.Errorf("expected 4 bytes saved, got %d", saved)
-	}
-}
-
-func TestCyrToLatLeavesNonMappedRunes(t *testing.T) {
-	// ж and lowercase к/м/т are not in the conservative set; keep them as-is.
-	in := "жкмт"
-	got := cyrToLat(in)
-	if got != in {
-		t.Errorf("non-mapped runes changed: %q -> %q", in, got)
-	}
-	if !utf8.ValidString(got) {
-		t.Errorf("output not valid UTF-8: %q", got)
-	}
-}
-
 func TestCyrToLatDisabledLeavesOriginal(t *testing.T) {
 	withCyrToLat(t, false, func() {
 		out := Fit("tr", "", []string{"соре"})
@@ -242,6 +219,6 @@ func TestCyrToLatPrefixSqueezedAndFits(t *testing.T) {
 	withCyrToLat(t, true, func() {
 		out := Fit("sp", prefix, []string{longASCII(400)})
 		// Prefix is transliterated, so check against the squeezed form.
-		checkAllFit(t, out, cyrToLat(prefix))
+		checkAllFit(t, out, fit.CyrToLat(prefix))
 	})
 }

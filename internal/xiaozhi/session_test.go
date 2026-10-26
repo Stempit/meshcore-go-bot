@@ -45,7 +45,7 @@ func TestSessionKeepsAliveWithPings(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	sess, err := NewSession("ws"+strings.TrimPrefix(srv.URL, "http"), NewServer(&fakeMesh{}, 0, testLogger()), testLogger())
+	sess, err := NewSession("ws"+strings.TrimPrefix(srv.URL, "http"), newTestServer(&fakeMesh{}), testLogger())
 	if err != nil {
 		t.Fatal(err)
 	}

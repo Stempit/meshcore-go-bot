@@ -5,37 +5,23 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"meshbot/internal/companion"
-	"meshbot/internal/config"
+	"meshbot/internal/fit"
 	"meshbot/internal/meshcore"
 )
 
-// TestMain loads a config so shrink.Fit has limits to read. The Shrink section
-// carries no default/override for "xiaozhi" on purpose: with the built-in
-// default the voice path must resolve to Split on its own.
-func TestMain(m *testing.M) {
-	dir, _ := os.MkdirTemp("", "xiaozhicfg")
-	path := filepath.Join(dir, "config.yaml")
-	yaml := `
-Shrink:
-  max_bytes: 140
-  ellipsis: "…"
-  cyr_to_lat: false
-`
-	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
-		panic(err)
-	}
-	if err := config.Load(path); err != nil {
-		panic(err)
-	}
-	code := m.Run()
-	os.RemoveAll(dir)
-	os.Exit(code)
+// voiceFit mirrors the default voice policy — split into [i/N] parts, the
+// 140-byte limit, the ellipsis — that the bridge resolves from its Shrink
+// config when nothing is overridden.
+func voiceFit() fit.Options {
+	return fit.Options{MaxBytes: 140, Ellipsis: "…", Variant: fit.Split}
+}
+
+func newTestServer(mesh Mesh) *Server {
+	return NewServer(mesh, 0, voiceFit(), testLogger())
 }
 
 func testLogger() *slog.Logger {
@@ -104,7 +90,7 @@ func (f *fakeMesh) Channels() []ChannelRef {
 }
 
 func TestProtocolInitializeEchoesVersion(t *testing.T) {
-	s := NewServer(&fakeMesh{}, 0, testLogger())
+	s := newTestServer(&fakeMesh{})
 	out := s.HandleMessage([]byte(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}`))
 
 	var resp struct {
@@ -122,14 +108,14 @@ func TestProtocolInitializeEchoesVersion(t *testing.T) {
 }
 
 func TestProtocolNotificationGetsNoResponse(t *testing.T) {
-	s := NewServer(&fakeMesh{}, 0, testLogger())
+	s := newTestServer(&fakeMesh{})
 	if out := s.HandleMessage([]byte(`{"jsonrpc":"2.0","method":"notifications/initialized"}`)); out != nil {
 		t.Errorf("notification produced a response: %s", out)
 	}
 }
 
 func TestToolsListAdvertisesAllTools(t *testing.T) {
-	s := NewServer(&fakeMesh{}, 0, testLogger())
+	s := newTestServer(&fakeMesh{})
 	out := s.HandleMessage([]byte(`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`))
 
 	var resp struct {
@@ -169,7 +155,7 @@ func twelveMessages() []companion.Message {
 
 func TestToolGetMessagesPagesThroughCursor(t *testing.T) {
 	mesh := &fakeMesh{msgs: twelveMessages()}
-	s := NewServer(mesh, 0, testLogger())
+	s := newTestServer(mesh)
 
 	// First call: capped at 10, cursor advances to the last SHOWN message.
 	first := resultText(t, callTool(t, s, "mesh_get_new_messages", nil))
@@ -202,7 +188,7 @@ func TestToolGetMessagesFormatsDMAndChannel(t *testing.T) {
 		{ID: 1, Type: "dm", Sender: "Короед", Text: "hello"},
 		{ID: 2, Type: "channel", Channel: "public", Sender: "Wire", Text: "hi all"},
 	}}
-	s := NewServer(mesh, 0, testLogger())
+	s := newTestServer(mesh)
 
 	text := resultText(t, callTool(t, s, "mesh_get_new_messages", nil))
 	for _, want := range []string{`Private from Короед: "hello"`, `Channel public from Wire: "hi all"`} {
@@ -215,7 +201,7 @@ func TestToolGetMessagesFormatsDMAndChannel(t *testing.T) {
 func TestToolSendMapsOutcomes(t *testing.T) {
 	t.Run("sent", func(t *testing.T) {
 		mesh := &fakeMesh{}
-		s := NewServer(mesh, 0, testLogger())
+		s := newTestServer(mesh)
 		out := callTool(t, s, "mesh_send_message", map[string]any{"type": "dm", "to": "Короед", "text": "hi"})
 		if tr := resultTool(t, out); tr.IsError || !contains(resultText(t, out), "sent to Короед") {
 			t.Errorf("unexpected result: %+v", out)
@@ -227,7 +213,7 @@ func TestToolSendMapsOutcomes(t *testing.T) {
 
 	t.Run("unknown recipient hints at directories", func(t *testing.T) {
 		mesh := &fakeMesh{dmErr: ErrUnknownRecipient}
-		s := NewServer(mesh, 0, testLogger())
+		s := newTestServer(mesh)
 		out := callTool(t, s, "mesh_send_message", map[string]any{"type": "dm", "to": "ghost", "text": "hi"})
 		if tr := resultTool(t, out); !tr.IsError || !contains(resultText(t, out), "not found") || !contains(resultText(t, out), "mesh_list_contacts") {
 			t.Errorf("unexpected result: %+v", out)
@@ -236,7 +222,7 @@ func TestToolSendMapsOutcomes(t *testing.T) {
 
 	t.Run("ambiguous name asks the user to disambiguate", func(t *testing.T) {
 		mesh := &fakeMesh{dmErr: &meshcore.AmbiguousMatchError{Names: []string{"Yorick Hamlet", "Yorick 💀"}}}
-		s := NewServer(mesh, 0, testLogger())
+		s := newTestServer(mesh)
 		out := callTool(t, s, "mesh_send_message", map[string]any{"type": "dm", "to": "Yorick", "text": "hi"})
 		text := resultText(t, out)
 		if tr := resultTool(t, out); !tr.IsError || !contains(text, "Several recipients match") ||
@@ -247,7 +233,7 @@ func TestToolSendMapsOutcomes(t *testing.T) {
 
 	t.Run("no confirmation is not a hard failure", func(t *testing.T) {
 		mesh := &fakeMesh{chErr: meshcore.ErrNoConfirmation}
-		s := NewServer(mesh, 0, testLogger())
+		s := newTestServer(mesh)
 		out := callTool(t, s, "mesh_send_message", map[string]any{"type": "channel", "to": "public", "text": "hi"})
 		if tr := resultTool(t, out); !tr.IsError || !contains(resultText(t, out), "may still arrive") {
 			t.Errorf("unexpected result: %+v", out)
@@ -256,7 +242,7 @@ func TestToolSendMapsOutcomes(t *testing.T) {
 
 	t.Run("device rejection", func(t *testing.T) {
 		mesh := &fakeMesh{dmErr: meshcore.ErrDeviceRejected}
-		s := NewServer(mesh, 0, testLogger())
+		s := newTestServer(mesh)
 		out := callTool(t, s, "mesh_send_message", map[string]any{"type": "dm", "to": "Короед", "text": "hi"})
 		if tr := resultTool(t, out); !tr.IsError || !contains(resultText(t, out), "rejected") {
 			t.Errorf("unexpected result: %+v", out)
@@ -265,7 +251,7 @@ func TestToolSendMapsOutcomes(t *testing.T) {
 
 	t.Run("validation errors", func(t *testing.T) {
 		mesh := &fakeMesh{}
-		s := NewServer(mesh, 0, testLogger())
+		s := newTestServer(mesh)
 		for _, args := range []map[string]any{
 			{"type": "dm", "to": "", "text": "hi"},
 			{"type": "dm", "to": "x", "text": " "},
@@ -286,7 +272,7 @@ func TestToolSendShrink(t *testing.T) {
 	// Long text must be split into [i/N] parts, one radio send each.
 	t.Run("long message splits into parts", func(t *testing.T) {
 		mesh := &fakeMesh{}
-		s := NewServer(mesh, 0, testLogger())
+		s := newTestServer(mesh)
 		long := strings.Repeat("это длинное сообщение для рации ", 10) // ~320 bytes
 		out := callTool(t, s, "mesh_send_message", map[string]any{"type": "dm", "to": "Короед", "text": long})
 		text := resultText(t, out)
@@ -311,22 +297,19 @@ func TestToolSendShrink(t *testing.T) {
 	// Short messages go out as a single unchanged send.
 	t.Run("short message is a single send", func(t *testing.T) {
 		mesh := &fakeMesh{}
-		s := NewServer(mesh, 0, testLogger())
+		s := newTestServer(mesh)
 		callTool(t, s, "mesh_send_message", map[string]any{"type": "dm", "to": "Короед", "text": "привет"})
 		if len(mesh.dmCalls) != 1 || mesh.dmCalls[0][1] != "привет" {
 			t.Errorf("unexpected sends: %v", mesh.dmCalls)
 		}
 	})
 
-	// Shrink.cyr_to_lat squeezes Cyrillic homoglyphs before the fit (р→p here).
+	// CyrToLat squeezes Cyrillic homoglyphs before the fit (р→p here).
 	t.Run("cyr_to_lat squeeze", func(t *testing.T) {
-		sh := &config.Get().Shrink
-		old := sh.CyrToLat
-		sh.CyrToLat = true
-		defer func() { sh.CyrToLat = old }()
-
 		mesh := &fakeMesh{}
-		s := NewServer(mesh, 0, testLogger())
+		o := voiceFit()
+		o.CyrToLat = true
+		s := NewServer(mesh, 0, o, testLogger())
 		callTool(t, s, "mesh_send_message", map[string]any{"type": "dm", "to": "Короед", "text": "привет"})
 		// Homoglyphs: Cyrillic р→Latin p, Cyrillic е→Latin e.
 		if len(mesh.dmCalls) != 1 || mesh.dmCalls[0][1] != "пpивeт" {
@@ -336,7 +319,7 @@ func TestToolSendShrink(t *testing.T) {
 }
 
 func TestToolListContactsAndChannels(t *testing.T) {
-	s := NewServer(&fakeMesh{}, 0, testLogger())
+	s := newTestServer(&fakeMesh{})
 
 	if text := resultText(t, callTool(t, s, "mesh_list_contacts", nil)); !contains(text, "Короед") || !contains(text, "Wire") {
 		t.Errorf("mesh_list_contacts = %q", text)
@@ -349,7 +332,7 @@ func TestToolListContactsAndChannels(t *testing.T) {
 func TestToolSearchContacts(t *testing.T) {
 	t.Run("matches are listed with the query", func(t *testing.T) {
 		mesh := &fakeMesh{searchNames: []string{"Yorick Hamlet", "Yorick 💀"}}
-		s := NewServer(mesh, 0, testLogger())
+		s := newTestServer(mesh)
 		text := resultText(t, callTool(t, s, "mesh_search_contacts", map[string]any{"query": "yorick"}))
 		if !contains(text, `2 contacts match "yorick"`) || !contains(text, "Yorick Hamlet") || !contains(text, "Yorick 💀") {
 			t.Errorf("unexpected result: %q", text)
@@ -361,7 +344,7 @@ func TestToolSearchContacts(t *testing.T) {
 
 	t.Run("singular wording for one match", func(t *testing.T) {
 		mesh := &fakeMesh{searchNames: []string{"Yorick 💀"}}
-		s := NewServer(mesh, 0, testLogger())
+		s := newTestServer(mesh)
 		text := resultText(t, callTool(t, s, "mesh_search_contacts", map[string]any{"query": "yorick"}))
 		if !contains(text, `1 contact matches "yorick"`) {
 			t.Errorf("unexpected result: %q", text)
@@ -369,7 +352,7 @@ func TestToolSearchContacts(t *testing.T) {
 	})
 
 	t.Run("no matches", func(t *testing.T) {
-		s := NewServer(&fakeMesh{}, 0, testLogger())
+		s := newTestServer(&fakeMesh{})
 		text := resultText(t, callTool(t, s, "mesh_search_contacts", map[string]any{"query": "ghost"}))
 		if !contains(text, `No contacts match "ghost"`) {
 			t.Errorf("unexpected result: %q", text)
@@ -378,7 +361,7 @@ func TestToolSearchContacts(t *testing.T) {
 
 	t.Run("empty query is an error result", func(t *testing.T) {
 		mesh := &fakeMesh{}
-		s := NewServer(mesh, 0, testLogger())
+		s := newTestServer(mesh)
 		out := callTool(t, s, "mesh_search_contacts", map[string]any{"query": "   "})
 		if tr := resultTool(t, out); !tr.IsError {
 			t.Errorf("empty query should be isError=true: %+v", out)
@@ -390,7 +373,7 @@ func TestToolSearchContacts(t *testing.T) {
 }
 
 func TestUnknownToolIsErrorResult(t *testing.T) {
-	s := NewServer(&fakeMesh{}, 0, testLogger())
+	s := newTestServer(&fakeMesh{})
 	out := callTool(t, s, "no_such_tool", nil)
 	if tr := resultTool(t, out); !tr.IsError {
 		t.Errorf("unknown tool should be isError=true: %+v", out)

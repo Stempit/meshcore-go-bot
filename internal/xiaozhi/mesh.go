@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"meshbot/internal/companion"
-	"meshbot/internal/config"
 	"meshbot/internal/meshcore"
 )
 
@@ -45,16 +44,26 @@ type ChannelRef struct {
 }
 
 // DirectMesh implements Mesh against a local meshcore client and the shared
-// inbox: cmd/meshmcp opens its own device connection, independent of the
-// cmd/web gateway.
+// inbox: the bridge opens its own device connection, independent of any other
+// gateway.
 type DirectMesh struct {
 	client *meshcore.MeshCoreClient
 	inbox  *companion.Inbox
+	opts   DirectMeshOptions
+}
+
+// DirectMeshOptions carries the host-configured send pacing for DirectMesh.
+type DirectMeshOptions struct {
+	// ChannelTransmissions is the MAXIMUM number of times each channel send
+	// is transmitted (deduplicated by receivers) to improve delivery against
+	// silent RF drops. 0 defaults to 3. It mirrors the Connection config
+	// section of the host application.
+	ChannelTransmissions int
 }
 
 // NewDirectMesh builds the local radio backend for the voice tools.
-func NewDirectMesh(client *meshcore.MeshCoreClient, inbox *companion.Inbox) *DirectMesh {
-	return &DirectMesh{client: client, inbox: inbox}
+func NewDirectMesh(client *meshcore.MeshCoreClient, inbox *companion.Inbox, opts DirectMeshOptions) *DirectMesh {
+	return &DirectMesh{client: client, inbox: inbox, opts: opts}
 }
 
 // Send pacing mirrors the bot dispatcher's parameters (internal/dispatch):
@@ -89,9 +98,9 @@ func (m *DirectMesh) SendChannel(to, text string, ack bool) error {
 	if ch == nil {
 		return fmt.Errorf("%w: %s", ErrUnknownRecipient, to)
 	}
-	transmissions := 3
-	if cfg := config.Get(); cfg != nil && cfg.Connection.ChannelTransmissions > 0 {
-		transmissions = cfg.Connection.ChannelTransmissions
+	transmissions := m.opts.ChannelTransmissions
+	if transmissions <= 0 {
+		transmissions = 3
 	}
 	return m.client.SendChannelMessageWithRetry(ch, text, ack, 1, transmissions, sendTimeoutPerTry)
 }

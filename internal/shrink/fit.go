@@ -1,40 +1,19 @@
 // Package shrink centralizes fitting bot replies into the MeshCore 140-byte
-// message limit. Its entire public surface is Fit: every send path calls it
-// once. See README.md for the design.
+// message limit. It is the config-driven policy layer over internal/fit:
+// variants, limits and the lossless squeeze come from the Shrink config
+// section (with per-send-path overrides), and the "llm" variant compresses
+// via the configured provider (internal/bridge/llm) before falling back to
+// fit's splitter. The pure fitting algorithms live in internal/fit.
 package shrink
 
 import (
-	"strings"
-
 	"meshbot/internal/config"
+	"meshbot/internal/fit"
 )
-
-// Variant selects a mesh-fit strategy.
-type Variant string
-
-const (
-	Truncate Variant = "truncate" // hard cut to fit, rune-safe, ellipsis
-	Split    Variant = "split"    // split into "[i/N]" parts (≤9)
-	LLM      Variant = "llm"      // LLM compress w/ retries; falls back to Split
-	Skip     Variant = "skip"     // drop a message that won't fit
-)
-
-const defaultMaxBytes = 140
-
-func maxBytes() int {
-	if m := config.Get().Shrink.MaxBytes; m > 0 {
-		return m
-	}
-	return defaultMaxBytes
-}
-
-func ellipsis() string {
-	return config.Get().Shrink.Ellipsis
-}
 
 func valid(v string) bool {
-	switch Variant(v) {
-	case Truncate, Split, LLM, Skip:
+	switch fit.Variant(v) {
+	case fit.Truncate, fit.Split, fit.LLM, fit.Skip:
 		return true
 	}
 	return false
@@ -43,25 +22,42 @@ func valid(v string) bool {
 // builtinDefaults pins the variant for send paths whose behavior should not
 // silently inherit the global default: a voice assistant reading a truncated
 // reply loses its ending, so the XiaoZhi path defaults to Split.
-var builtinDefaults = map[string]Variant{
-	"xiaozhi": Split,
+var builtinDefaults = map[string]fit.Variant{
+	"xiaozhi": fit.Split,
 }
 
 // resolveVariant picks the variant for name: per-name override, then the
 // path's built-in default, then the global default, then Truncate as a safe
 // last resort. Invalid values are skipped.
-func resolveVariant(name string) Variant {
+func resolveVariant(name string) fit.Variant {
 	s := config.Get().Shrink
 	if v, ok := s.Overrides[name]; ok && valid(v) {
-		return Variant(v)
+		return fit.Variant(v)
 	}
 	if d, ok := builtinDefaults[name]; ok {
 		return d
 	}
 	if valid(s.Default) {
-		return Variant(s.Default)
+		return fit.Variant(s.Default)
 	}
-	return Truncate
+	return fit.Truncate
+}
+
+// OptionsFor resolves the fit options for a named send path from the Shrink
+// config section, variant overrides included. The "xiaozhi" path gets the
+// Split built-in default when nothing is configured for it.
+func OptionsFor(name string) fit.Options {
+	s := config.Get().Shrink
+	o := fit.Options{
+		MaxBytes: s.MaxBytes,
+		Ellipsis: s.Ellipsis,
+		CyrToLat: s.CyrToLat,
+		Variant:  resolveVariant(name),
+	}
+	if o.Variant == fit.LLM {
+		o.Compress = llmCompressor
+	}
+	return o
 }
 
 // Fit turns a handler's logical messages into mesh-ready wire messages: it fits
@@ -69,62 +65,7 @@ func resolveVariant(name string) Variant {
 // and prepends prefix to the first wire message. Nothing returned exceeds the
 // configured max. prefix is "" when there is none (DMs, bot-originated posts).
 func Fit(name, prefix string, msgs []string) []string {
-	v := resolveVariant(name)
-	max := maxBytes()
-	// The prefix is part of the wire bytes, so squeeze it too (visually
-	// identical) and account for its post-transform length.
-	prefix = maybeCyrToLat(prefix)
-	head := len(prefix)
-
-	var out []string
-	for _, m := range msgs {
-		parts := fitOne(v, m, max, head)
-		if len(parts) > 0 {
-			// The prefix lands on the first emitted wire message only;
-			// subsequent messages get the full budget.
-			head = 0
-		}
-		out = append(out, parts...)
-	}
-
-	if prefix != "" && len(out) > 0 {
-		out[0] = prefix + out[0]
-	}
-	for i := range out {
-		out[i] = hardCap(out[i], max)
-	}
-	return out
-}
-
-// fitOne fits a single logical message. head reserves bytes for a prefix on the
-// first produced wire message.
-func fitOne(v Variant, text string, max, head int) []string {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return nil
-	}
-	budget := max - head
-	if budget < 1 {
-		budget = 1
-	}
-	// Lossless pre-transform: the squeezed text drives the fit decision and the
-	// truncate/split/skip variants. The LLM variant is the exception — it gets
-	// the original Cyrillic so its input is clean, and squeezes its output
-	// itself (see llmShrink).
-	transformed := maybeCyrToLat(text)
-	if len(transformed) <= budget {
-		return []string{transformed}
-	}
-	switch v {
-	case Skip:
-		return nil
-	case Split:
-		return split(transformed, max, head)
-	case LLM:
-		return llmShrink(text, max, head)
-	default: // Truncate and any fallthrough
-		return []string{truncate(transformed, budget)}
-	}
+	return fit.Fit(OptionsFor(name), prefix, msgs)
 }
 
 // ValidateConfig logs a warning for any unknown variant in the Shrink config.

@@ -1,10 +1,6 @@
-package shrink
+package fit
 
-import (
-	"strings"
-
-	"meshbot/internal/config"
-)
+import "strings"
 
 // cyrLatMap maps Cyrillic letters to the Latin (ASCII) look-alikes that are
 // pixel-identical in virtually every font. Each Cyrillic letter is 2 bytes in
@@ -19,22 +15,13 @@ var cyrLatMap = map[rune]rune{
 	'О': 'O', 'Р': 'P', 'С': 'C', 'Т': 'T', 'У': 'Y', 'Х': 'X',
 }
 
-// cyrToLat replaces every mapped Cyrillic letter with its identical-looking
+// CyrToLat replaces every mapped Cyrillic letter with its identical-looking
 // ASCII twin, leaving all other runes untouched. It is rune-safe.
-func cyrToLat(s string) string {
+func CyrToLat(s string) string {
 	return strings.Map(func(r rune) rune {
 		if l, ok := cyrLatMap[r]; ok {
 			return l
 		}
 		return r
 	}, s)
-}
-
-// maybeCyrToLat applies cyrToLat only when the lossless transform is enabled in
-// config; otherwise it returns s unchanged.
-func maybeCyrToLat(s string) string {
-	if config.Get().Shrink.CyrToLat {
-		return cyrToLat(s)
-	}
-	return s
 }

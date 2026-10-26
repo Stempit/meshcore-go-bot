@@ -13,8 +13,8 @@ import (
 	"strings"
 	"sync"
 
+	"meshbot/internal/fit"
 	"meshbot/internal/meshcore"
-	"meshbot/internal/shrink"
 )
 
 // rpcRequest is an incoming JSON-RPC request or notification.
@@ -60,10 +60,11 @@ const (
 // Server serves the meshcore voice tools to xiaozhi.me. It is
 // transport-agnostic: the WebSocket session feeds frames to HandleMessage and
 // writes back what comes out. The radio side is whatever Mesh implementation
-// it was built with.
+// it was built with; Fit is the resolved fitting policy for voice sends.
 type Server struct {
 	mesh Mesh
 	log  *slog.Logger
+	Fit  fit.Options
 
 	// cursorMu guards cursor, the last message ID the voice tool has read.
 	// The cursor is process-wide (not per connection): the voice assistant is
@@ -74,9 +75,11 @@ type Server struct {
 
 // NewServer builds a Server whose voice cursor starts at initialCursor —
 // pass the inbox's LastID at bridge startup so only NEW messages are read
-// aloud (0 reads the whole retained backlog).
-func NewServer(mesh Mesh, initialCursor int64, logger *slog.Logger) *Server {
-	return &Server{mesh: mesh, cursor: initialCursor, log: logger}
+// aloud (0 reads the whole retained backlog). fitOpts is the voice send
+// policy: split into [i/N] parts by default (see cmd/meshmcp, which resolves
+// it from the Shrink config section with the "xiaozhi" built-in default).
+func NewServer(mesh Mesh, initialCursor int64, fitOpts fit.Options, logger *slog.Logger) *Server {
+	return &Server{mesh: mesh, cursor: initialCursor, Fit: fitOpts, log: logger}
 }
 
 // HandleMessage processes one incoming JSON-RPC frame and returns the response
@@ -245,9 +248,9 @@ type sendRequest struct {
 	Ack  bool   `json:"ack"` // true = wait for delivery confirmation instead of sent
 }
 
-// toolSend validates arguments, fits the text to the mesh (shrink "xiaozhi"
-// variant: split into [i/N] parts by default, optional Cyrillic→Latin squeeze
-// via Shrink.cyr_to_lat), sends every part, and maps the distinct failure
+// toolSend validates arguments, fits the text to the mesh (the server's Fit
+// policy: split into [i/N] parts by default, optional Cyrillic→Latin squeeze
+// via its CyrToLat option), sends every part, and maps the distinct failure
 // modes onto speech the user can act on.
 func (s *Server) toolSend(args json.RawMessage) (string, bool) {
 	var req sendRequest
@@ -263,7 +266,7 @@ func (s *Server) toolSend(args json.RawMessage) (string, bool) {
 		return `Type must be "dm" or "channel".`, true
 	}
 
-	parts := shrink.Fit("xiaozhi", "", []string{req.Text})
+	parts := fit.Fit(s.Fit, "", []string{req.Text})
 	sent := 0
 	var err error
 	for _, part := range parts {
