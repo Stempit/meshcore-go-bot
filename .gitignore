@@ -1,3 +1,9 @@
 log
 config.yaml
-bot
+/bot
+/say
+/mesh-http
+stats.json
+singular.txt
+optimal_params.json
+.zcode/

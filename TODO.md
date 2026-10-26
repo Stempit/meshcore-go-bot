@@ -1,0 +1,37 @@
+# TODO
+- trace всех путей (plan multipath)
+- голосовой интерфейс
+- публикация на гитхаб - review meshcore github + github
+- права и доступы - plan security
+- система плагинов - design architecture for
+- свои метрики
+- скрейп метрик репитеров (есть ветка и design metrics)
+- .note с правилами канала / .topic
+- .online с последними замеченными
+- .mail с доставкой
+- массовая рассылка
+- ascii карта https://labs.maptiler.com/mapscii/#11.94/58.59223/49.61915
+- .seen когда видел
+- .stat со статой юзера
+- .find text
+- .market
+- .alert <keyword> — subscribe: bot DMs you whenever any channel message contains that word. Mesh-wide keyword monitor.
+- .anon <msg> — bot strips your identity and relays the message to channel as "Anonymous". Only possible because there's a bot intermediary. Useful for sensitive topics.
+- .watch <node> — async: bot DMs you the moment that node sends anything. "Wake me when TIM comes online."
+- .karma <node> + — give one karma per day to a node. .top shows reputation leaderboard. Builds trust in the community.
+- .riddle — bot posts a riddle, first correct answer in channel wins a karma point. State persists across messages.
+- todo manager
+- .auction <item> <start price> — simple timed auction. .bid 500 raises the bid. Bot announces the winner when time expires.
+- .rule [n] — channel rules board. .rule lists all, .rule 3 shows one. Admin sets with .setrule 3 <text>.
+- магазин
+- top - winrate для результатов
+- покер - eveluate poker game
+- отпилить упоминания BLE
+- тесты для проверки параметров на оптимальность
+
+# Done
+- .top
+- .8ball
+- .stat — per-channel traffic stats: messages today, peak hour, unique nodes. Operator overview.
+- .dice
+- .vote

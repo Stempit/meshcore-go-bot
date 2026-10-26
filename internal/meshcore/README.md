@@ -61,6 +61,7 @@ Connection:
   channel_transmissions: 3    # MAX times each channel reply is transmitted; 1 = single
 ```
 
-The vendored firmware this reasons about is under [`MeshCore/`](../../../MeshCore/); the
-firmware MQTT protocol is documented in
+The firmware this reasons about is upstream
+[MeshCore](https://github.com/meshcore-dev/MeshCore) (a local reference clone
+lives outside this repo); the firmware MQTT protocol is documented in
 [`internal/bridge/mqttbridge`](../bridge/mqttbridge/README.md).
