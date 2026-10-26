@@ -17,7 +17,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"meshbot/internal/companion"
+	"github.com/stempit/meshcore-companion/companion"
 	"meshbot/internal/config"
 	"meshbot/internal/logging"
 	"meshbot/internal/shrink"

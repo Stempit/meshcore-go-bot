@@ -1,6 +1,6 @@
 package mqttbridge
 
-import "meshbot/internal/meshcore"
+import "github.com/stempit/meshcore-go"
 
 // DeviceInfoFromMesh converts a meshcore SelfInfo into the bridge's DeviceInfo.
 // Returns nil when info is nil.

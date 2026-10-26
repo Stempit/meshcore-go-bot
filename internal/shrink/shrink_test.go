@@ -10,7 +10,7 @@ import (
 	"unicode/utf8"
 
 	"meshbot/internal/config"
-	"meshbot/internal/fit"
+	"github.com/stempit/meshcore-companion/fit"
 )
 
 // TestMain loads a config with a Shrink section so Fit() has limits to read.

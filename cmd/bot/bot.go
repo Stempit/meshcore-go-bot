@@ -18,7 +18,7 @@ import (
 	"meshbot/internal/dispatch"
 	"meshbot/internal/greeter"
 	"meshbot/internal/logging"
-	"meshbot/internal/meshcore"
+	"github.com/stempit/meshcore-go"
 	"meshbot/internal/migrator"
 	"meshbot/internal/proxy"
 	"meshbot/internal/shrink"

@@ -10,7 +10,7 @@ import (
 	"fmt"
 
 	"meshbot/internal/logging"
-	"meshbot/internal/meshcore"
+	"github.com/stempit/meshcore-go"
 )
 
 var log = logging.For("migrator")

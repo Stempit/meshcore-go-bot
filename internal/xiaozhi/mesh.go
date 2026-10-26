@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"meshbot/internal/companion"
-	"meshbot/internal/meshcore"
+	"github.com/stempit/meshcore-companion/companion"
+	"github.com/stempit/meshcore-go"
 )
 
 // ErrUnknownRecipient reports that a dm/channel destination did not resolve

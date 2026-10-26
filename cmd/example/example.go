@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"meshbot/internal/meshcore"
+	"github.com/stempit/meshcore-go"
 )
 
 func main() {

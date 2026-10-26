@@ -13,9 +13,9 @@ import (
 	"strings"
 	"time"
 
-	"meshbot/internal/companion"
+	"github.com/stempit/meshcore-companion/companion"
 	"meshbot/internal/config"
-	"meshbot/internal/meshcore"
+	"github.com/stempit/meshcore-go"
 )
 
 // Send pacing mirrors the bot dispatcher's parameters (cmd/bot via

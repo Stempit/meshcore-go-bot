@@ -26,7 +26,7 @@ get on air. The bot's own `sendFlood` marks-then-sends, so it only dedups inboun
 outbound resends.
 
 Implemented: `SendChannelMessageWithRetry(channel, text, ack, maxRetries, repeats, timeout)`
-in [internal/meshcore/client.go](internal/meshcore/client.go) (new `repeats` param +
+in the meshcore-go driver (`client.go`, see the [meshcore-go repo](https://github.com/stempit/meshcore-go)) (new `repeats` param +
 extracted `sendChannelOnce`, `sendChannelTextMessageTS`). Config:
 `Connection.channel_send_repeats` (default 3, 1 disables). Firmware reference lives at
 ./MeshCore.

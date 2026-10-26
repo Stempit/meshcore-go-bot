@@ -9,20 +9,23 @@ go build ./...                    # build everything
 go build ./cmd/bot                # build the main bot
 
 go run ./cmd/bot                  # run the bot (reads config.yaml in CWD)
-go run ./cmd/example              # run the example harness
+go run ./cmd/say                  # run the log-tail TTS announcer
 go run ./cmd/llm                  # run the LLM prompt test utility
 
 go vet ./...                      # static analysis
+go test ./...                     # unit tests (shrink, xiaozhi; driver/runtime
+                                  # tests live in the meshcore-go and
+                                  # meshcore-companion repos)
 ```
 
-There are no automated tests. Manual testing uses `cmd/example` and `cmd/llm`.
+Manual radio testing uses the `examples/basic` harness in the
+[meshcore-go](https://github.com/stempit/meshcore-go) repo and `cmd/llm` here.
 
 ## Architecture
 
 ```
 cmd/bot/bot.go          – main entry point; wires everything together
 internal/
-  meshcore/          – MeshCore protocol driver (client.go is the main type)
   dispatch/             – inbound worker pool + serialized outbound sender;
                           processDM/processChannelMessage parse .advert, then call registry.Dispatch
   commands/             – self-registering command plugins (one folder each; no loose files)
@@ -39,6 +42,8 @@ internal/
     historylog/         – per-conversation append-only log files
   greeter/              – greets newly seen nodes; owns KnownKeys persistence + GreetMessage
   config/               – YAML config loader (singleton via sync.Once) + per-plugin Sectioner
+  shrink/               – config policy layer over the fit package (meshcore-companion):
+                          variant resolution per send path + the LLM compressor
   bridge/               – external integrations
     llm/                – Ollama and OpenRouter LLM providers
     mqttbridge/         – MQTT publishing to custom broker + Let's Mesh analyzer
@@ -50,7 +55,14 @@ internal/
     picoclaw/           – picoclaw AI agent WebSocket client (used by .claw)
 ```
 
-The MeshCore client (`internal/meshcore/client.go`) is the core dependency. Everything else depends on it.
+Sibling module repos (local checkouts next to this repo, wired via `replace`
+in go.mod until published):
+- **meshcore-go** — the MeshCore protocol driver (`meshcore.` client; BLE/serial).
+- **meshcore-companion** — the shared app runtime (`companion.` connect/sync/inbox
+  service, used by the gateways) and the pure message fitter (`fit.`; `shrink`
+  here is its policy wrapper).
+
+The MeshCore client (`meshcore.MeshCoreClient` from meshcore-go) is the core dependency. Everything else depends on it.
 
 Message flow: MeshCore device → `client.IncomingMessages()` channel → `processDM` / `processChannelMessage` in `internal/dispatch` → `registry.Dispatch` → first matching plugin's `Handle` → reply sent back over radio.
 
@@ -95,9 +107,9 @@ log/
 
 ## Packages that need care
 
-- **`internal/meshcore/client.go`** (~2300 lines) – BLE protocol state machine. The `sentConfirmCh` channel is a single shared slot; only one send can be in flight at a time, so concurrent senders must serialise their sends.
+- **meshcore-go `client.go`** (~2300 lines) – BLE protocol state machine. The `sentConfirmCh` channel is a single shared slot; only one send can be in flight at a time, so concurrent senders must serialise their sends.
 - **`internal/bridge/mqttbridge/bridge.go`** (~1700 lines) – manages multiple MQTT connections (custom broker + EU/US analyzers) with JWT auth (Ed25519). Changes here affect network-visible state.
-- **`internal/config/model.go`** – holds only **infra** config (Language, Connection, Proxy, MQTT, Telegram, Alerts, Security, Shrink, LLM, Trace, Migration). Adding a field requires a YAML tag; check for typos. **Per-command** config lives in the plugin folder instead: the plugin implements `registry.Configurable` and decodes its own section via `config.Sectioner` (two-pass YAML over the same single `config.yaml`).
+- **`internal/config/model.go`** – holds only **infra** config (Language, Connection, Server, MCP, Proxy, Trace, Security, Redirect, Migration, Shrink, LLM). Adding a field requires a YAML tag; check for typos. **Per-command** config lives in the plugin folder instead: the plugin implements `registry.Configurable` and decodes its own section via `config.Sectioner` (two-pass YAML over the same single `config.yaml`). The **bridge** configs (MQTT, Telegram, Alerts) are decoded by `cmd/bot` straight into the owning bridge's types via the same Sectioner — `internal/config` does not import the feature packages.
 
 ## What the commands do
 

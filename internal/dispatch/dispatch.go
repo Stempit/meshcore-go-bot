@@ -13,7 +13,7 @@ import (
 
 	"meshbot/internal/config"
 	"meshbot/internal/logging"
-	"meshbot/internal/meshcore"
+	"github.com/stempit/meshcore-go"
 	"meshbot/internal/shrink"
 	"meshbot/internal/bridge/tgbridge"
 )

@@ -8,7 +8,7 @@ package shrink
 
 import (
 	"meshbot/internal/config"
-	"meshbot/internal/fit"
+	"github.com/stempit/meshcore-companion/fit"
 )
 
 func valid(v string) bool {

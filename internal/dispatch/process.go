@@ -8,7 +8,7 @@ import (
 
 	"meshbot/internal/commands/advert"
 	"meshbot/internal/config"
-	"meshbot/internal/meshcore"
+	"github.com/stempit/meshcore-go"
 	"meshbot/internal/shrink"
 	"meshbot/internal/support/registry"
 )
