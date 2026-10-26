@@ -18,6 +18,12 @@ import (
 // the failure is not about ACK delivery — the message was never queued.
 var ErrDeviceRejected = fmt.Errorf("device rejected send")
 
+// ErrNoConfirmation is returned by SendMessageWithRetry when every attempt was
+// written to the device but no sent/delivered confirmation arrived within the
+// timeout windows. The message may still reach its destination (a late ACK can
+// arrive after the caller gave up), so a retry can duplicate the message.
+var ErrNoConfirmation = fmt.Errorf("no send confirmation")
+
 type pendingRawPacket struct {
 	rawData   []byte
 	snr       float64
@@ -177,4 +183,3 @@ func NewMeshCoreClient(adapter *bluetooth.Adapter) *MeshCoreClient {
 func (c *MeshCoreClient) SetLogger(logger *slog.Logger) {
 	c.logger = logger
 }
-

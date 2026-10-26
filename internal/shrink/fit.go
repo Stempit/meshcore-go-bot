@@ -40,12 +40,23 @@ func valid(v string) bool {
 	return false
 }
 
-// resolveVariant picks the variant for name: per-name override, then the global
-// default, then Truncate as a safe last resort. Invalid values are skipped.
+// builtinDefaults pins the variant for send paths whose behavior should not
+// silently inherit the global default: a voice assistant reading a truncated
+// reply loses its ending, so the XiaoZhi path defaults to Split.
+var builtinDefaults = map[string]Variant{
+	"xiaozhi": Split,
+}
+
+// resolveVariant picks the variant for name: per-name override, then the
+// path's built-in default, then the global default, then Truncate as a safe
+// last resort. Invalid values are skipped.
 func resolveVariant(name string) Variant {
 	s := config.Get().Shrink
 	if v, ok := s.Overrides[name]; ok && valid(v) {
 		return Variant(v)
+	}
+	if d, ok := builtinDefaults[name]; ok {
+		return d
 	}
 	if valid(s.Default) {
 		return Variant(s.Default)

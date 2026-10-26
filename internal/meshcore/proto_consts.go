@@ -76,55 +76,55 @@ const (
 
 // Response codes (from device)
 const (
-	respCodeOk               = 0x00
-	respCodeErr              = 0x01
-	respCodeContactsStart    = 0x02
-	respCodeContact          = 0x03
-	respCodeEndOfContacts    = 0x04
-	respCodeSelfInfo         = 0x05
-	respCodeSent             = 0x06
-	respCodeContactMsgRecv   = 0x07
-	respCodeChannelMsgRecv   = 0x08
-	respCodeCurrTime         = 0x09 // reply to CMD_GET_DEVICE_TIME
-	respCodeNoMoreMessages   = 0x0A
-	respCodeExportContact    = 0x0B // reply to CMD_EXPORT_CONTACT
-	respCodeBattAndStorage   = 0x0C
-	respCodeDeviceInfo       = 0x0D
-	respCodePrivateKey       = 0x0E // reply to CMD_EXPORT_PRIVATE_KEY
-	respCodeDisabled         = 0x0F // generic "feature disabled"
-	respCodeContactMsgRecvV3 = 0x10
-	respCodeChannelMsgRecvV3 = 0x11
-	respCodeChannelInfo      = 0x12
-	respCodeSignStart        = 0x13 // signing flow (CMD_SIGN_DATA)
-	respCodeSignature        = 0x14 // signing flow (64-byte Ed25519 signature)
-	respCodeCustomVars       = 0x15
-	respCodeAdvertPath       = 0x16 // reply to CMD_GET_ADVERT_PATH
-	respCodeTuningParams     = 0x17 // reply to CMD_GET_TUNING_PARAMS
-	respCodeStats            = 0x18
-	respCodeAutoAddConfig    = 0x19
-	respCodeChannelDataRecv  = 0x1B // binary channel data packet
+	respCodeOk                = 0x00
+	respCodeErr               = 0x01
+	respCodeContactsStart     = 0x02
+	respCodeContact           = 0x03
+	respCodeEndOfContacts     = 0x04
+	respCodeSelfInfo          = 0x05
+	respCodeSent              = 0x06
+	respCodeContactMsgRecv    = 0x07
+	respCodeChannelMsgRecv    = 0x08
+	respCodeCurrTime          = 0x09 // reply to CMD_GET_DEVICE_TIME
+	respCodeNoMoreMessages    = 0x0A
+	respCodeExportContact     = 0x0B // reply to CMD_EXPORT_CONTACT
+	respCodeBattAndStorage    = 0x0C
+	respCodeDeviceInfo        = 0x0D
+	respCodePrivateKey        = 0x0E // reply to CMD_EXPORT_PRIVATE_KEY
+	respCodeDisabled          = 0x0F // generic "feature disabled"
+	respCodeContactMsgRecvV3  = 0x10
+	respCodeChannelMsgRecvV3  = 0x11
+	respCodeChannelInfo       = 0x12
+	respCodeSignStart         = 0x13 // signing flow (CMD_SIGN_DATA)
+	respCodeSignature         = 0x14 // signing flow (64-byte Ed25519 signature)
+	respCodeCustomVars        = 0x15
+	respCodeAdvertPath        = 0x16 // reply to CMD_GET_ADVERT_PATH
+	respCodeTuningParams      = 0x17 // reply to CMD_GET_TUNING_PARAMS
+	respCodeStats             = 0x18
+	respCodeAutoAddConfig     = 0x19
+	respCodeChannelDataRecv   = 0x1B // binary channel data packet
 	respCodeDefaultFloodScope = 0x1C // reply to CMD_GET_DEFAULT_FLOOD_SCOPE
 )
 
 // Push codes (async from device)
 const (
-	pushCodeAdvert                  = 0x80
-	pushCodePathUpdated             = 0x81
-	pushCodeSendConfirmed           = 0x82
-	pushCodeMsgWaiting              = 0x83
-	pushCodeRawData                 = 0x84 // raw (non-message) RF data packet
-	pushCodeLoginSuccess            = 0x85 // login to room server accepted
-	pushCodeLoginFail               = 0x86 // login to room server rejected
-	pushCodeStatusResponse          = 0x87 // reply to a status query
-	pushCodeLogRxData               = 0x88
-	pushCodeTraceData               = 0x89 // trace echo received; path + per-hop SNR
-	pushCodeNewAdvert               = 0x8A // new contact discovered; same frame format as respCodeContact
-	pushCodeTelemetryResponse       = 0x8B // contact responded to telemetry request
-	pushCodeBinaryResponse          = 0x8C // contact responded to binary request
-	pushCodePathDiscoveryResponse   = 0x8D // path discovery to a contact completed
-	pushCodeControlData             = 0x8E // v8+: raw binary control payload from another node
-	pushCodeContactDeleted          = 0x8F // contact was deleted/overwritten; frame: [code][pubkey(32)]
-	pushCodeContactsFull            = 0x90 // device contact storage full; bot must evict oldest
+	pushCodeAdvert                = 0x80
+	pushCodePathUpdated           = 0x81
+	pushCodeSendConfirmed         = 0x82
+	pushCodeMsgWaiting            = 0x83
+	pushCodeRawData               = 0x84 // raw (non-message) RF data packet
+	pushCodeLoginSuccess          = 0x85 // login to room server accepted
+	pushCodeLoginFail             = 0x86 // login to room server rejected
+	pushCodeStatusResponse        = 0x87 // reply to a status query
+	pushCodeLogRxData             = 0x88
+	pushCodeTraceData             = 0x89 // trace echo received; path + per-hop SNR
+	pushCodeNewAdvert             = 0x8A // new contact discovered; same frame format as respCodeContact
+	pushCodeTelemetryResponse     = 0x8B // contact responded to telemetry request
+	pushCodeBinaryResponse        = 0x8C // contact responded to binary request
+	pushCodePathDiscoveryResponse = 0x8D // path discovery to a contact completed
+	pushCodeControlData           = 0x8E // v8+: raw binary control payload from another node
+	pushCodeContactDeleted        = 0x8F // contact was deleted/overwritten; frame: [code][pubkey(32)]
+	pushCodeContactsFull          = 0x90 // device contact storage full; bot must evict oldest
 )
 
 // Text message types
