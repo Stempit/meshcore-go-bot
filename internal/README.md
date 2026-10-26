@@ -4,7 +4,7 @@ All of meshbot's non-`main` code. Each subpackage has its own `README.md` coveri
 purpose, abilities, and config options. The MeshCore protocol driver now lives in the
 sibling repo [meshcore-go](https://github.com/stempit/meshcore-go); the shared device
 runtime and the pure message fitter live in
-[meshcore-companion](https://github.com/stempit/meshcore-companion).
+[meshcore-kit](https://github.com/stempit/meshcore-kit).
 
 ## Layout
 
@@ -16,7 +16,7 @@ runtime and the pure message fitter live in
 | [`bridge/`](bridge/README.md) | external integrations (Telegram, MQTT, LLM, picoclaw, hazard alerts) |
 | [`greeter/`](greeter/README.md) | greets newly-seen nodes |
 | [`migrator/`](migrator/README.md) | nudges 1-byte-hash nodes to switch to 2-byte |
-| [`shrink/`](shrink/README.md) | config policy over the `fit` package (meshcore-companion): fits every outgoing reply into the 140-byte mesh limit |
+| [`shrink/`](shrink/README.md) | config policy over the `fit` package (meshcore-kit): fits every outgoing reply into the 140-byte mesh limit |
 | [`config/`](config/README.md) | YAML config loader (infra + per-plugin sections) |
 | [`proxy/`](proxy/README.md) | shared HTTP client with optional SOCKS5 |
 | [`logging/`](logging/README.md) | per-module `slog` logger factory |

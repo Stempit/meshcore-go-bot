@@ -9,7 +9,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/ollama/ollama v0.30.8
 	github.com/revrost/go-openrouter v1.6.0
-	github.com/stempit/meshcore-companion v0.0.0-00010101000000-000000000000
+	github.com/stempit/meshcore-kit v0.0.0-00010101000000-000000000000
 	github.com/stempit/meshcore-go v0.0.0-00010101000000-000000000000
 	golang.org/x/net v0.60.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -41,4 +41,4 @@ require (
 
 replace github.com/stempit/meshcore-go => ../meshcore-go
 
-replace github.com/stempit/meshcore-companion => ../meshcore-companion
+replace github.com/stempit/meshcore-kit => ../meshcore-kit

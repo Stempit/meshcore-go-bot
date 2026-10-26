@@ -1,14 +1,14 @@
 // Package shrink centralizes fitting bot replies into the MeshCore 140-byte
 // message limit. It is the config-driven policy layer over the fit package
-// (meshcore-companion): variants, limits and the lossless squeeze come from
+// (meshcore-kit): variants, limits and the lossless squeeze come from
 // the Shrink config section (with per-send-path overrides), and the "llm"
 // variant compresses via the configured provider (internal/bridge/llm)
 // before falling back to fit's splitter. The pure fitting algorithms live in
-// github.com/stempit/meshcore-companion/fit.
+// github.com/stempit/meshcore-kit/fit.
 package shrink
 
 import (
-	"github.com/stempit/meshcore-companion/fit"
+	"github.com/stempit/meshcore-kit/fit"
 	"meshbot/internal/config"
 )
 

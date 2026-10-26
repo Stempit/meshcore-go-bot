@@ -105,7 +105,7 @@ meshbot — это сам бот; радио-стек и остальные фр
 | Репозиторий | Что это |
 |---|---|
 | [meshcore-go](https://github.com/stempit/meshcore-go) | драйвер протокола: BLE/serial, формат кадров, отправка с подтверждением |
-| [meshcore-companion](https://github.com/stempit/meshcore-companion) | общий рантайм приложений (подключение, синхронизация, инбокс, keepalive) + упаковщик в 140 байт |
+| [meshcore-kit](https://github.com/stempit/meshcore-kit) | общий рантайм приложений (подключение, синхронизация, инбокс, keepalive) + упаковщик в 140 байт |
 | [meshcore-http-gateway](https://github.com/stempit/meshcore-http-gateway) | ваш меш за простым HTTP API (`/get`, `/send`, `/messages`) |
 | [meshcore-mcp-gateway](https://github.com/stempit/meshcore-mcp-gateway) | ваш меш как голосовые инструменты для ассистента XiaoZhi |
 

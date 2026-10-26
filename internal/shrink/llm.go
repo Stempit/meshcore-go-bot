@@ -5,7 +5,7 @@ import (
 
 	"meshbot/internal/bridge/llm"
 	"meshbot/internal/config"
-	"github.com/stempit/meshcore-companion/fit"
+	"github.com/stempit/meshcore-kit/fit"
 )
 
 // llmCompressor implements the "llm" fit variant: it compresses text with the

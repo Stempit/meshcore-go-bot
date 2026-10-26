@@ -100,7 +100,7 @@ in sibling repos:
 | Repo | What it is |
 |---|---|
 | [meshcore-go](https://github.com/stempit/meshcore-go) | the protocol driver: BLE/serial, wire format, delivery-confirmed sends |
-| [meshcore-companion](https://github.com/stempit/meshcore-companion) | shared app runtime (connect, sync, inbox, keepalive) + the 140-byte message fitter |
+| [meshcore-kit](https://github.com/stempit/meshcore-kit) | shared app runtime (connect, sync, inbox, keepalive) + the 140-byte message fitter |
 | [meshcore-http-gateway](https://github.com/stempit/meshcore-http-gateway) | your mesh behind a plain HTTP API (`/get`, `/send`, `/messages`) |
 | [meshcore-mcp-gateway](https://github.com/stempit/meshcore-mcp-gateway) | your mesh as voice tools for the XiaoZhi assistant |
 

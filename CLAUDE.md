@@ -15,7 +15,7 @@ go run ./cmd/llm                  # run the LLM prompt test utility
 go vet ./...                      # static analysis
 go test ./...                     # unit tests (shrink; driver/runtime tests
                                   # live in the meshcore-go and
-                                  # meshcore-companion repos, voice-bridge
+                                  # meshcore-kit repos, voice-bridge
                                   # tests in meshcore-mcp-gateway)
 ```
 
@@ -43,7 +43,7 @@ internal/
     historylog/         – per-conversation append-only log files
   greeter/              – greets newly seen nodes; owns KnownKeys persistence + GreetMessage
   config/               – YAML config loader (singleton via sync.Once) + per-plugin Sectioner
-  shrink/               – config policy layer over the fit package (meshcore-companion):
+  shrink/               – config policy layer over the fit package (meshcore-kit):
                           variant resolution per send path + the LLM compressor
   bridge/               – external integrations
     llm/                – Ollama and OpenRouter LLM providers
@@ -59,7 +59,7 @@ internal/
 Sibling module repos (local checkouts next to this repo, wired via `replace`
 in go.mod until published):
 - **meshcore-go** — the MeshCore protocol driver (`meshcore.` client; BLE/serial).
-- **meshcore-companion** — the shared app runtime (`companion.` connect/sync/inbox
+- **meshcore-kit** — the shared app runtime (`companion.` connect/sync/inbox
   service, used by the gateways) and the pure message fitter (`fit.`; `shrink`
   here is its policy wrapper).
 
