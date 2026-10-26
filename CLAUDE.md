@@ -13,9 +13,10 @@ go run ./cmd/say                  # run the log-tail TTS announcer
 go run ./cmd/llm                  # run the LLM prompt test utility
 
 go vet ./...                      # static analysis
-go test ./...                     # unit tests (shrink, xiaozhi; driver/runtime
-                                  # tests live in the meshcore-go and
-                                  # meshcore-companion repos)
+go test ./...                     # unit tests (shrink; driver/runtime tests
+                                  # live in the meshcore-go and
+                                  # meshcore-companion repos, voice-bridge
+                                  # tests in meshcore-mcp-gateway)
 ```
 
 Manual radio testing uses the `examples/basic` harness in the
@@ -109,7 +110,7 @@ log/
 
 - **meshcore-go `client.go`** (~2300 lines) – BLE protocol state machine. The `sentConfirmCh` channel is a single shared slot; only one send can be in flight at a time, so concurrent senders must serialise their sends.
 - **`internal/bridge/mqttbridge/bridge.go`** (~1700 lines) – manages multiple MQTT connections (custom broker + EU/US analyzers) with JWT auth (Ed25519). Changes here affect network-visible state.
-- **`internal/config/model.go`** – holds only **infra** config (Language, Connection, Server, MCP, Proxy, Trace, Security, Redirect, Migration, Shrink, LLM). Adding a field requires a YAML tag; check for typos. **Per-command** config lives in the plugin folder instead: the plugin implements `registry.Configurable` and decodes its own section via `config.Sectioner` (two-pass YAML over the same single `config.yaml`). The **bridge** configs (MQTT, Telegram, Alerts) are decoded by `cmd/bot` straight into the owning bridge's types via the same Sectioner — `internal/config` does not import the feature packages.
+- **`internal/config/model.go`** – holds only **infra** config (Language, Connection, Proxy, Trace, Security, Redirect, Migration, Shrink, LLM). Adding a field requires a YAML tag; check for typos. **Per-command** config lives in the plugin folder instead: the plugin implements `registry.Configurable` and decodes its own section via `config.Sectioner` (two-pass YAML over the same single `config.yaml`). The **bridge** configs (MQTT, Telegram, Alerts) are decoded by `cmd/bot` straight into the owning bridge's types via the same Sectioner — `internal/config` does not import the feature packages.
 
 ## What the commands do
 
