@@ -1,11 +1,5 @@
 package config
 
-import (
-	"meshbot/internal/bridge/alerts"
-	"meshbot/internal/bridge/mqttbridge"
-	"meshbot/internal/bridge/tgbridge"
-)
-
 type TraceConfig struct {
 	UseConfigCoords bool    `yaml:"use_config_coords"`
 	Lat             float64 `yaml:"lat"`
@@ -112,19 +106,16 @@ type MigrationConfig struct {
 }
 
 type Config struct {
-	Language   string                  `yaml:"Language"` // bot-wide UI language ("en" | "ru"); empty → i18n.Base ("en")
-	Connection ConnectionConfig        `yaml:"Connection"`
-	Server     ServerConfig            `yaml:"Server"`
-	MCP        MCPConfig               `yaml:"MCP"`
-	Proxy      ProxyConfig             `yaml:"Proxy"`
-	MQTT       mqttbridge.MQTTConfig   `yaml:"MQTT"`
-	Telegram   tgbridge.TelegramConfig `yaml:"Telegram"`
-	Alerts     alerts.Config           `yaml:"Alerts"`
-	Trace      TraceConfig             `yaml:"Trace"`
-	Security   SecurityConfig          `yaml:"Security"`
-	Redirect   RedirectConfig          `yaml:"Redirect"`
-	Migration  MigrationConfig         `yaml:"Migration"`
-	Shrink     ShrinkConfig            `yaml:"Shrink"`
+	Language   string           `yaml:"Language"` // bot-wide UI language ("en" | "ru"); empty → i18n.Base ("en")
+	Connection ConnectionConfig `yaml:"Connection"`
+	Server     ServerConfig     `yaml:"Server"`
+	MCP        MCPConfig        `yaml:"MCP"`
+	Proxy      ProxyConfig      `yaml:"Proxy"`
+	Trace      TraceConfig      `yaml:"Trace"`
+	Security   SecurityConfig   `yaml:"Security"`
+	Redirect   RedirectConfig   `yaml:"Redirect"`
+	Migration  MigrationConfig  `yaml:"Migration"`
+	Shrink     ShrinkConfig     `yaml:"Shrink"`
 	LLM        struct {
 		Enabled           bool    `yaml:"enabled"`
 		Type              string  `yaml:"type"`
@@ -132,4 +123,8 @@ type Config struct {
 		SystemPrompt      string  `yaml:"system_prompt"`
 		SystemTemperature float64 `yaml:"system_temperature"`
 	} `yaml:"LLM"`
+	// The MQTT, Telegram and Alerts sections are decoded by cmd/bot straight
+	// into the owning bridge's config types via Sections().Section — the same
+	// two-pass mechanism the command plugins use — so this package does not
+	// depend on the feature packages.
 }

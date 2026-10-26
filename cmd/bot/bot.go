@@ -33,6 +33,16 @@ var log = logging.For("bot")
 // bot startup are fed into the processing pipeline. Set to false to skip them.
 const processStoredMessages = true
 
+// bridgeCfg decodes one top-level config section into target, the same
+// two-pass YAML the command plugins use. A malformed section is fatal; a
+// missing one leaves the caller's zero value (the feature stays off).
+func bridgeCfg(key string, target any) {
+	if err := config.Sections().Section(key, target); err != nil {
+		log().Error("Failed to decode config section", "section", key, "error", err)
+		os.Exit(1)
+	}
+}
+
 func main() {
 	// config
 	if err := config.Load("config.yaml"); err != nil {
@@ -93,7 +103,8 @@ func main() {
 	// mqtt init — optional. The bridge is constructed here, in the composition
 	// root, and attached to the client as a packet publisher; the meshcore
 	// driver itself has no dependency on the MQTT package.
-	mqttCfg := config.Get().MQTT
+	var mqttCfg mqttbridge.MQTTConfig
+	bridgeCfg("MQTT", &mqttCfg)
 	if bridge := startMQTTBridge(client, &mqttCfg); bridge != nil {
 		defer bridge.Stop()
 	}
@@ -141,7 +152,9 @@ func main() {
 	// ─── Telegram bridge ──────────────────────────────────────────────────────
 
 	var tgb *tgbridge.Bridge
-	if tgCfg := config.Get().Telegram; tgCfg.Enabled {
+	var tgCfg tgbridge.TelegramConfig
+	bridgeCfg("Telegram", &tgCfg)
+	if tgCfg.Enabled {
 		tgb, err = tgbridge.New(tgCfg, slog.Default(), proxy.HTTPClient())
 		if err != nil {
 			log().Error("Failed to start Telegram bridge", "error", err)
@@ -167,7 +180,9 @@ func main() {
 
 	// ─── FPV/UAV alert bridge ──────────────────────────────────────────────────
 
-	if alertsCfg := config.Get().Alerts; len(alertsCfg.Sources) > 0 {
+	var alertsCfg alerts.Config
+	bridgeCfg("Alerts", &alertsCfg)
+	if len(alertsCfg.Sources) > 0 {
 		ab, err := alerts.New(alertsCfg, slog.Default(), proxy.HTTPClient())
 		if err != nil {
 			log().Error("Failed to start alerts bridge", "error", err)
