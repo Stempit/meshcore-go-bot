@@ -298,7 +298,7 @@ func TestTimeoutAutoActionsAndRemoval(t *testing.T) {
 	if tb.toAct != 1 {
 		t.Errorf("action moved to P%d, want P1", tb.toAct)
 	}
-	if !containsAll(strings.Join(o.chanTexts(), "\n"), "авто-фолд", "1/3") {
+	if !containsAll(strings.Join(o.chanTexts(), "\n"), "авто-фолд", "1/2") {
 		t.Errorf("missing timeout notice: %v", o.chanTexts())
 	}
 
@@ -307,11 +307,12 @@ func TestTimeoutAutoActionsAndRemoval(t *testing.T) {
 	if tb.phase != phasePause {
 		t.Fatalf("phase=%d want pause", tb.phase)
 	}
-	tb.players[0].timeouts = 2
-	onDealPause(tb) // deal the next hand
+	tb.players[0].timeouts = 1 // P0 already struck once last hand
+	onDealPause(tb)            // deal the next hand
 
-	// Put P0 (two strikes) on the clock facing a bet and let it time out:
-	// third strike. P0 is this hand's big blind, so raise the bet level.
+	// Put P0 (one strike) on the clock facing a bet and let it time out:
+	// second strike removes them. P0 is this hand's big blind, so raise the
+	// bet level to force the fold branch.
 	p0 := -1
 	for i, s := range tb.players {
 		if s.keyHex == keyHexFor(0) {
@@ -322,7 +323,7 @@ func TestTimeoutAutoActionsAndRemoval(t *testing.T) {
 	tb.curBet += 50
 	tb.pending = map[int]bool{p0: true}
 	o = newOut()
-	tb.autoAct("ru", o) // P0 auto-folds with timeouts=3
+	tb.autoAct("ru", o) // P0 auto-folds with timeouts=2 — strikeout
 
 	// End the hand: the flop prompt went to P2 (in turn order after P0's
 	// fold); P2's fold leaves P1 last live, closing the hand and running the
@@ -330,7 +331,7 @@ func TestTimeoutAutoActionsAndRemoval(t *testing.T) {
 	of := act(t, tb, 2, "fold")
 
 	if len(tb.players) != 2 || tb.players[0].name != "P1" {
-		t.Fatalf("P0 not removed after 3 timeouts: %v", tb.players)
+		t.Fatalf("P0 not removed after 2 consecutive timeouts: %v", tb.players)
 	}
 	if !strings.Contains(strings.Join(of.chanTexts(), "\n"), "таймауты") {
 		t.Errorf("missing removal notice: %v", of.chanTexts())

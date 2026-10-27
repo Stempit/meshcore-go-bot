@@ -44,6 +44,11 @@ const (
 
 const logCap = 10 // per-player personal event ring buffer
 
+// strikeOut is the consecutive auto-actions (auto-check or auto-fold, across
+// hands) that remove a player from the table: someone who misses two turns
+// in a row is gone or not playing.
+const strikeOut = 2
+
 // seat is one player, keyed by the lowercase-hex public key (the canonical
 // identity across the channel and DM paths). rawKey is the raw public-key
 // bytes, used only to address DM announcements ("dm:"+rawKey).
@@ -629,7 +634,7 @@ func postHand(t *table, lang string, o *out) {
 	busted := 0
 	for _, s := range old {
 		switch {
-		case s.timeouts >= 3:
+		case s.timeouts >= strikeOut:
 			o.line(lang, "timeout.out", s.name)
 		case s.stack <= 0:
 			busted++

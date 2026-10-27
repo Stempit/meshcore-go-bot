@@ -53,7 +53,7 @@ deal_pause: "♻️ Следующая раздача через %dс — .poker
 lobby_wait: "♠️ Ждём игроков — .poker join (нужно 2+)"
 join_window_close: "🤷 Мало игроков — стол закрыт."
 timeout.check: "⏱ %s: авто-чек"
-timeout.fold: "⌛ %s: авто-фолд (%d/3)"
+timeout.fold: "⌛ %s: авто-фолд (%d/2)"
 timeout.out: "⌛ %s выбывает: таймауты"
 elim: "💸 %s вылетает"
 win_table: "👑 %s забирает всё! Стол закрыт. .poker top"

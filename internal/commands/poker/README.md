@@ -48,9 +48,11 @@ stay hidden). The deck is shuffled with crypto/rand.
 ## Table life
 
 60s join window (deals early at 6 players); 90s turn timeout with auto
-check-else-fold, three consecutive timeouts remove a player; 20s deal-pause
-window between hands (queued joiners seat then); 15-minute idle closes the
-table; last chipholder wins (`games.LogWin`, shown via `.poker top`).
+check-else-fold; **two consecutive auto-actions (check or fold, across hands)
+remove a player** — someone who misses two turns in a row is gone or not
+playing; 20s deal-pause window between hands (queued joiners seat then);
+15-minute idle closes the table; last chipholder wins (`games.LogWin`, shown
+via `.poker top`).
 
 ## Limitations
 
