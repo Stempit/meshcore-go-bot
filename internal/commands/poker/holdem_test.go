@@ -180,14 +180,20 @@ func TestEveryoneFoldsRefundsUncalled(t *testing.T) {
 	if got := tb.players[0].stack; got != 215 {
 		t.Errorf("winner stack = %d, want 215", got)
 	}
-	found := false
+	found, foundCards := false, false
 	for _, m := range o.chanTexts() {
 		if strings.Contains(m, "25") {
 			found = true
 		}
+		if strings.Contains(m, cards.Render(tb.players[0].hole[:])) {
+			foundCards = true // the winner's hole cards ride the win line
+		}
 	}
 	if !found {
 		t.Errorf("no win line mentioning 25: %v", o.chanTexts())
+	}
+	if !foundCards {
+		t.Errorf("win line must show the winner's cards: %v", o.chanTexts())
 	}
 }
 
@@ -219,6 +225,13 @@ func TestShowdownSplitOddChip(t *testing.T) {
 	if !strings.Contains(joined, "Вскрытие") || !strings.Contains(joined, "Делёжка") {
 		t.Errorf("missing showdown/split lines: %v", o.chanTexts())
 	}
+	// Split winners' cards show in the split line; losers' stay hidden.
+	if !strings.Contains(joined, "5♥️ 5♠️") || !strings.Contains(joined, "5♣️ 5♦️") {
+		t.Errorf("split line must show both winners' cards: %v", o.chanTexts())
+	}
+	if strings.Contains(joined, "2♣️ 3♦️") {
+		t.Errorf("loser's cards must stay hidden: %v", o.chanTexts())
+	}
 }
 
 func TestSidePotAward(t *testing.T) {
@@ -231,7 +244,8 @@ func TestSidePotAward(t *testing.T) {
 		2: {card(6, cards.Hearts), card(7, cards.Hearts)},     // straight 3–7
 	}, []int{50, 50, 20}, board)
 
-	endHand(tb, "ru", newOut())
+	o := newOut()
+	endHand(tb, "ru", o)
 
 	// Main pot 60 (3×20): the straight wins. Side pot 60 (2×30): aces beat kings.
 	if got := tb.players[2].stack; got != 240 {
@@ -242,6 +256,11 @@ func TestSidePotAward(t *testing.T) {
 	}
 	if got := tb.players[1].stack; got != 150 {
 		t.Errorf("P1 stack = %d, want 150", got)
+	}
+	// Each win line carries its winner's hole cards.
+	joined := strings.Join(o.chanTexts(), "\n")
+	if !strings.Contains(joined, "6♥️ 7♥️") || !strings.Contains(joined, "A♥️ A♦️") {
+		t.Errorf("win lines must show winners' cards: %v", o.chanTexts())
 	}
 }
 

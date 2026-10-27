@@ -41,8 +41,9 @@ raises per street (an all-in short of a full raise is allowed but does not
 reopen the cap accounting). Heads-up: the button posts the SB and acts first
 preflop. Side pots split by contribution levels (uncalled bets refunded
 first); split pots divide evenly, the odd chip going to the first winner left
-of the button. Showdown names hands only (`П0 — пара A`); hole cards are never
-shown on the channel. The deck is shuffled with crypto/rand.
+of the button. Showdown names every live hand (`P0 — пара A`); the win and
+split lines additionally reveal the **winners'** hole cards (losers' cards
+stay hidden). The deck is shuffled with crypto/rand.
 
 ## Table life
 

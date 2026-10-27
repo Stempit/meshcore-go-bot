@@ -537,7 +537,7 @@ func endHand(t *table, lang string, o *out) {
 		w := liveIdx[0]
 		amount := t.potTotal()
 		t.players[w].stack += amount
-		o.chanRaw(fmt.Sprintf(pick(tr.TList(lang, "win")), t.players[w].name, amount))
+		o.chanRaw(fmt.Sprintf(pick(tr.TList(lang, "win")), t.players[w].name, amount, cards.Render(t.players[w].hole[:])))
 	} else {
 		scores := make(map[int]cards.Score, len(liveIdx))
 		for _, i := range liveIdx {
@@ -577,11 +577,12 @@ func endHand(t *table, lang string, o *out) {
 				t.players[w].stack += gain
 			}
 			if len(winners) == 1 {
-				o.chanRaw(fmt.Sprintf(pick(tr.TList(lang, "win")), t.players[winners[0]].name, pot.Amount))
+				w0 := t.players[winners[0]]
+				o.chanRaw(fmt.Sprintf(pick(tr.TList(lang, "win")), w0.name, pot.Amount, cards.Render(w0.hole[:])))
 			} else {
 				names := make([]string, 0, len(winners))
 				for _, w := range winners {
-					names = append(names, t.players[w].name)
+					names = append(names, t.players[w].name+" "+cards.Render(t.players[w].hole[:]))
 				}
 				o.line(lang, "split", strings.Join(names, ", "), share)
 			}
