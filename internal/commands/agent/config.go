@@ -48,9 +48,9 @@ func (plugin) Configure(s config.Sectioner) error {
 }
 
 // Enabled honors the Agent.enabled flag: false hides .agent and the @[BotName]
-// mention matcher from routing and help (the example config ships enabled:
-// false). When enabled but unconfigured, the handler still replies with the
-// friendly not_configured message instead of vanishing.
+// mention matcher from routing and help entirely (the example config ships
+// enabled: false). The handler's not_configured reply is a defensive fallback
+// only — Dispatch never routes to a disabled plugin.
 func (plugin) Enabled() bool { return conf.Enabled }
 
 func init() { registry.Register(plugin{}) }

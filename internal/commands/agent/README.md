@@ -16,13 +16,13 @@ Responses are auto-shrunk at the send site (the `agent` split override).
 from the prompt before handling.
 
 Sessions: channel messages share one agent session per channel; DMs get one per
-sender. Not configured → `agent not configured`; connection error →
-`agent connection error`; all network slots busy → the `busy` message.
+sender. Connection error → `agent connection error`; all network slots busy →
+the `busy` message.
 
 ## Config
 
-YAML key `Agent`. The `.agent` trigger is always routed (so it can reply
-"not configured") unless `enabled: false` hides it entirely.
+YAML key `Agent`. With `enabled: false` the `.agent` trigger and the
+`@[BotName]` mention are hidden from routing and help entirely.
 
 ```yaml
 Agent:

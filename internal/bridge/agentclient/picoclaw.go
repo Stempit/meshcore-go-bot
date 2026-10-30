@@ -21,8 +21,8 @@ type picoClaw struct {
 }
 
 func newPicoClaw(cfg Config) (*picoClaw, error) {
-	if cfg.URL == "" {
-		return nil, errors.New(`agentclient: picoclaw adapter needs url (e.g. "ws://host:18790/pico/ws")`)
+	if err := checkScheme(cfg.URL, "ws", "wss"); err != nil {
+		return nil, fmt.Errorf(`agentclient: picoclaw adapter %w (e.g. "ws://host:18790/pico/ws")`, err)
 	}
 	return &picoClaw{url: cfg.URL, token: cfg.Token}, nil
 }

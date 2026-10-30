@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"unicode/utf8"
 )
@@ -35,12 +36,31 @@ type openAI struct {
 
 func newOpenAI(cfg Config) (*openAI, error) {
 	base := strings.TrimSuffix(cfg.URL, "/")
-	if base == "" {
-		return nil, errors.New(`agentclient: openai adapter needs url (e.g. "http://127.0.0.1:8900")`)
+	if err := checkScheme(base, "http", "https"); err != nil {
+		return nil, fmt.Errorf(`agentclient: openai adapter %w (e.g. "http://127.0.0.1:8900")`, err)
 	}
 	// No client Timeout: the per-call deadline comes from the caller's ctx
 	// (agent answers can legitimately take minutes).
 	return &openAI{base: base, token: cfg.Token, model: cfg.Model, http: &http.Client{}}, nil
+}
+
+// checkScheme validates a configured URL's scheme so a mistyped url (ws:// in
+// the openai adapter, a schemeless host:port, …) fails at startup instead of
+// surfacing as a confusing connection error at first use.
+func checkScheme(raw string, schemes ...string) error {
+	if raw == "" {
+		return errors.New("needs url")
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("invalid url: %w", err)
+	}
+	for _, s := range schemes {
+		if u.Scheme == s {
+			return nil
+		}
+	}
+	return fmt.Errorf("needs a %s url, got scheme %q", strings.Join(schemes, "/"), u.Scheme)
 }
 
 type chatMessage struct {
@@ -124,14 +144,14 @@ func errorMessage(body []byte) string {
 }
 
 // truncate cuts s to at most max bytes without splitting a rune (backs up
-// from max to a rune boundary; s[0] is always a boundary), appending an
-// ellipsis when something was dropped.
+// from max to a rune boundary; s may be invalid UTF-8, hence the cut > 0
+// guard), appending an ellipsis when something was dropped.
 func truncate(s string, max int) string {
 	if len(s) <= max {
 		return s
 	}
 	cut := max
-	for !utf8.RuneStart(s[cut]) {
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
 		cut--
 	}
 	return s[:cut] + "…"

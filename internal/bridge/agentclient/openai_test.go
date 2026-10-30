@@ -135,27 +135,56 @@ func TestOpenAINeedsURL(t *testing.T) {
 	}
 }
 
+// The adapter is configured once at startup: a mistyped scheme must fail
+// there, not surface as a connection error at first use.
+func TestOpenAISchemeValidation(t *testing.T) {
+	for _, url := range []string{"ws://host:8900", "127.0.0.1:8900", "localhost:8900"} {
+		if _, err := New(Config{Type: "openai", URL: url}); err == nil {
+			t.Errorf("New(%q) must reject a non-http scheme", url)
+		}
+	}
+}
+
 // truncate must cut on rune boundaries — error strings leak into mesh
-// messages, and a split rune would produce invalid UTF-8.
+// messages, and a split rune would produce invalid UTF-8. The server is
+// untrusted: the raw-body fallback can hand truncate invalid UTF-8, which
+// must degrade to a bounded cut, never panic.
 func TestTruncate(t *testing.T) {
 	cases := []struct {
-		in   string
-		max  int
-		want string
+		in       string
+		max      int
+		want     string
+		wantUTF8 bool // only meaningful when in itself is valid UTF-8
 	}{
-		{"short", 10, "short"},
-		{"ab", 2, "ab"},
-		{"abc", 2, "ab…"},
-		{"hello世界", 5, "hello…"},      // max lands on a rune start
-		{"hello世界", 6, "hello…"},      // max lands mid-rune: back up
-		{"привет мир", 12, "привет…"}, // multi-byte: cut lands on the space
+		{"short", 10, "short", true},
+		{"ab", 2, "ab", true},
+		{"abc", 2, "ab…", true},
+		{"hello世界", 5, "hello…", true},                      // max lands on a rune start
+		{"hello世界", 6, "hello…", true},                      // max lands mid-rune: back up
+		{"привет мир", 12, "привет…", true},                 // multi-byte: cut lands on the space
+		{"\x80\x80\x80\x80\x80\x80\x80\x80", 3, "…", false}, // leading continuation bytes: back up to 0, don't panic
 	}
 	for _, tc := range cases {
-		if got := truncate(tc.in, tc.max); got != tc.want {
+		got := truncate(tc.in, tc.max)
+		if got != tc.want {
 			t.Errorf("truncate(%q, %d) = %q, want %q", tc.in, tc.max, got, tc.want)
 		}
-		if !utf8.ValidString(truncate("привет мир, как дела сегодня", 10)) {
-			t.Error("truncated string must stay valid UTF-8")
+		if tc.wantUTF8 && !utf8.ValidString(got) {
+			t.Errorf("truncate(%q, %d) = %q is not valid UTF-8", tc.in, tc.max, got)
 		}
+	}
+}
+
+// A broken proxy can answer with arbitrary binary. The error path must
+// produce an error carrying the status, never panic (the truncate back-up
+// once ran past the start of a non-UTF-8 body).
+func TestOpenAIAskBinaryErrorBody(t *testing.T) {
+	srv := serveChat(t, http.StatusInternalServerError, "\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80", nil, nil)
+	defer srv.Close()
+
+	c, _ := New(Config{Type: "openai", URL: srv.URL})
+	_, err := c.Ask(context.Background(), "s", "hi")
+	if err == nil || !strings.Contains(err.Error(), "HTTP 500") {
+		t.Errorf("error = %v, want it to carry HTTP 500", err)
 	}
 }

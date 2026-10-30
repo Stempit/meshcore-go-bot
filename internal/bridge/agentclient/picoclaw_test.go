@@ -147,10 +147,11 @@ func TestPicoClawAskInvisibleExtendsWindow(t *testing.T) {
 	srv := wsServer(t, func(_ *http.Request, conn *websocket.Conn) {
 		var m picoMessage
 		_ = conn.ReadJSON(&m)
-		_ = conn.WriteJSON(picoMessage{Type: "message.create", Payload: map[string]any{"kind": "tool_calls", "content": "working"}})
 		_ = conn.WriteJSON(picoMessage{Type: "typing.stop"})
-		// Arrives after the 500 ms drain window would have fired, but the
-		// invisible message must have extended the deadline to 300 s.
+		// The invisible message arrives AFTER typing.stop — that is the only
+		// path where afterInvisible fires. It must extend the deadline past
+		// the 500 ms drain window so the late visible message is collected.
+		_ = conn.WriteJSON(picoMessage{Type: "message.create", Payload: map[string]any{"kind": "tool_calls", "content": "working"}})
 		time.Sleep(1200 * time.Millisecond)
 		_ = conn.WriteJSON(picoMessage{Type: "message.create", Payload: map[string]any{"message_id": "late", "content": "done"}})
 		time.Sleep(600 * time.Millisecond)
@@ -170,6 +171,16 @@ func TestPicoClawAskInvisibleExtendsWindow(t *testing.T) {
 func TestPicoClawNeedsURL(t *testing.T) {
 	if _, err := New(Config{Type: "picoclaw"}); err == nil {
 		t.Fatal("New without url must fail")
+	}
+}
+
+// The adapter is configured once at startup: a mistyped scheme must fail
+// there, not surface as a connection error at first use.
+func TestPicoClawSchemeValidation(t *testing.T) {
+	for _, url := range []string{"http://host:18790/pico/ws", "host:18790/pico/ws"} {
+		if _, err := New(Config{Type: "picoclaw", URL: url}); err == nil {
+			t.Errorf("New(%q) must reject a non-ws scheme", url)
+		}
 	}
 }
 
