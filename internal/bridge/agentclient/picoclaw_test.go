@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +24,16 @@ func wsServer(t *testing.T, handler func(r *http.Request, conn *websocket.Conn))
 		defer conn.Close()
 		handler(r, conn)
 	}))
+}
+
+// wsClient builds a picoclaw Client pointed at the test server.
+func wsClient(t *testing.T, srv *httptest.Server, token string) Client {
+	t.Helper()
+	c, err := New(Config{Type: "picoclaw", URL: "ws://" + strings.TrimPrefix(srv.URL, "http://"), Token: token})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return c
 }
 
 func TestPicoClawAsk(t *testing.T) {
@@ -50,10 +61,7 @@ func TestPicoClawAsk(t *testing.T) {
 	})
 	defer srv.Close()
 
-	c, err := New(Config{Type: "picoclaw", URL: "ws://" + strings.TrimPrefix(srv.URL, "http://"), Token: "tok"})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	c := wsClient(t, srv, "tok")
 	parts, err := c.Ask(context.Background(), "mesh-ch-gen", "hi")
 	if err != nil {
 		t.Fatalf("Ask: %v", err)
@@ -90,19 +98,13 @@ func TestPicoClawAskMultiMessage(t *testing.T) {
 	})
 	defer srv.Close()
 
-	c, _ := New(Config{Type: "picoclaw", URL: "ws://" + strings.TrimPrefix(srv.URL, "http://")})
+	c := wsClient(t, srv, "")
 	parts, err := c.Ask(context.Background(), "s", "hi")
 	if err != nil {
 		t.Fatalf("Ask: %v", err)
 	}
-	want := []string{"one!", "two"}
-	if len(parts) != len(want) {
+	if want := []string{"one!", "two"}; !slices.Equal(parts, want) {
 		t.Fatalf("parts = %q, want %q", parts, want)
-	}
-	for i := range want {
-		if parts[i] != want[i] {
-			t.Fatalf("parts = %q, want %q", parts, want)
-		}
 	}
 }
 
@@ -115,7 +117,7 @@ func TestPicoClawAskErrorFrame(t *testing.T) {
 	})
 	defer srv.Close()
 
-	c, _ := New(Config{Type: "picoclaw", URL: "ws://" + strings.TrimPrefix(srv.URL, "http://")})
+	c := wsClient(t, srv, "")
 	_, err := c.Ask(context.Background(), "s", "hi")
 	if err == nil || !strings.Contains(err.Error(), "boom") || !strings.Contains(err.Error(), "bad request") {
 		t.Errorf("error = %v, want error boom: bad request", err)
@@ -134,7 +136,7 @@ func TestPicoClawAskNoResponse(t *testing.T) {
 	})
 	defer srv.Close()
 
-	c, _ := New(Config{Type: "picoclaw", URL: "ws://" + strings.TrimPrefix(srv.URL, "http://")})
+	c := wsClient(t, srv, "")
 	_, err := c.Ask(context.Background(), "s", "hi")
 	if err == nil || !strings.Contains(err.Error(), "no response received") {
 		t.Errorf("error = %v, want no response received", err)
@@ -155,7 +157,7 @@ func TestPicoClawAskInvisibleExtendsWindow(t *testing.T) {
 	})
 	defer srv.Close()
 
-	c, _ := New(Config{Type: "picoclaw", URL: "ws://" + strings.TrimPrefix(srv.URL, "http://")})
+	c := wsClient(t, srv, "")
 	parts, err := c.Ask(context.Background(), "s", "hi")
 	if err != nil {
 		t.Fatalf("Ask: %v", err)

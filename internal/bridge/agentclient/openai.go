@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 )
 
 // maxResponseBytes caps how much of the agent's response body is read. Agent
@@ -122,19 +123,16 @@ func errorMessage(body []byte) string {
 	return strings.TrimSpace(string(body))
 }
 
-// truncate cuts s to at most max bytes without splitting a rune (the range
-// loop yields rune start offsets), appending an ellipsis when something was
-// dropped.
+// truncate cuts s to at most max bytes without splitting a rune (backs up
+// from max to a rune boundary; s[0] is always a boundary), appending an
+// ellipsis when something was dropped.
 func truncate(s string, max int) string {
 	if len(s) <= max {
 		return s
 	}
-	cut := 0
-	for i := range s {
-		if i > max {
-			break
-		}
-		cut = i
+	cut := max
+	for !utf8.RuneStart(s[cut]) {
+		cut--
 	}
 	return s[:cut] + "…"
 }

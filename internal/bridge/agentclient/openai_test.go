@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // serveChat spins up an OpenAI-compatible test server that captures the
@@ -131,5 +132,30 @@ func TestOpenAIAskEmptyChoices(t *testing.T) {
 func TestOpenAINeedsURL(t *testing.T) {
 	if _, err := New(Config{Type: "openai"}); err == nil {
 		t.Fatal("New without url must fail")
+	}
+}
+
+// truncate must cut on rune boundaries — error strings leak into mesh
+// messages, and a split rune would produce invalid UTF-8.
+func TestTruncate(t *testing.T) {
+	cases := []struct {
+		in   string
+		max  int
+		want string
+	}{
+		{"short", 10, "short"},
+		{"ab", 2, "ab"},
+		{"abc", 2, "ab…"},
+		{"hello世界", 5, "hello…"},      // max lands on a rune start
+		{"hello世界", 6, "hello…"},      // max lands mid-rune: back up
+		{"привет мир", 12, "привет…"}, // multi-byte: cut lands on the space
+	}
+	for _, tc := range cases {
+		if got := truncate(tc.in, tc.max); got != tc.want {
+			t.Errorf("truncate(%q, %d) = %q, want %q", tc.in, tc.max, got, tc.want)
+		}
+		if !utf8.ValidString(truncate("привет мир, как дела сегодня", 10)) {
+			t.Error("truncated string must stay valid UTF-8")
+		}
 	}
 }

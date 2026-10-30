@@ -179,7 +179,7 @@ func (c *picoClaw) Ask(ctx context.Context, sessionID, text string) ([]string, e
 
 	msgs := buildMessages(msgOrder, msgContent)
 	if len(msgs) == 0 {
-		return nil, fmt.Errorf("no response received")
+		return nil, errors.New("no response received")
 	}
 	return msgs, nil
 }

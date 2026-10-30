@@ -9,15 +9,14 @@ import (
 
 var log = logging.For("commands")
 
-// cfg is the agent plugin's config section (yaml key "Agent").
+// cfg is the agent plugin's config section (yaml key "Agent"): the plugin's
+// own flags plus the inline adapter config (type/url/token/model, documented
+// on agentclient.Config).
 type cfg struct {
-	Enabled    bool   `yaml:"enabled"`
-	Type       string `yaml:"type"`        // openai (default) | picoclaw
-	URL        string `yaml:"url"`         // openai: base URL; picoclaw: ws://host:18790/pico/ws
-	Token      string `yaml:"token"`       // bearer token; empty = none
-	Model      string `yaml:"model"`       // openai only; empty = server default
-	TimeoutSec int    `yaml:"timeout_sec"` // default 180
-	BotName    string `yaml:"bot_name"`    // mesh display name of the bot, e.g. "Yorick 💀"
+	Enabled            bool   `yaml:"enabled"`
+	TimeoutSec         int    `yaml:"timeout_sec"` // default 180
+	BotName            string `yaml:"bot_name"`    // mesh display name of the bot, e.g. "Yorick 💀"
+	agentclient.Config `yaml:",inline"`
 }
 
 var conf cfg
@@ -40,12 +39,7 @@ func (plugin) Configure(s config.Sectioner) error {
 	}
 	// Build the client at startup so an unknown type or missing url fails
 	// loudly via registry.ConfigureAll instead of at first use.
-	cl, err := agentclient.New(agentclient.Config{
-		Type:  conf.Type,
-		URL:   conf.URL,
-		Token: conf.Token,
-		Model: conf.Model,
-	})
+	cl, err := agentclient.New(conf.Config)
 	if err != nil {
 		return err
 	}

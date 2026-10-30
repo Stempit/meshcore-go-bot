@@ -43,26 +43,27 @@ func (plugin) Meta() registry.Meta {
 // LocalizedHelp returns the per-language long help for ".agent help".
 func (plugin) LocalizedHelp(lang string) string { return tr.T(lang, "help.long") }
 
+// mentionPrefix returns "@[BotName]" when mention routing is active, else "".
+func mentionPrefix() string {
+	if !conf.Enabled || conf.BotName == "" {
+		return ""
+	}
+	return "@[" + conf.BotName + "]"
+}
+
 // Matches handles both the @[BotName] mention (when configured) and the .agent
 // trigger, reproducing the command's two entry points.
 func (plugin) Matches(c registry.Ctx) bool {
-	if conf.Enabled && conf.BotName != "" {
-		mp := strings.ToLower("@[" + conf.BotName + "]")
-		if strings.HasPrefix(c.Lower, mp) {
-			return true
-		}
+	if mp := mentionPrefix(); mp != "" && strings.HasPrefix(c.Lower, strings.ToLower(mp)) {
+		return true
 	}
 	return c.Lower == ".agent" || strings.HasPrefix(c.Lower, ".agent ")
 }
 
 func (plugin) Handle(c registry.Ctx) ([]string, error) {
-	// @[BotName] mention: rewrite to an .agent prompt.
-	if conf.Enabled && conf.BotName != "" {
-		mentionPrefix := "@[" + conf.BotName + "]"
-		if strings.HasPrefix(c.Lower, strings.ToLower(mentionPrefix)) {
-			prompt := mentionPrompt(c.Trimmed, mentionPrefix)
-			return processAgent(c.Lang, prompt, c.SenderKey, c.Channel)
-		}
+	if mp := mentionPrefix(); mp != "" && strings.HasPrefix(c.Lower, strings.ToLower(mp)) {
+		// @[BotName] mention: rewrite to an .agent prompt.
+		return processAgent(c.Lang, mentionPrompt(c.Trimmed, mp), c.SenderKey, c.Channel)
 	}
 	// agent is a Matcher interceptor, so Dispatch leaves Rest empty; cut the
 	// trigger with the case-insensitive Arg helper instead.
