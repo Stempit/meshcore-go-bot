@@ -96,9 +96,10 @@ vKAIiFDg0A4HnVWX+mYAMMLo1VKQaFfYwcfMFjPrPB37y0PBjBsHqWQ=
 //     forced teardown) and read lock-free everywhere else.
 //   - client and the reconnect bookkeeping (baseDelay/reconnectDelay/lastReconnect)
 //     are guarded by MQTTBridge.clientMu.
-//   - authToken/tokenExpires (analyzer only) are touched only by the single
-//     connectionManager goroutine (connect → getAuthToken → renewAuthToken), so
-//     they need no lock.
+	//   - authToken/tokenExpires (analyzer only) are confined to the per-broker
+	//     connect path: each connection cycle runs one goroutine per broker, and
+	//     the cycle joins before the next one starts, so only that goroutine
+	//     ever touches them and no lock is needed.
 type broker struct {
 	name      string
 	connected atomic.Bool
@@ -109,8 +110,8 @@ type broker struct {
 	reconnectDelay time.Duration // current backoff window; doubles up to maxReconnectDelay
 	lastReconnect  time.Time
 
-	// Analyzer JWT (unused for custom). Touched only by the connectionManager
-	// goroutine, so no lock is needed.
+	// Analyzer JWT (unused for custom). Confined to the per-broker connect
+	// goroutine (one per cycle, cycles never overlap), so no lock is needed.
 	authToken    string
 	tokenExpires time.Time
 }
@@ -243,15 +244,6 @@ func (b *MQTTBridge) SetCallbacks(callbacks MQTTCallbacks) {
 
 // Start begins the MQTT connection process
 func (b *MQTTBridge) Start() error {
-	b.mu.Lock()
-	if b.done == nil {
-		b.done = make(chan struct{})
-	}
-	if b.notifyCh == nil {
-		b.notifyCh = make(chan struct{}, 1)
-	}
-	b.mu.Unlock()
-
 	b.wg.Add(2)
 	go b.connectionManager()
 	go b.publisher()
@@ -298,18 +290,37 @@ func (b *MQTTBridge) connectionManager() {
 		default:
 		}
 
-		// Connect to custom broker if configured
+		// Connect to every configured endpoint in parallel: each connect blocks
+		// up to defaultConnectTimeout (30s), so running them sequentially let
+		// one dead endpoint stall the others and delay status publishing by up
+		// to ~90s per cycle. The per-broker state (backoff, JWT) each goroutine
+		// touches is lock-guarded or broker-confined; the cycle joins before
+		// status publishing, so exactly one connect goroutine per broker is in
+		// flight at any time.
+		var connectWG sync.WaitGroup
 		if b.isCustomBrokerConfigured() {
-			b.connectToCustomBroker()
+			connectWG.Add(1)
+			go func() {
+				defer connectWG.Done()
+				b.connectToCustomBroker()
+			}()
 		}
 
 		// Connect to Let's Mesh Analyzer servers
 		if b.config.OwnerEmail != "" {
 			if b.config.AnalyzerUS {
-				b.connectToAnalyzer("us", analyzerUSURL)
+				connectWG.Add(1)
+				go func() {
+					defer connectWG.Done()
+					b.connectToAnalyzer("us", analyzerUSURL)
+				}()
 			}
 			if b.config.AnalyzerEU {
-				b.connectToAnalyzer("eu", analyzerEUURL)
+				connectWG.Add(1)
+				go func() {
+					defer connectWG.Done()
+					b.connectToAnalyzer("eu", analyzerEUURL)
+				}()
 			}
 		} else {
 			// Log once per connection cycle to avoid spam
@@ -317,6 +328,7 @@ func (b *MQTTBridge) connectionManager() {
 				b.logger.Debug("Skipping Let's Mesh Analyzer: OwnerEmail not configured")
 			}
 		}
+		connectWG.Wait()
 
 		// Packet publishing is owned by the publisher goroutine; the
 		// connection manager only handles connect/reconnect and status.
@@ -518,10 +530,10 @@ func (b *MQTTBridge) createMQTTClient(brokerKey, clientID, brokerURL, username, 
 
 	// Connection handlers
 	opts.OnConnect = func(c mqtt.Client) {
-		b.handleConnect(brokerKey)
+		b.handleConnect(brokerKey, c)
 	}
 	opts.OnConnectionLost = func(c mqtt.Client, err error) {
-		b.handleConnectionLost(brokerKey, err)
+		b.handleConnectionLost(brokerKey, c, err)
 	}
 
 	client := mqtt.NewClient(opts)
@@ -534,8 +546,11 @@ func (b *MQTTBridge) createMQTTClient(brokerKey, clientID, brokerURL, username, 
 	return client, nil
 }
 
-// handleConnect handles successful MQTT connection
-func (b *MQTTBridge) handleConnect(brokerID string) {
+// handleConnect handles successful MQTT connection. c is the client the event
+// belongs to: paho may re-establish a stale client concurrently with the
+// connectionManager creating its replacement, and a stale event must not touch
+// the current client's state.
+func (b *MQTTBridge) handleConnect(brokerID string, c mqtt.Client) {
 	b.logger.Debug("MQTT connected in handle", "broker", brokerID)
 
 	br := b.brokers[brokerID]
@@ -543,9 +558,14 @@ func (b *MQTTBridge) handleConnect(brokerID string) {
 		return
 	}
 
-	br.connected.Store(true)
 	b.clientMu.Lock()
+	if c != br.client {
+		// Stale event from a replaced client — ignore it entirely.
+		b.clientMu.Unlock()
+		return
+	}
 	// Successful connect: refloor the backoff to this endpoint's base delay.
+	br.connected.Store(true)
 	br.reconnectDelay = br.baseDelay
 	b.clientMu.Unlock()
 
@@ -554,8 +574,9 @@ func (b *MQTTBridge) handleConnect(brokerID string) {
 	}
 }
 
-// handleConnectionLost handles connection loss
-func (b *MQTTBridge) handleConnectionLost(brokerID string, err error) {
+// handleConnectionLost handles connection loss. See handleConnect for the
+// stale-client guard rationale.
+func (b *MQTTBridge) handleConnectionLost(brokerID string, c mqtt.Client, err error) {
 	b.logger.Warn("MQTT connection lost", "broker", brokerID, "error", err)
 
 	br := b.brokers[brokerID]
@@ -563,7 +584,15 @@ func (b *MQTTBridge) handleConnectionLost(brokerID string, err error) {
 		return
 	}
 
-	br.connected.Store(false)
+	b.clientMu.Lock()
+	stale := c != br.client
+	if !stale {
+		br.connected.Store(false)
+	}
+	b.clientMu.Unlock()
+	if stale {
+		return
+	}
 
 	if b.onDisconnected != nil {
 		b.onDisconnected(brokerID)
@@ -677,8 +706,12 @@ func (b *MQTTBridge) disconnectAll() {
 // Packet Publishing
 // ============================================================================
 
-// QueuePacket adds a packet to the queue for publishing.
+// QueuePacket adds a packet to the queue for publishing. The gate lives here
+// (not at publish time) because the driver calls the publisher unconditionally.
 func (b *MQTTBridge) QueuePacket(rawData []byte, isTX bool, snr, rssi float64) {
+	if !b.config.PacketsEnabled {
+		return
+	}
 	b.enqueue(QueuedPacket{
 		RawData:   rawData,
 		Timestamp: time.Now(),
@@ -694,6 +727,9 @@ func (b *MQTTBridge) QueuePacket(rawData []byte, isTX bool, snr, rssi float64) {
 // name, message text) are embedded in the published JSON so the web UI can
 // display them without needing to parse or decrypt the raw bytes.
 func (b *MQTTBridge) QueueChannelPacket(rawData []byte, isTX bool, snr, rssi float64, channelIndex int, channelName, senderName, text, channelKeyHex string) {
+	if !b.config.PacketsEnabled {
+		return
+	}
 	b.enqueue(QueuedPacket{
 		RawData:          rawData,
 		Timestamp:        time.Now(),
@@ -912,7 +948,11 @@ func (b *MQTTBridge) publishPacket(packet *QueuedPacket) {
 		mqttPacket.ChannelName = packet.ChannelName
 		mqttPacket.SenderName = packet.SenderName
 		mqttPacket.Text = packet.Text
-		mqttPacket.ChannelKey = packet.ChannelKey
+		// The PSK decrypts the whole channel — publish it only when the
+		// operator opted in (publish_channel_keys, default off).
+		if b.config.PublishChannelKeys {
+			mqttPacket.ChannelKey = packet.ChannelKey
+		}
 	}
 
 	// Build topics

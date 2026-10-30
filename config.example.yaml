@@ -30,9 +30,14 @@ MQTT:
   # common mqtt config
   iata: KVX               # region by iata
   status_enabled: true    # send status updates
+  packets_enabled: true   # publish received packets (packets topic)
   tx_enabled: true        # mirror own outgoing messages to MQTT (as emulated rx)
   raw_enabled: false      # also publish minimal raw packets to analyzer servers
   status_interval: 50000  # ms
+  publish_channel_keys: false  # DANGEROUS: adds channel_key (the channel PSK,
+                               # which decrypts all its traffic) to published
+                               # packets. Only enable for channels you accept
+                               # making public to the analyzer operators.
 
   # old mqtt server (tcp)
   server: meshcoretel.ru
