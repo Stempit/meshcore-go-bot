@@ -3,6 +3,7 @@ package llm
 
 import (
 	"embed"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/stempit/meshcore-go-bot/internal/config"
 	"github.com/stempit/meshcore-go-bot/internal/logging"
 	"github.com/stempit/meshcore-go-bot/internal/support/i18n"
+	"github.com/stempit/meshcore-go-bot/internal/support/netgate"
 	"github.com/stempit/meshcore-go-bot/internal/support/registry"
 )
 
@@ -67,9 +69,16 @@ func (plugin) Meta() registry.Meta {
 // LocalizedHelp returns the per-language long help for ".llm help".
 func (plugin) LocalizedHelp(lang string) string { return tr.T(lang, "help.long") }
 
+// ErrBusy is returned when too many LLM queries are already in flight; Handle
+// turns it into the localized busy reply instead of the generic error.
+var ErrBusy = errors.New("too many LLM queries in flight")
+
 func (plugin) Handle(c registry.Ctx) ([]string, error) {
 	reply, err := ProcessLLMMessage(c.Rest)
 	if err != nil {
+		if errors.Is(err, ErrBusy) {
+			return []string{tr.T(c.Lang, "busy")}, nil
+		}
 		return []string{tr.T(c.Lang, "error")}, nil
 	}
 	return []string{reply}, nil
@@ -94,6 +103,14 @@ func ProcessLLMMessage(query string) (response string, err error) {
 	if d := tr.T(lang, "reply_directive"); d != "" && d != "reply_directive" {
 		systemPrompt = strings.TrimSpace(systemPrompt + "\n" + d)
 	}
+
+	// Bound pool parking: 8 distinct senders would otherwise pin the whole
+	// dispatcher worker pool on slow AI replies. Reply busy when full.
+	release, ok := netgate.TryAcquire()
+	if !ok {
+		return "", ErrBusy
+	}
+	defer release()
 
 	switch cfg.LLM.Type {
 	case "openrouter":

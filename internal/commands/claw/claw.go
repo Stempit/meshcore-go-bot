@@ -13,6 +13,7 @@ import (
 
 	"github.com/stempit/meshcore-go-bot/internal/bridge/picoclaw"
 	"github.com/stempit/meshcore-go-bot/internal/support/i18n"
+	"github.com/stempit/meshcore-go-bot/internal/support/netgate"
 	"github.com/stempit/meshcore-go-bot/internal/support/registry"
 )
 
@@ -89,6 +90,14 @@ func processClaw(lang, prompt, senderKey, channelName string) ([]string, error) 
 	if !conf.Enabled {
 		return []string{tr.T(lang, "not_configured")}, nil
 	}
+
+	// Bound pool parking: 8 distinct senders × 180s timeouts would otherwise
+	// pin the whole dispatcher worker pool. Reply busy when full.
+	release, ok := netgate.TryAcquire()
+	if !ok {
+		return []string{tr.T(lang, "busy")}, nil
+	}
+	defer release()
 
 	timeoutSec := conf.TimeoutSec
 	if timeoutSec <= 0 {

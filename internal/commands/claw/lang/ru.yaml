@@ -5,3 +5,4 @@ help.long: |-
 usage: "формат: .claw <вопрос>"
 not_configured: "picoclaw не настроен"
 connection_error: "ошибка соединения с picoclaw"
+busy: "picoclaw занят, попробуй через минуту."
