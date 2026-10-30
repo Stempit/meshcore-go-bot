@@ -23,8 +23,9 @@ func (plugin) Configure(s config.Sectioner) error {
 	return s.Section("Weather", &conf)
 }
 
-// Enabled always reports true: like the original switch, .w is routed
-// regardless of the Weather.enabled flag (the flag is reserved/unused).
-func (plugin) Enabled() bool { return true }
+// Enabled honors the Weather.enabled flag like the other opt-in plugins
+// (words, vote, poker): false hides .w from routing and help. The example
+// config ships enabled: true, which preserves the original always-on switch.
+func (plugin) Enabled() bool { return conf.Enabled }
 
 func init() { registry.Register(plugin{}) }

@@ -132,7 +132,7 @@ Trace:
   lon: 0
 
 Claw:
-  enabled: false
+  enabled: false                       # false hides .claw and @[bot_name] mentions from routing and help
   url: "ws://localhost:18790/pico/ws"  # picoclaw gateway directly (NOT port 18800 dashboard)
   token: "your-pico-token"            # from picoclaw dashboard → Pico channel token
   timeout_sec: 180

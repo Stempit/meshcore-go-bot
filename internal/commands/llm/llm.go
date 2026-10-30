@@ -3,6 +3,7 @@ package llm
 
 import (
 	"embed"
+	"fmt"
 	"strings"
 
 	provider "github.com/stempit/meshcore-go-bot/internal/bridge/llm"
@@ -18,6 +19,35 @@ var langFS embed.FS
 var tr = i18n.MustLoad(langFS)
 
 var log = logging.For("commands")
+
+// Configurable makes .llm honor the LLM.enabled flag: false hides it from
+// routing and help (the example config ships enabled: true). The LLM section
+// itself is decoded into the global config (internal/config/model.go); it is
+// decoded again here so a malformed section fails loud at startup like every
+// other plugin's.
+func (plugin) ConfigKey() string { return "LLM" }
+
+func (plugin) Configure(s config.Sectioner) error {
+	var c struct {
+		Enabled bool   `yaml:"enabled"`
+		Type    string `yaml:"type"`
+	}
+	if err := s.Section("LLM", &c); err != nil {
+		return err
+	}
+	if c.Type != "" && c.Type != "openrouter" && c.Type != "ollama" {
+		return fmt.Errorf("LLM.type must be openrouter or ollama, got %q", c.Type)
+	}
+	return nil
+}
+
+// Enabled reports whether the LLM section opts .llm in.
+func (plugin) Enabled() bool {
+	if c := config.Get(); c != nil {
+		return c.LLM.Enabled
+	}
+	return false
+}
 
 func init() { registry.Register(plugin{}) }
 
@@ -70,6 +100,10 @@ func ProcessLLMMessage(query string) (response string, err error) {
 		response, err = provider.GetRemoteLLMResponse(cfg.LLM.Model, systemPrompt, cfg.LLM.SystemTemperature, text)
 	case "ollama":
 		response, err = provider.GetLocalLLMResponse(cfg.LLM.Model, systemPrompt, cfg.LLM.SystemTemperature, text)
+	default:
+		// Unset or mistyped provider: fail loudly instead of silently
+		// returning an empty string the user never sees.
+		return "", fmt.Errorf("LLM.type is not configured (set openrouter or ollama)")
 	}
 
 	if err != nil {
