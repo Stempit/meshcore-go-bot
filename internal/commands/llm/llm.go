@@ -3,12 +3,15 @@ package llm
 
 import (
 	"embed"
+	"errors"
+	"fmt"
 	"strings"
 
 	provider "github.com/stempit/meshcore-go-bot/internal/bridge/llm"
 	"github.com/stempit/meshcore-go-bot/internal/config"
 	"github.com/stempit/meshcore-go-bot/internal/logging"
 	"github.com/stempit/meshcore-go-bot/internal/support/i18n"
+	"github.com/stempit/meshcore-go-bot/internal/support/netgate"
 	"github.com/stempit/meshcore-go-bot/internal/support/registry"
 )
 
@@ -18,6 +21,35 @@ var langFS embed.FS
 var tr = i18n.MustLoad(langFS)
 
 var log = logging.For("commands")
+
+// Configurable makes .llm honor the LLM.enabled flag: false hides it from
+// routing and help (the example config ships enabled: true). The LLM section
+// itself is decoded into the global config (internal/config/model.go); it is
+// decoded again here so a malformed section fails loud at startup like every
+// other plugin's.
+func (plugin) ConfigKey() string { return "LLM" }
+
+func (plugin) Configure(s config.Sectioner) error {
+	var c struct {
+		Enabled bool   `yaml:"enabled"`
+		Type    string `yaml:"type"`
+	}
+	if err := s.Section("LLM", &c); err != nil {
+		return err
+	}
+	if c.Type != "" && c.Type != "openrouter" && c.Type != "ollama" {
+		return fmt.Errorf("LLM.type must be openrouter or ollama, got %q", c.Type)
+	}
+	return nil
+}
+
+// Enabled reports whether the LLM section opts .llm in.
+func (plugin) Enabled() bool {
+	if c := config.Get(); c != nil {
+		return c.LLM.Enabled
+	}
+	return false
+}
 
 func init() { registry.Register(plugin{}) }
 
@@ -37,21 +69,29 @@ func (plugin) Meta() registry.Meta {
 // LocalizedHelp returns the per-language long help for ".llm help".
 func (plugin) LocalizedHelp(lang string) string { return tr.T(lang, "help.long") }
 
+// ErrBusy is returned when too many LLM queries are already in flight; Handle
+// turns it into the localized busy reply instead of the generic error.
+var ErrBusy = errors.New("too many LLM queries in flight")
+
 func (plugin) Handle(c registry.Ctx) ([]string, error) {
-	reply, err := ProcessLLMMessage(c.Text)
+	reply, err := ProcessLLMMessage(c.Rest)
 	if err != nil {
+		if errors.Is(err, ErrBusy) {
+			return []string{tr.T(c.Lang, "busy")}, nil
+		}
 		return []string{tr.T(c.Lang, "error")}, nil
 	}
 	return []string{reply}, nil
 }
 
 // ProcessLLMMessage queries the configured LLM and returns the raw response.
-// Mesh-fit shrinking is applied centrally at the send site (internal/shrink).
-// Exported for the manual_test.go prompt harness (-tags manual). The
-// bot-wide language (global config) steers the model's reply language via an
-// appended system directive.
-func ProcessLLMMessage(text string) (response string, err error) {
-	text = strings.TrimSpace(strings.TrimPrefix(text, ".llm"))
+// query is the text after the matched ".llm" trigger (Ctx.Rest). Mesh-fit
+// shrinking is applied centrally at the send site (internal/shrink).
+// Exported for the manual_test.go prompt harness (-tags manual). The bot-wide
+// language (global config) steers the model's reply language via an appended
+// system directive.
+func ProcessLLMMessage(query string) (response string, err error) {
+	text := strings.TrimSpace(query)
 
 	cfg := config.Get()
 
@@ -64,11 +104,23 @@ func ProcessLLMMessage(text string) (response string, err error) {
 		systemPrompt = strings.TrimSpace(systemPrompt + "\n" + d)
 	}
 
+	// Bound pool parking: 8 distinct senders would otherwise pin the whole
+	// dispatcher worker pool on slow AI replies. Reply busy when full.
+	release, ok := netgate.TryAcquire()
+	if !ok {
+		return "", ErrBusy
+	}
+	defer release()
+
 	switch cfg.LLM.Type {
 	case "openrouter":
 		response, err = provider.GetRemoteLLMResponse(cfg.LLM.Model, systemPrompt, cfg.LLM.SystemTemperature, text)
 	case "ollama":
 		response, err = provider.GetLocalLLMResponse(cfg.LLM.Model, systemPrompt, cfg.LLM.SystemTemperature, text)
+	default:
+		// Unset or mistyped provider: fail loudly instead of silently
+		// returning an empty string the user never sees.
+		return "", fmt.Errorf("LLM.type is not configured (set openrouter or ollama)")
 	}
 
 	if err != nil {

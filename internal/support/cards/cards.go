@@ -7,8 +7,8 @@ package cards
 import (
 	"crypto/rand"
 	"fmt"
-	mrand "math/rand"
 	"math/big"
+	mrand "math/rand"
 	"sort"
 	"strings"
 )

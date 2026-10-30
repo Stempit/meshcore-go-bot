@@ -16,9 +16,9 @@ func hand(cs ...Card) [5]Card {
 
 func TestScore5Categories(t *testing.T) {
 	tests := []struct {
-		name string
-		cards [5]Card
-		wantCat uint8
+		name      string
+		cards     [5]Card
+		wantCat   uint8
 		wantRanks [5]uint8
 	}{
 		{"high card", hand(c(14, Spades), c(13, Hearts), c(9, Diamonds), c(7, Clubs), c(2, Spades)), HighCard, [5]uint8{14, 13, 9, 7, 2}},

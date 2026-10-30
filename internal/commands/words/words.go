@@ -35,5 +35,5 @@ func (plugin) Meta() registry.Meta {
 func (plugin) LocalizedHelp(lang string) string { return tr.T(lang, "help.long") }
 
 func (plugin) Handle(c registry.Ctx) ([]string, error) {
-	return processWords(c.Lang, c.Text, c.SenderKey, c.SenderName, c.Channel)
+	return processWords(c.Lang, c.Rest, c.SenderKey, c.SenderName, c.Channel)
 }

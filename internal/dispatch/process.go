@@ -39,6 +39,12 @@ func (s *inflightSet) done(key string) {
 }
 
 func (d *Dispatcher) processDM(m *meshcore.Message) {
+	// A malformed (short) sender key makes every later key-prefix slice below
+	// unsafe — drop the message rather than guess an identity for it.
+	if len(m.SenderKey) < 6 {
+		log().Warn("Direct message with short sender key, dropping", "len", len(m.SenderKey))
+		return
+	}
 	senderKeyHex := fmt.Sprintf("%x", m.SenderKey)
 	if !config.Get().Security.Direct.IsAllowed(senderKeyHex) {
 		log().Info("Direct message filtered by security policy", "sender", senderKeyHex[:12])
@@ -151,7 +157,9 @@ func (d *Dispatcher) processChannelMessage(m *meshcore.ChannelMessage) {
 	}
 
 	// One command in flight per sender: reply busy instead of queuing a second.
-	if !d.inflight.begin("ch:" + m.SenderName) {
+	// The key includes the channel: the same display name on two channels is
+	// two different senders and must not share a busy slot.
+	if !d.inflight.begin("ch:" + channel.Name + ":" + m.SenderName) {
 		log().Info("Sender busy, replying busy", "channel", channel.Name, "sender", m.SenderName)
 		text := fmt.Sprintf("@[%s] busy, try again", m.SenderName)
 		if d.TryEnqueue(Outgoing{Channel: channel, Text: text, Ack: true}) {
@@ -161,7 +169,7 @@ func (d *Dispatcher) processChannelMessage(m *meshcore.ChannelMessage) {
 		}
 		return
 	}
-	defer d.inflight.done("ch:" + m.SenderName)
+	defer d.inflight.done("ch:" + channel.Name + ":" + m.SenderName)
 
 	if flood, ok := advert.ParseAdvertCommand(m.Text); ok {
 		log().Info("Sending advert", "flood", flood)

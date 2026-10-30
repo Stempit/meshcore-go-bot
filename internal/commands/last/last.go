@@ -43,7 +43,7 @@ func (plugin) Meta() registry.Meta {
 func (plugin) LocalizedHelp(lang string) string { return tr.T(lang, "help.long") }
 
 func (plugin) Handle(c registry.Ctx) ([]string, error) {
-	count, srcChannel, err := parseLastArgs(c.Lang, c.Text, c.Channel)
+	count, srcChannel, err := parseLastArgs(c.Lang, c.Rest, c.Channel)
 	if err != nil {
 		return []string{err.Error()}, nil
 	}
@@ -63,8 +63,9 @@ func (plugin) Handle(c registry.Ctx) ([]string, error) {
 	return msgs, nil
 }
 
+// parseLastArgs parses the args after the matched ".last" trigger (Ctx.Rest).
 func parseLastArgs(lang, text, currentChannel string) (int, string, error) {
-	rest := strings.TrimSpace(text[len(".last"):])
+	rest := strings.TrimSpace(text)
 
 	if rest == "" {
 		return defaultLastCount, currentChannel, nil

@@ -49,7 +49,7 @@ func (plugin) Meta() registry.Meta {
 		Triggers:  []string{".top"},
 		Match:     registry.Exact,
 		HelpShort: "top authors",
-		HelpLong:  ".top — top-5 channel authors by message count",
+		HelpLong:  ".top — top-3 channel authors by message count",
 		Group:     "Info",
 	}
 }

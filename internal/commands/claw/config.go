@@ -25,9 +25,10 @@ func (plugin) Configure(s config.Sectioner) error {
 	return s.Section("Claw", &conf)
 }
 
-// Enabled always reports true so the .claw trigger is routed even when picoclaw
-// is unconfigured (the handler then replies "picoclaw не настроен"). The
-// @[BotName] mention matcher applies its own Enabled/BotName gate.
-func (plugin) Enabled() bool { return true }
+// Enabled honors the Claw.enabled flag: false hides .claw and the @[BotName]
+// mention matcher from routing and help (the example config ships enabled:
+// false). When enabled but unconfigured, the handler still replies with the
+// friendly not_configured message instead of vanishing.
+func (plugin) Enabled() bool { return conf.Enabled }
 
 func init() { registry.Register(plugin{}) }

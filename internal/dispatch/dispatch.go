@@ -8,6 +8,7 @@ package dispatch
 import (
 	"context"
 	"errors"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -146,14 +147,29 @@ func (d *Dispatcher) runWorkers() {
 		sem <- struct{}{}
 		go func(msg any) {
 			defer func() { <-sem }()
-			switch m := msg.(type) {
-			case *meshcore.Message:
-				d.processDM(m)
-			case *meshcore.ChannelMessage:
-				d.processChannelMessage(m)
-			}
+			safeProcess(func() {
+				switch m := msg.(type) {
+				case *meshcore.Message:
+					d.processDM(m)
+				case *meshcore.ChannelMessage:
+					d.processChannelMessage(m)
+				}
+			})
 		}(msg)
 	}
+}
+
+// safeProcess runs process, recovering from panics so one malformed message or
+// plugin bug degrades to a log line instead of killing the whole bot: worker
+// goroutines have no other panic isolation, and handlers parse attacker-
+// controlled input.
+func safeProcess(process func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			log().Error("Recovered from panic while processing message", "panic", r, "stack", string(debug.Stack()))
+		}
+	}()
+	process()
 }
 
 // SendChannelMessage queues text on channel ch, dropping it if the outgoing

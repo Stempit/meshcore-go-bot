@@ -5,3 +5,4 @@ help.long: |-
   ask AI, auto-shrunk to <130 chars
 error: "dunno"
 reply_directive: "Answer in English."
+busy: "Thinking on other questions, try again in a minute."

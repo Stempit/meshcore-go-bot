@@ -46,7 +46,7 @@ func (plugin) Meta() registry.Meta {
 func (plugin) LocalizedHelp(lang string) string { return tr.T(lang, "help.long") }
 
 func (plugin) Handle(c registry.Ctx) ([]string, error) {
-	return processVote(c.Lang, c.Text, c.SenderKey, c.Channel)
+	return processVote(c.Lang, c.Rest, c.SenderKey, c.Channel)
 }
 
 // processVote handles ".vote" and its sub-verbs (channel only).
@@ -58,8 +58,9 @@ func (plugin) Handle(c registry.Ctx) ([]string, error) {
 //
 // senderKey identifies the voter (one changeable vote each); channelName keys
 // the poll. Votes are anonymous: results never name who voted.
+// text is Ctx.Rest: everything after the matched ".vote" trigger.
 func processVote(lang, text, senderKey, channelName string) ([]string, error) {
-	rest := strings.TrimSpace(strings.TrimPrefix(text, ".vote"))
+	rest := strings.TrimSpace(text)
 	fields := strings.Fields(rest)
 
 	verb := ""

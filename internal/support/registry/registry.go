@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/stempit/meshcore-go-bot/internal/config"
 )
@@ -65,8 +66,30 @@ type Configurable interface {
 
 var registered []Command
 
+// dispatchOrderCache holds the commands sorted by Priority desc, ties broken by
+// registration order. Registration happens in init() of every plugin — before
+// any message is processed — so the cache is rebuilt only there and never
+// re-sorted per incoming message.
+var dispatchOrderCache []Command
+
 // Register adds a command; called from each plugin's init().
-func Register(c Command) { registered = append(registered, c) }
+func Register(c Command) {
+	registered = append(registered, c)
+	dispatchOrderCache = nil
+}
+
+// dispatchOrder returns the commands in routing order, sorting once and reusing
+// the cached slice (Dispatch only iterates it).
+func dispatchOrder() []Command {
+	if dispatchOrderCache == nil {
+		dispatchOrderCache = make([]Command, len(registered))
+		copy(dispatchOrderCache, registered)
+		sort.SliceStable(dispatchOrderCache, func(i, j int) bool {
+			return dispatchOrderCache[i].Meta().Priority > dispatchOrderCache[j].Meta().Priority
+		})
+	}
+	return dispatchOrderCache
+}
 
 // ConfigureAll runs each Configurable plugin's Configure in registration order.
 // It fails loud on a malformed/invalid section value.
@@ -91,36 +114,41 @@ func enabled(c Command) bool {
 	return true
 }
 
-// dispatchOrder returns the registered commands sorted by Priority desc, ties
-// broken by registration order (stable sort over a copy).
-func dispatchOrder() []Command {
-	out := make([]Command, len(registered))
-	copy(out, registered)
-	sort.SliceStable(out, func(i, j int) bool {
-		return out[i].Meta().Priority > out[j].Meta().Priority
-	})
-	return out
-}
-
-// matches reports whether c handles ctx, via its Matcher or its Triggers/Match.
-func matches(c Command, ctx Ctx) bool {
+// matchedTrigger reports whether c handles ctx, via its Matcher or its
+// Triggers/Match, returning the matched trigger ("" for Matcher interceptors,
+// which cut their own prefixes) so Dispatch can fill Ctx.Rest.
+func matchedTrigger(c Command, ctx Ctx) (string, bool) {
 	if m, ok := c.(Matcher); ok {
-		return m.Matches(ctx)
+		return "", m.Matches(ctx)
 	}
 	meta := c.Meta()
 	for _, t := range meta.Triggers {
 		switch meta.Match {
 		case Exact:
 			if ctx.Lower == t {
-				return true
+				return t, true
 			}
 		case Prefix:
 			if ctx.Lower == t || strings.HasPrefix(ctx.Lower, t+" ") {
-				return true
+				return t, true
 			}
 		}
 	}
-	return false
+	return "", false
+}
+
+// restAfterTrigger cuts the matched trigger off the original-case text,
+// rune-aligned (ToLower preserves rune count, not byte length), and trims the
+// remainder. Exact matches leave Rest empty.
+func restAfterTrigger(ctx Ctx, trigger string) string {
+	if trigger == "" {
+		return ""
+	}
+	r := []rune(ctx.Trimmed)
+	if n := utf8.RuneCountInString(trigger); len(r) >= n {
+		return strings.TrimSpace(string(r[n:]))
+	}
+	return ""
 }
 
 // Dispatch routes ctx to the first matching enabled command (highest Priority
@@ -135,20 +163,23 @@ func Dispatch(ctx Ctx) (replies []string, name string, err error) {
 		if !enabled(c) {
 			continue
 		}
-		if matches(c, ctx) {
-			name := c.Meta().Name
-			// Redirect gate: steer flood-prone commands off busy channels before
-			// the handler runs, so no game state mutates and no network call fires.
-			// DMs are exempt (Lookup returns false for an empty channel).
-			if msg, ok := ctx.Cfg.Redirect.Lookup(name, ctx.Channel); ok {
-				if allowNotice(ctx.Channel, name, ctx.Cfg.Redirect.Cooldown) {
-					return []string{msg}, name, nil
-				}
-				return nil, "", nil // throttled → stay silent
-			}
-			r, e := c.Handle(ctx)
-			return r, name, e
+		trig, ok := matchedTrigger(c, ctx)
+		if !ok {
+			continue
 		}
+		name := c.Meta().Name
+		// Redirect gate: steer flood-prone commands off busy channels before
+		// the handler runs, so no game state mutates and no network call fires.
+		// DMs are exempt (Lookup returns false for an empty channel).
+		if msg, ok := ctx.Cfg.Redirect.Lookup(name, ctx.Channel); ok {
+			if allowNotice(ctx.Channel, name, ctx.Cfg.Redirect.Cooldown) {
+				return []string{msg}, name, nil
+			}
+			return nil, "", nil // throttled → stay silent
+		}
+		ctx.Rest = restAfterTrigger(ctx, trig)
+		r, e := c.Handle(ctx)
+		return r, name, e
 	}
 	return nil, "", nil
 }

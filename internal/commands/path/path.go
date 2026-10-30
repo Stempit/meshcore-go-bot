@@ -5,6 +5,7 @@ package path
 import (
 	"context"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -42,7 +43,7 @@ func (plugin) Meta() registry.Meta {
 func (plugin) LocalizedHelp(lang string) string { return tr.T(lang, "help.long") }
 
 func (plugin) Handle(c registry.Ctx) ([]string, error) {
-	return processPath(c.Lang, c.Trimmed)
+	return processPath(c.Lang, c.Rest)
 }
 
 // ── JSON models (mirrors Let's Mesh analyzer edge-stats API) ─────────────────
@@ -83,40 +84,64 @@ var (
 
 func getStats() (*statsResponse, error) {
 	statsMu.Lock()
-	defer statsMu.Unlock()
-
 	if statsCache != nil && time.Now().Before(statsExpiry) {
-		return statsCache, nil
+		cached := statsCache
+		statsMu.Unlock()
+		return cached, nil
 	}
+	url := conf.URL
+	statsMu.Unlock()
 
-	if conf.URL == "" {
+	if url == "" {
 		return nil, fmt.Errorf("Stats.url not configured")
 	}
 
-	var raw []byte
-	var err error
-	if strings.HasPrefix(conf.URL, "file://") {
-		raw, err = os.ReadFile(strings.TrimPrefix(conf.URL, "file://"))
-	} else {
-		raw, err = statsHTTPGet(conf.URL)
-	}
+	// Fetch WITHOUT holding statsMu: the fetch takes up to 10s and every
+	// concurrent .path would otherwise block behind it.
+	raw, err := fetchStats(url)
 	if err != nil {
+		// A blip must not discard good data: serve the stale snapshot.
+		statsMu.Lock()
+		stale := statsCache
+		statsMu.Unlock()
+		if stale != nil {
+			log().Warn("stats fetch failed, serving stale cache", "error", err)
+			return stale, nil
+		}
 		return nil, fmt.Errorf("fetch stats: %w", err)
 	}
 
 	var resp statsResponse
 	if err := json.Unmarshal(raw, &resp); err != nil {
+		statsMu.Lock()
+		stale := statsCache
+		statsMu.Unlock()
+		if stale != nil {
+			log().Warn("stats parse failed, serving stale cache", "error", err)
+			return stale, nil
+		}
 		return nil, fmt.Errorf("parse stats: %w", err)
 	}
+	validateStats(&resp)
 
 	ttl := time.Duration(conf.CacheTTLSec) * time.Second
 	if ttl <= 0 {
 		ttl = 5 * time.Minute
 	}
+	statsMu.Lock()
+	// Last writer wins: concurrent refetches produce equivalent snapshots.
 	statsCache = &resp
 	statsExpiry = time.Now().Add(ttl)
+	statsMu.Unlock()
 	log().Info("stats cache refreshed", "nodes", len(resp.Nodes), "edges", len(resp.Edges))
 	return &resp, nil
+}
+
+func fetchStats(url string) ([]byte, error) {
+	if strings.HasPrefix(url, "file://") {
+		return os.ReadFile(strings.TrimPrefix(url, "file://"))
+	}
+	return statsHTTPGet(url)
 }
 
 func statsHTTPGet(rawURL string) ([]byte, error) {
@@ -134,7 +159,50 @@ func statsHTTPGet(rawURL string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
-	return io.ReadAll(resp.Body)
+	// External untrusted source: cap the bytes read into memory.
+	return io.ReadAll(io.LimitReader(resp.Body, maxStatsBytes))
+}
+
+// maxStatsBytes caps the analyzer stats payload (fetch timeout bounds time).
+const maxStatsBytes = 5 << 20 // 5 MiB
+
+// validateStats drops nodes whose public_key_hex is malformed (short or not
+// hex) and any edge referencing a dropped node. The stats source is external
+// and untrusted: the route builder slices pk[:2] off every key, so a
+// truncated key would panic the handler. Keys are normalized to uppercase —
+// name resolution compares against an uppercased query, and mixed-case
+// sources must not silently strand edges.
+func validateStats(resp *statsResponse) {
+	ok := make(map[string]bool, len(resp.Nodes))
+	nodes := make([]statsNode, 0, len(resp.Nodes))
+	for _, n := range resp.Nodes {
+		if !isHexKey(n.PublicKeyHex) {
+			log().Warn("stats: dropping node with malformed public_key_hex", "key", n.PublicKeyHex)
+			continue
+		}
+		n.PublicKeyHex = strings.ToUpper(n.PublicKeyHex)
+		ok[n.PublicKeyHex] = true
+		nodes = append(nodes, n)
+	}
+	edges := make([]statsEdge, 0, len(resp.Edges))
+	for _, e := range resp.Edges {
+		e.NodeA = strings.ToUpper(e.NodeA)
+		e.NodeB = strings.ToUpper(e.NodeB)
+		if ok[e.NodeA] && ok[e.NodeB] {
+			edges = append(edges, e)
+		}
+	}
+	resp.Nodes, resp.Edges = nodes, edges
+}
+
+// isHexKey reports whether s is valid hex and long enough for the 1-byte hash
+// prefix (2 hex chars) used in route building.
+func isHexKey(s string) bool {
+	if len(s) < 2 || len(s)%2 != 0 {
+		return false
+	}
+	_, err := hex.DecodeString(s)
+	return err == nil
 }
 
 // ── Link cost model ───────────────────────────────────────────────────────────
@@ -442,6 +510,8 @@ func trySplits(stats *statsResponse, rawArgs []string) [][2]string {
 //	.path <from> to <to>     — best path; "to" is the explicit separator
 //	.path <from> <to>        — both names may contain spaces; the unique split
 //	                           where both parts match a node is chosen automatically
+//
+// text is Ctx.Rest: everything after the matched ".path" trigger.
 func processPath(lang, text string) ([]string, error) {
 	stats, err := getStats()
 	if err != nil {
@@ -449,8 +519,8 @@ func processPath(lang, text string) ([]string, error) {
 		return []string{tr.T(lang, "stats_unavailable")}, nil
 	}
 
-	// Strip prefix, preserve original case for name matching.
-	rawArgs := strings.Fields(strings.TrimSpace(strings.TrimPrefix(text, ".path")))
+	// Arguments preserve original case for name matching.
+	rawArgs := strings.Fields(strings.TrimSpace(text))
 
 	if len(rawArgs) == 0 {
 		rCount, eCount := 0, 0

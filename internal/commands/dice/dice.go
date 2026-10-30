@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/stempit/meshcore-go-bot/internal/support/games"
 	"github.com/stempit/meshcore-go-bot/internal/support/i18n"
 	"github.com/stempit/meshcore-go-bot/internal/support/registry"
 )
@@ -40,7 +41,7 @@ func (plugin) Meta() registry.Meta {
 func (plugin) LocalizedHelp(lang string) string { return tr.T(lang, "help.long") }
 
 func (plugin) Handle(c registry.Ctx) ([]string, error) {
-	return processDice(c.Lang, c.Text, c.SenderName, c.Channel)
+	return processDice(c.Lang, c.Rest, c.SenderName, c.Channel)
 }
 
 const (
@@ -76,8 +77,9 @@ var (
 //	.dice status                 – who has rolled so far
 //
 // senderName attributes rolls; channelName keys the roll-off (empty in DMs).
+// text is Ctx.Rest: everything after the matched ".dice" trigger.
 func processDice(lang, text, senderName, channelName string) ([]string, error) {
-	rest := strings.TrimSpace(strings.TrimPrefix(text, ".dice"))
+	rest := strings.TrimSpace(text)
 	fields := strings.Fields(rest)
 
 	verb := ""
@@ -215,7 +217,7 @@ func diceRoll(lang, senderName, channelName string) ([]string, error) {
 		return []string{tr.T(lang, "not_open")}, nil
 	}
 
-	who := diceWho(senderName)
+	who := games.Who(senderName)
 	if prev, ok := s.rolls[who]; ok {
 		return []string{tr.T(lang, "already_rolled", prev)}, nil
 	}
@@ -310,12 +312,4 @@ func diceResult(lang string, s *diceSession) string {
 		head += " (" + strings.Join(others, ", ") + ")"
 	}
 	return head
-}
-
-// diceWho returns a usable player label, falling back when the name is empty.
-func diceWho(senderName string) string {
-	if name := strings.TrimSpace(senderName); name != "" {
-		return name
-	}
-	return "?"
 }

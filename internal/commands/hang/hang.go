@@ -42,7 +42,7 @@ func (plugin) Meta() registry.Meta {
 func (plugin) LocalizedHelp(lang string) string { return tr.T(lang, "help.long") }
 
 func (plugin) Handle(c registry.Ctx) ([]string, error) {
-	return processHang(c.Lang, c.Text, c.SenderKey, c.SenderName, c.Channel)
+	return processHang(c.Lang, c.Rest, c.SenderKey, c.SenderName, c.Channel)
 }
 
 //go:embed words_ru.txt
@@ -121,8 +121,9 @@ var (
 //	.hang top           – leaderboard for this scope (last 30 days)
 //
 // Works in both channels (collaborative) and DMs (solo).
+// text is Ctx.Rest: everything after the matched ".hang" trigger.
 func processHang(lang, text, senderKey, senderName, channelName string) ([]string, error) {
-	rest := strings.TrimSpace(strings.TrimPrefix(text, ".hang"))
+	rest := strings.TrimSpace(text)
 	fields := strings.Fields(rest)
 
 	verb := ""
@@ -139,7 +140,10 @@ func processHang(lang, text, senderKey, senderName, channelName string) ([]strin
 	case "end":
 		return hangEnd(lang, scope)
 	case "top":
-		return games.Top(hangLogBase, scope), nil
+		if lines := games.Top(hangLogBase, scope); lines != nil {
+			return lines, nil
+		}
+		return []string{tr.T(lang, "top_empty")}, nil
 	default:
 		// Anything else is a letter or whole-word guess.
 		return hangGuess(lang, scope, senderName, fields[0])

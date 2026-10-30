@@ -77,8 +77,13 @@ func (plugin) Handle(c registry.Ctx) ([]string, error) {
 - `Match: registry.Exact` matches only `ctx.Lower == trigger`. `registry.Prefix`
   matches `trigger` exactly OR `trigger` followed by a space (the trailing space
   is load-bearing, so `.w` can't swallow `.words`).
-- Strip the prefix with `c.Arg(".mycmd")` (or `strings.TrimPrefix` +
-  `strings.TrimSpace`), never `strings.ReplaceAll`.
+- Read the arguments from `c.Rest` — Dispatch fills it with everything after
+  the matched trigger, cut case-insensitively (`.MyCmd x` routes like
+  `.mycmd x`). Never `strings.TrimPrefix` the raw `c.Text` yourself: the
+  dispatcher matches triggers on the lowercased text, and a case-sensitive
+  strip of the original text silently no-ops on capitalized input. Matcher
+  interceptors (no Triggers) cut their own prefix with `c.Arg(".mycmd")`,
+  which is the case-insensitive version of the same thing.
 - Return a usage string (not an error) for bad arguments.
 - Log via `logging.For("commands")` or `slog` — structured key/values, English,
   no `log.Fatal`.

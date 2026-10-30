@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/stempit/meshcore-go-bot/internal/logging"
 	"github.com/stempit/meshcore-go-bot/internal/support/i18n"
 	"github.com/stempit/meshcore-go-bot/internal/support/registry"
 )
@@ -20,6 +21,8 @@ import (
 var langFS embed.FS
 
 var tr = i18n.MustLoad(langFS)
+
+var log = logging.For("commands")
 
 type TicketStore struct {
 	mu      sync.Mutex
@@ -117,7 +120,10 @@ func (plugin) Meta() registry.Meta {
 func (plugin) Handle(c registry.Ctx) ([]string, error) {
 	reply, err := processTicket(c.Lang, c.Text, c.SenderKey)
 	if err != nil {
-		return []string{tr.T(c.Lang, "error")}, err
+		// Dispatch drops replies when err != nil, so the error goes to the
+		// operator log and the user-facing reply ships with a nil error.
+		log().Error("ticket store error", "error", err)
+		return []string{tr.T(c.Lang, "error")}, nil
 	}
 	return []string{reply}, nil
 }

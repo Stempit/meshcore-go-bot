@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -20,8 +21,16 @@ var langFS embed.FS
 
 var tr = i18n.MustLoad(langFS)
 
-const newsDir = "log/news"
+// newsDir is a var (not const) so tests can redirect it to a temp dir.
+var newsDir = "log/news"
+
 const defaultNewsCount = 5
+const newsMaxCount = 10 // clamp: user input must not flood the radio channel
+
+// feedNameRe constrains feed names to safe file components: readNews joins
+// the name into a path, and an unsanitized "../x" would read arbitrary .txt
+// files the process can access.
+var feedNameRe = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 func init() { registry.Register(plugin{}) }
 
@@ -104,6 +113,14 @@ func listFeeds(lang string) ([]string, error) {
 }
 
 func readNews(lang, feedName string, count, offset int) ([]string, error) {
+	if !feedNameRe.MatchString(feedName) {
+		return []string{tr.T(lang, "not_found", feedName)}, nil
+	}
+	// A count straight from user input paces the transmitter for minutes and
+	// starves every other command — clamp like parseLastArgs does.
+	if count > newsMaxCount {
+		count = newsMaxCount
+	}
 	path := filepath.Join(newsDir, feedName+".txt")
 	f, err := os.Open(path)
 	if os.IsNotExist(err) {

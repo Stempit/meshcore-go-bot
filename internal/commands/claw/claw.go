@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stempit/meshcore-go-bot/internal/bridge/picoclaw"
 	"github.com/stempit/meshcore-go-bot/internal/support/i18n"
+	"github.com/stempit/meshcore-go-bot/internal/support/netgate"
 	"github.com/stempit/meshcore-go-bot/internal/support/registry"
 )
 
@@ -57,15 +59,30 @@ func (plugin) Handle(c registry.Ctx) ([]string, error) {
 	if conf.Enabled && conf.BotName != "" {
 		mentionPrefix := "@[" + conf.BotName + "]"
 		if strings.HasPrefix(c.Lower, strings.ToLower(mentionPrefix)) {
-			prompt := strings.TrimSpace(c.Trimmed[len(mentionPrefix):])
-			return processClaw(c.Lang, ".claw "+prompt, c.SenderKey, c.Channel)
+			prompt := mentionPrompt(c.Trimmed, mentionPrefix)
+			return processClaw(c.Lang, prompt, c.SenderKey, c.Channel)
 		}
 	}
-	return processClaw(c.Lang, c.Text, c.SenderKey, c.Channel)
+	// claw is a Matcher interceptor, so Dispatch leaves Rest empty; cut the
+	// trigger with the case-insensitive Arg helper instead.
+	return processClaw(c.Lang, c.Arg(".claw"), c.SenderKey, c.Channel)
 }
 
-func processClaw(lang, text, senderKey, channelName string) ([]string, error) {
-	prompt := strings.TrimSpace(strings.TrimPrefix(text, ".claw"))
+// mentionPrompt extracts the prompt after a mention that matched
+// case-insensitively. The cut is by rune count: ToLower preserves rune count
+// but not byte length (İ → i), so slicing Trimmed by len(lowercased prefix)
+// could panic or mis-cut for names containing such runes.
+func mentionPrompt(trimmed, mentionPrefix string) string {
+	n := utf8.RuneCountInString(strings.ToLower(mentionPrefix))
+	runes := []rune(trimmed)
+	if n > len(runes) {
+		return ""
+	}
+	return strings.TrimSpace(string(runes[n:]))
+}
+
+func processClaw(lang, prompt, senderKey, channelName string) ([]string, error) {
+	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
 		return []string{tr.T(lang, "usage")}, nil
 	}
@@ -73,6 +90,14 @@ func processClaw(lang, text, senderKey, channelName string) ([]string, error) {
 	if !conf.Enabled {
 		return []string{tr.T(lang, "not_configured")}, nil
 	}
+
+	// Bound pool parking: 8 distinct senders × 180s timeouts would otherwise
+	// pin the whole dispatcher worker pool. Reply busy when full.
+	release, ok := netgate.TryAcquire()
+	if !ok {
+		return []string{tr.T(lang, "busy")}, nil
+	}
+	defer release()
 
 	timeoutSec := conf.TimeoutSec
 	if timeoutSec <= 0 {

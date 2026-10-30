@@ -2,6 +2,7 @@
 help.long: ".2ch - start BBS/forum mode"
 left: "Left BBS. Bye!"
 welcome: "Welcome to BBS!\n/hl for help\n.exit to leave"
+need_key: "Cannot start BBS: I don't know your advert yet. Send me a DM first."
 err_load: "ERR: cannot load threads"
 unknown_cmd: "Unknown cmd. /hl for help"
 help.hl_ls: "/ls [page] - list threads"

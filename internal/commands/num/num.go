@@ -39,7 +39,7 @@ func (plugin) Meta() registry.Meta {
 func (plugin) LocalizedHelp(lang string) string { return tr.T(lang, "help.long") }
 
 func (plugin) Handle(c registry.Ctx) ([]string, error) {
-	return processNum(c.Lang, c.Text, c.SenderKey, c.SenderName, c.Channel)
+	return processNum(c.Lang, c.Rest, c.SenderKey, c.SenderName, c.Channel)
 }
 
 const (
@@ -73,8 +73,9 @@ var (
 //	.num top                – leaderboard for this scope (last 30 days)
 //
 // Works in both channels (shared game) and DMs (private game).
+// text is Ctx.Rest: everything after the matched ".num" trigger.
 func processNum(lang, text, senderKey, senderName, channelName string) ([]string, error) {
-	rest := strings.TrimSpace(strings.TrimPrefix(text, ".num"))
+	rest := strings.TrimSpace(text)
 	fields := strings.Fields(rest)
 
 	verb := ""
@@ -97,7 +98,10 @@ func processNum(lang, text, senderKey, senderName, channelName string) ([]string
 	case "end":
 		return numEnd(lang, scope)
 	case "top":
-		return games.Top(numLogBase, scope), nil
+		if lines := games.Top(numLogBase, scope); lines != nil {
+			return lines, nil
+		}
+		return []string{tr.T(lang, "top_empty")}, nil
 	default:
 		// A bare argument is treated as a guess.
 		return numGuess(lang, scope, senderName, fields[0])

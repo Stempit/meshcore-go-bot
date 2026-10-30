@@ -71,6 +71,14 @@ type MQTTConfig struct {
 	RawEnabled     bool `yaml:"raw_enabled"`     // Enable raw messages
 	TxEnabled      bool `yaml:"tx_enabled"`      // Enable TX packet messages
 
+	// PublishChannelKeys controls the channel_key field on published packets:
+	// the channel's 16-byte PSK, which decrypts all of that channel's traffic,
+	// past and future. Off by default — enabling hands the key to the analyzer
+	// servers and to every subscriber of the packets topic. Opt in only for
+	// channels whose content you accept making public to whoever runs or reads
+	// the analyzer.
+	PublishChannelKeys bool `yaml:"publish_channel_keys"`
+
 	// Status interval (milliseconds)
 	StatusInterval int `yaml:"status_interval"` // Status publish interval
 
@@ -97,10 +105,13 @@ func DefaultMQTTConfig() *MQTTConfig {
 		PacketsEnabled: true,
 		RawEnabled:     false,
 		TxEnabled:      false,
-		StatusInterval: 300000, // 5 minutes
-		AnalyzerUS:     true,
-		AnalyzerEU:     true,
-		Port:           1883,
+		// PublishChannelKeys deliberately stays false: publishing a channel's
+		// PSK discloses the ability to decrypt it, so it must be opt-in.
+		PublishChannelKeys: false,
+		StatusInterval:     300000, // 5 minutes
+		AnalyzerUS:         true,
+		AnalyzerEU:         true,
+		Port:               1883,
 	}
 }
 

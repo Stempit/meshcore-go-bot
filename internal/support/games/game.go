@@ -84,12 +84,13 @@ func LogWin(logger *historylog.Logger, scope, winner, detail string) {
 
 // Top renders the leaderboard for one scope: wins per player over the last
 // TopDays, ranked descending, capped to fit a single mesh message. base is the
-// game's LogBase.
+// game's LogBase. Returns nil when nothing is recorded — the caller localizes
+// the empty case from its own catalog (games never had the language).
 func Top(base, scope string) []string {
 	entries, err := historylog.ReadAllChannel(base, scope)
 	if err != nil {
 		slog.Warn("game: failed to read leaderboard", "scope", scope, "error", err)
-		return []string{"Пока никто не выигрывал"}
+		return nil
 	}
 
 	cutoff := time.Now().AddDate(0, 0, -TopDays)
@@ -105,7 +106,7 @@ func Top(base, scope string) []string {
 		counts[e.Sender]++
 	}
 	if len(order) == 0 {
-		return []string{"Пока никто не выигрывал"}
+		return nil
 	}
 
 	sort.SliceStable(order, func(i, j int) bool {

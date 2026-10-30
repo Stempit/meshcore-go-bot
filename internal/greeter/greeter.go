@@ -75,6 +75,11 @@ func (g *Greeter) onAdvert(contact *meshcore.Contact) {
 		g.mu.Unlock()
 		if err := g.client.RequestContacts(0); err != nil {
 			log().Error("Failed to request contacts after stub advert", "error", err)
+			// Drop the pending entry: the node is already persisted as known,
+			// so it would otherwise sit in pending forever and never greet.
+			g.mu.Lock()
+			delete(g.pending, keyHex)
+			g.mu.Unlock()
 		}
 		return
 	}
