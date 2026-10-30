@@ -154,7 +154,11 @@ func handleChannel(c registry.Ctx, o *out) []string {
 	case "end":
 		chEnd(lang, c.Channel, keyOf(c), o)
 	case "top":
-		o.replyMsgs = append(o.replyMsgs, games.Top(games.LogBase("poker"), c.Channel)...)
+		if lines := games.Top(games.LogBase("poker"), c.Channel); lines != nil {
+			o.replyMsgs = append(o.replyMsgs, lines...)
+		} else {
+			o.reply(lang, "top_empty")
+		}
 	case "call", "check", "fold", "bet", "raise", "allin":
 		o.reply(lang, "guidance")
 	default:
@@ -199,7 +203,11 @@ func handleDM(c registry.Ctx, o *out) []string {
 		if t == nil {
 			o.reply(lang, "usage")
 		} else {
-			o.replyMsgs = append(o.replyMsgs, games.Top(games.LogBase("poker"), t.channel)...)
+			if lines := games.Top(games.LogBase("poker"), t.channel); lines != nil {
+				o.replyMsgs = append(o.replyMsgs, lines...)
+			} else {
+				o.reply(lang, "top_empty")
+			}
 		}
 	default:
 		o.reply(lang, "usage")

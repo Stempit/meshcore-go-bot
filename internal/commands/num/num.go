@@ -98,7 +98,10 @@ func processNum(lang, text, senderKey, senderName, channelName string) ([]string
 	case "end":
 		return numEnd(lang, scope)
 	case "top":
-		return games.Top(numLogBase, scope), nil
+		if lines := games.Top(numLogBase, scope); lines != nil {
+			return lines, nil
+		}
+		return []string{tr.T(lang, "top_empty")}, nil
 	default:
 		// A bare argument is treated as a guess.
 		return numGuess(lang, scope, senderName, fields[0])

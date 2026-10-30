@@ -58,10 +58,21 @@ type wordsGame struct {
 	base     []rune          // normalized base word, e.g. []rune("кальвадос")
 	avail    map[rune]int    // letter -> count available in base (multiset)
 	found    map[string]bool // words already claimed this round (anti-duplicate)
-	scores   map[string]int  // player name -> total score
-	timer    *time.Timer     // countdown; reset on every command
-	deadline time.Time       // wall-clock expiry; drives status + stale-fire guard
-	token    uint64          // round identity; guards stale timer fires
+	scores   map[string]int  // player id (playerID) -> total score
+	names    map[string]string
+	timer    *time.Timer // countdown; reset on every command
+	deadline time.Time   // wall-clock expiry; drives status + stale-fire guard
+	token    uint64      // round identity; guards stale timer fires
+}
+
+// playerID keys per-player state: the stable sender key when the bot knows
+// the contact, else a name-based fallback. Keying by display name made two
+// players sharing a name share one score slot.
+func playerID(senderKey, senderName string) string {
+	if k := strings.TrimSpace(senderKey); k != "" {
+		return "key:" + k
+	}
+	return "name:" + strings.ToLower(strings.TrimSpace(senderName))
 }
 
 var (
@@ -98,19 +109,29 @@ func processWords(lang, text, senderKey, senderName, channelName string) ([]stri
 		verb = strings.ToLower(fields[0])
 	}
 	scope := games.Scope(senderKey, channelName)
+	pid := playerID(senderKey, senderName)
 
 	switch verb {
 	case "", "start":
 		return wordsStart(lang, scope)
 	case "status":
-		return wordsStatus(lang, scope, games.Who(senderName))
+		return wordsStatus(lang, scope, pid)
 	case "end":
 		return wordsEnd(lang, scope)
 	case "top":
-		return games.Top(wordsLogBase, scope), nil
+		return topOrEmpty(games.Top(wordsLogBase, scope), lang), nil
 	default:
-		return wordsSubmit(lang, scope, games.Who(senderName), fields[0])
+		return wordsSubmit(lang, scope, pid, games.Who(senderName), fields[0])
 	}
+}
+
+// topOrEmpty localizes the empty-leaderboard case: games.Top returns nil when
+// no wins are recorded.
+func topOrEmpty(lines []string, lang string) []string {
+	if lines == nil {
+		return []string{tr.T(lang, "top_empty")}
+	}
+	return lines
 }
 
 // wordsStart opens a round in the scope, picking a base word from the pool.
@@ -138,6 +159,7 @@ func wordsStart(lang, scope string) ([]string, error) {
 		avail:  runeCounts(base),
 		found:  map[string]bool{},
 		scores: map[string]int{},
+		names:  map[string]string{},
 		token:  wordsToken,
 	}
 	ttl := wordsRoundDur()
@@ -151,8 +173,9 @@ func wordsStart(lang, scope string) ([]string, error) {
 }
 
 // wordsSubmit validates a submission and, on success, scores it. The validation
-// order is cheapest-first; the first failure decides the reply.
-func wordsSubmit(lang, scope, who, arg string) ([]string, error) {
+// order is cheapest-first; the first failure decides the reply. pid is the
+// stable player key; display is the player's current display name.
+func wordsSubmit(lang, scope, pid, display, arg string) ([]string, error) {
 	norm := wordsNormalize(lang, arg)
 	if norm == "" {
 		return []string{tr.T(lang, "invalid_chars")}, nil
@@ -193,16 +216,19 @@ func wordsSubmit(lang, scope, who, arg string) ([]string, error) {
 	n := len(word)
 	score := n * n
 	g.found[norm] = true
-	g.scores[who] += score
+	if _, ok := g.names[pid]; !ok {
+		g.names[pid] = display
+	}
+	g.scores[pid] += score
 	wordsMu.Unlock()
 
-	slog.Info("words find", "scope", scope, "player", who, "word", norm, "score", score)
+	slog.Info("words find", "scope", scope, "player", display, "word", norm, "score", score)
 	return []string{tr.T(lang, "scored", score)}, nil
 }
 
 // wordsStatus shows the base word, time left, and the caller's score. It also
 // resets the timer (requirement 6).
-func wordsStatus(lang, scope, who string) ([]string, error) {
+func wordsStatus(lang, scope, pid string) ([]string, error) {
 	wordsMu.Lock()
 	defer wordsMu.Unlock()
 
@@ -218,7 +244,7 @@ func wordsStatus(lang, scope, who string) ([]string, error) {
 	}
 	m := int(left / time.Minute)
 	s := int(left/time.Second) % 60
-	return []string{tr.T(lang, "status", strings.ToUpper(string(g.base)), m, s, g.scores[who])}, nil
+	return []string{tr.T(lang, "status", strings.ToUpper(string(g.base)), m, s, g.scores[pid])}, nil
 }
 
 // wordsEnd closes the round early and returns the results synchronously. If the
@@ -266,9 +292,9 @@ func wordsFinalizeLocked(lang, scope string, g *wordsGame) []string {
 		score int
 	}
 	var ranked []playerScore
-	for name, score := range g.scores {
+	for pid, score := range g.scores {
 		if score > 0 {
-			ranked = append(ranked, playerScore{name, score})
+			ranked = append(ranked, playerScore{name: g.names[pid], score: score})
 		}
 	}
 	if len(ranked) == 0 {

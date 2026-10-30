@@ -140,7 +140,10 @@ func processHang(lang, text, senderKey, senderName, channelName string) ([]strin
 	case "end":
 		return hangEnd(lang, scope)
 	case "top":
-		return games.Top(hangLogBase, scope), nil
+		if lines := games.Top(hangLogBase, scope); lines != nil {
+			return lines, nil
+		}
+		return []string{tr.T(lang, "top_empty")}, nil
 	default:
 		// Anything else is a letter or whole-word guess.
 		return hangGuess(lang, scope, senderName, fields[0])
