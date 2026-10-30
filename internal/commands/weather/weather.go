@@ -17,6 +17,7 @@ import (
 	"github.com/stempit/meshcore-go-bot/internal/proxy"
 	"github.com/stempit/meshcore-go-bot/internal/support/i18n"
 	"github.com/stempit/meshcore-go-bot/internal/support/registry"
+	"github.com/stempit/meshcore-go-bot/internal/support/webcache"
 )
 
 //go:embed lang/*.yaml
@@ -47,7 +48,8 @@ func (plugin) Handle(c registry.Ctx) ([]string, error) {
 	day := 0
 	textLower := strings.ToLower(text)
 	for _, kw := range []string{"завтра", "tomorrow"} {
-		if strings.HasPrefix(textLower, kw) {
+		if rest, ok := strings.CutPrefix(textLower, kw); ok && (rest == "" || strings.HasPrefix(rest, " ")) {
+			// Word boundary: ".w завтраland" is a city, not tomorrow.
 			day = 1
 			// Cut rune-aligned: byte-slicing works for these keywords today,
 			// but any future keyword whose lowercase is byte-shorter would
@@ -79,7 +81,7 @@ func (plugin) Handle(c registry.Ctx) ([]string, error) {
 		return []string{tr.T(c.Lang, "unavailable")}, nil
 	}
 
-	log().Info("weather reply", "reply", reply, "bytes", len(reply))
+	log().Debug("weather reply", "bytes", len(reply))
 
 	return []string{reply}, nil
 }
@@ -172,12 +174,19 @@ func wttrFetchJSON(location string) (*wttrResponse, []byte, error) {
 	return &data, body, nil
 }
 
+// wttrCache memoizes wttr.in answers per location: the service rate-limits
+// aggressively, weather changes on minute scales, and radio commands repeat
+// the same city constantly. Stale answers are served when the service blips.
+var wttrCache = webcache.NewKeyed(10*time.Minute, 32, func(location string) (*wttrResponse, error) {
+	data, _, err := wttrFetchJSON(location)
+	return data, err
+})
+
 func fetchCurrentWeather(lang, location, units string) (string, error) {
-	data, body, err := wttrFetchJSON(location)
+	data, err := wttrCache.Get(location)
 	if err != nil {
 		return "", err
 	}
-	log().Debug("wttr.in current response", "body", string(body))
 
 	if len(data.CurrentCondition) == 0 {
 		return "", fmt.Errorf("no current_condition in response")
@@ -187,17 +196,16 @@ func fetchCurrentWeather(lang, location, units string) (string, error) {
 	emoji := weatherCodeEmoji(cur.WeatherCode)
 	temp := formatTemp(cur.TempC, cur.TempF, units)
 	cond := conditionText(lang, cur.WeatherCode)
-	wind := buildWindStr(lang, cur.WindspeedKmph, cur.WindspeedMiles, cur.Winddir16Point, units)
+	wind := windPart(lang, cur.WindspeedKmph, cur.WindspeedMiles, cur.Winddir16Point, units)
 
-	return fmt.Sprintf("%s %s: %s, %s, 💨 %s", emoji, location, temp, cond, wind), nil
+	return fmt.Sprintf("%s %s: %s", emoji, location, joinNonEmpty(", ", temp, cond, wind)), nil
 }
 
 func fetchTomorrowWeather(lang, location, units string) (string, error) {
-	data, body, err := wttrFetchJSON(location)
+	data, err := wttrCache.Get(location)
 	if err != nil {
 		return "", err
 	}
-	log().Debug("wttr.in tomorrow response", "body", string(body))
 
 	if len(data.Weather) < 2 {
 		return "", fmt.Errorf("weather array too short (%d elements)", len(data.Weather))
@@ -216,10 +224,32 @@ func fetchTomorrowWeather(lang, location, units string) (string, error) {
 	wind := ""
 	if len(d.Hourly) > 4 {
 		h := d.Hourly[4]
-		wind = buildWindStr(lang, h.WindspeedKmph, h.WindspeedMiles, h.Winddir16Point, units)
+		wind = windPart(lang, h.WindspeedKmph, h.WindspeedMiles, h.Winddir16Point, units)
 	}
 
-	return fmt.Sprintf("%s %s: %s, %s, 💨 %s", emoji, location, temp, cond, wind), nil
+	return fmt.Sprintf("%s %s: %s", emoji, location, joinNonEmpty(", ", temp, cond, wind)), nil
+}
+
+// windPart renders the wind segment with its 💨 marker, empty when the wind
+// data is unusable so joinNonEmpty drops the segment entirely.
+func windPart(lang, kmph, miles, dir16pt, units string) string {
+	w := buildWindStr(lang, kmph, miles, dir16pt, units)
+	if w == "" {
+		return ""
+	}
+	return "💨 " + w
+}
+
+// joinNonEmpty skips empty parts so an unknown weather code doesn't render a
+// dangling ", , 💨" separator.
+func joinNonEmpty(sep string, parts ...string) string {
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return strings.Join(out, sep)
 }
 
 func formatTemp(cVal, f, units string) string {
@@ -227,7 +257,11 @@ func formatTemp(cVal, f, units string) string {
 	if units == "imperial" {
 		val, unit = f, "°F"
 	}
-	t, _ := strconv.Atoi(val)
+	t, err := strconv.Atoi(val)
+	if err != nil {
+		// API garbage: render the raw value rather than a misleading +0.
+		return val + unit
+	}
 	if t >= 0 {
 		return fmt.Sprintf("+%d%s", t, unit)
 	}
@@ -239,7 +273,10 @@ func buildWindStr(lang, kmph, miles, dir16pt, units string) string {
 	if units == "imperial" {
 		return tr.T(lang, "wind_imperial", miles, dir)
 	}
-	kmphInt, _ := strconv.Atoi(kmph)
+	kmphInt, err := strconv.Atoi(kmph)
+	if err != nil {
+		return "" // drop the segment; garbage speed must not render as 0 m/s
+	}
 	ms := int(float64(kmphInt)/3.6 + 0.5)
 	return tr.T(lang, "wind_metric", ms, dir)
 }

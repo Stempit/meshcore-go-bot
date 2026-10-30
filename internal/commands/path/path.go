@@ -84,29 +84,42 @@ var (
 
 func getStats() (*statsResponse, error) {
 	statsMu.Lock()
-	defer statsMu.Unlock()
-
 	if statsCache != nil && time.Now().Before(statsExpiry) {
-		return statsCache, nil
+		cached := statsCache
+		statsMu.Unlock()
+		return cached, nil
 	}
+	url := conf.URL
+	statsMu.Unlock()
 
-	if conf.URL == "" {
+	if url == "" {
 		return nil, fmt.Errorf("Stats.url not configured")
 	}
 
-	var raw []byte
-	var err error
-	if strings.HasPrefix(conf.URL, "file://") {
-		raw, err = os.ReadFile(strings.TrimPrefix(conf.URL, "file://"))
-	} else {
-		raw, err = statsHTTPGet(conf.URL)
-	}
+	// Fetch WITHOUT holding statsMu: the fetch takes up to 10s and every
+	// concurrent .path would otherwise block behind it.
+	raw, err := fetchStats(url)
 	if err != nil {
+		// A blip must not discard good data: serve the stale snapshot.
+		statsMu.Lock()
+		stale := statsCache
+		statsMu.Unlock()
+		if stale != nil {
+			log().Warn("stats fetch failed, serving stale cache", "error", err)
+			return stale, nil
+		}
 		return nil, fmt.Errorf("fetch stats: %w", err)
 	}
 
 	var resp statsResponse
 	if err := json.Unmarshal(raw, &resp); err != nil {
+		statsMu.Lock()
+		stale := statsCache
+		statsMu.Unlock()
+		if stale != nil {
+			log().Warn("stats parse failed, serving stale cache", "error", err)
+			return stale, nil
+		}
 		return nil, fmt.Errorf("parse stats: %w", err)
 	}
 	validateStats(&resp)
@@ -115,10 +128,20 @@ func getStats() (*statsResponse, error) {
 	if ttl <= 0 {
 		ttl = 5 * time.Minute
 	}
+	statsMu.Lock()
+	// Last writer wins: concurrent refetches produce equivalent snapshots.
 	statsCache = &resp
 	statsExpiry = time.Now().Add(ttl)
+	statsMu.Unlock()
 	log().Info("stats cache refreshed", "nodes", len(resp.Nodes), "edges", len(resp.Edges))
 	return &resp, nil
+}
+
+func fetchStats(url string) ([]byte, error) {
+	if strings.HasPrefix(url, "file://") {
+		return os.ReadFile(strings.TrimPrefix(url, "file://"))
+	}
+	return statsHTTPGet(url)
 }
 
 func statsHTTPGet(rawURL string) ([]byte, error) {
@@ -146,8 +169,9 @@ const maxStatsBytes = 5 << 20 // 5 MiB
 // validateStats drops nodes whose public_key_hex is malformed (short or not
 // hex) and any edge referencing a dropped node. The stats source is external
 // and untrusted: the route builder slices pk[:2] off every key, so a
-// truncated key would panic the handler. Keys are compared case-insensitively
-// so mixed-case sources cannot silently strand edges.
+// truncated key would panic the handler. Keys are normalized to uppercase —
+// name resolution compares against an uppercased query, and mixed-case
+// sources must not silently strand edges.
 func validateStats(resp *statsResponse) {
 	ok := make(map[string]bool, len(resp.Nodes))
 	nodes := make([]statsNode, 0, len(resp.Nodes))
@@ -156,12 +180,15 @@ func validateStats(resp *statsResponse) {
 			log().Warn("stats: dropping node with malformed public_key_hex", "key", n.PublicKeyHex)
 			continue
 		}
-		ok[strings.ToLower(n.PublicKeyHex)] = true
+		n.PublicKeyHex = strings.ToUpper(n.PublicKeyHex)
+		ok[n.PublicKeyHex] = true
 		nodes = append(nodes, n)
 	}
 	edges := make([]statsEdge, 0, len(resp.Edges))
 	for _, e := range resp.Edges {
-		if ok[strings.ToLower(e.NodeA)] && ok[strings.ToLower(e.NodeB)] {
+		e.NodeA = strings.ToUpper(e.NodeA)
+		e.NodeB = strings.ToUpper(e.NodeB)
+		if ok[e.NodeA] && ok[e.NodeB] {
 			edges = append(edges, e)
 		}
 	}
