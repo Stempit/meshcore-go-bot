@@ -25,7 +25,7 @@ Adding a command = create `internal/commands/<name>/` implementing `registry.Com
 | [`eightball/`](eightball/README.md) | `.8ball` | magic 8-ball |
 | [`ticket/`](ticket/README.md) | `.ticket` | stable random callsign |
 | [`help/`](help/README.md) | `.help` | command index |
-| [`claw/`](claw/README.md) | `.claw` / `@[Bot]` | picoclaw AI agent (interceptor) |
+| [`agent/`](agent/README.md) | `.agent` / `@[Bot]` | your AI agent — nanobot or any OpenAI-compatible API (interceptor) |
 | [`bbs/`](bbs/README.md) | `.2ch` | forum / BBS mode (stateful interceptor) |
 | [`dice/`](dice/README.md) | `.dice` | roll dice / channel roll-off |
 | [`num/`](num/README.md) | `.num` | guess the number |

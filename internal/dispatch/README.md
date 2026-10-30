@@ -51,7 +51,7 @@ rather than blocking.
 ## Concurrency model
 
 - **Inbound is concurrent** — a goroutine per message, capped at 8, so a slow command
-  (`.llm`, `.claw`) can't stall fast ones.
+  (`.llm`, `.agent`) can't stall fast ones.
 - **Outbound is serialized** — `runSender` drains one at a time, waiting ≥1s after
   activity (RX→TX switch) and ≥5s between radio sends.
 - **One command in flight per sender** — a per-sender guard (`dm:<pubkey>` / `ch:<name>`)

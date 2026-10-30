@@ -149,8 +149,8 @@ in `config.example.yaml`.
 
 - **`Matcher`** — custom matching beyond `Triggers` (e.g. an `@[Bot]` mention or
   stateful interception). When implemented it is used *instead* of `Triggers`.
-  Use `Priority` to order interceptors (claw=20 > bbs=10 > normal=0). See
-  [claw](../internal/commands/claw/claw.go) and [bbs](../internal/commands/bbs/bbs.go).
+  Use `Priority` to order interceptors (agent=20 > bbs=10 > normal=0). See
+  [agent](../internal/commands/agent/agent.go) and [bbs](../internal/commands/bbs/bbs.go).
 - **`Configurable`** — the config + enable gate from Step 3.
 
 ---

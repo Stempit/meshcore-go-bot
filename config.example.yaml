@@ -70,7 +70,7 @@ Shrink:
   overrides:              # per-command/source variant override
     news: skip            # drop news items that don't fit
     last: truncate        # history lines: cut, don't LLM-shrink
-    claw: split           # picoclaw replies: numbered [i/N] parts
+    agent: split          # AI agent replies: numbered [i/N] parts
     bbs: split            # BBS posts must stay verbatim
     telegram: split       # bridged Telegram messages
   llm:                    # the "llm" variant (uses a light model to compress)
@@ -131,13 +131,15 @@ Trace:
   lat: 0
   lon: 0
 
-Claw:
-  enabled: false                       # false hides .claw and @[bot_name] mentions from routing and help
-  url: "ws://localhost:18790/pico/ws"  # picoclaw gateway directly (NOT port 18800 dashboard)
-  token: "your-pico-token"            # from picoclaw dashboard → Pico channel token
-  timeout_sec: 180
-  bot_name: "Yorick 💀"               # mesh display name; @[bot_name] messages are routed to picoclaw
-  # mesh-fit variant for .claw replies is set in Shrink.overrides (default: split)
+Agent:
+  enabled: false                    # false hides .agent and @[bot_name] mentions from routing and help
+  type: openai                      # openai (default) | picoclaw
+  url: "http://127.0.0.1:8900"      # openai: agent base URL; picoclaw: ws://host:18790/pico/ws (NOT port 18800 dashboard)
+  token: ""                         # bearer token (nanobot: NANOBOT_API_KEY); empty = keyless local server
+  model: ""                         # openai only; empty = agent's own default (nanobot takes it from config.json)
+  timeout_sec: 180                  # agent runs with tools can be slow
+  bot_name: "Yorick 💀"             # mesh display name; @[bot_name] messages are routed to the agent
+  # mesh-fit variant for .agent replies is set in Shrink.overrides (default: split)
 
 Security:
   channels:

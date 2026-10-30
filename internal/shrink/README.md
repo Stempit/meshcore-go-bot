@@ -33,7 +33,7 @@ because it falls back to `split` (which always succeeds) there is no give-up mes
    `truncate`.
 2. **Fit each element independently**, then flatten. Slice length is the only "single vs
    list" signal — a one-element answer may split into `[i/N]`; an N-element list
-   (`.news`, `.bbs`, picoclaw parts) fits each item on its own.
+   (`.news`, `.bbs`, agent parts) fits each item on its own.
 3. **Account for the prefix** (`@[sender] `, `[TG:sender] `) — only the first wire
    message carries it, fitted against `max_bytes − len(prefix)`.
 4. **Guarantee the limit** — every returned message is `≤ max_bytes` as a backstop.
@@ -58,7 +58,7 @@ Shrink:
   ellipsis: "…"
   cyr_to_lat: true      # lossless Cyrillic→Latin squeeze
   overrides:            # per-name variant override (name = command or source key)
-    claw: split
+    agent: split
     news: skip
     bbs:  split
     telegram: split

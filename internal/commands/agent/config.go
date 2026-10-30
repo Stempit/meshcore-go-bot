@@ -1,0 +1,56 @@
+package agent
+
+import (
+	"github.com/stempit/meshcore-go-bot/internal/bridge/agentclient"
+	"github.com/stempit/meshcore-go-bot/internal/config"
+	"github.com/stempit/meshcore-go-bot/internal/logging"
+	"github.com/stempit/meshcore-go-bot/internal/support/registry"
+)
+
+var log = logging.For("commands")
+
+// cfg is the agent plugin's config section (yaml key "Agent"): the plugin's
+// own flags plus the inline adapter config (type/url/token/model, documented
+// on agentclient.Config).
+type cfg struct {
+	Enabled            bool   `yaml:"enabled"`
+	TimeoutSec         int    `yaml:"timeout_sec"` // default 180
+	BotName            string `yaml:"bot_name"`    // mesh display name of the bot, e.g. "Yorick 💀"
+	agentclient.Config `yaml:",inline"`
+}
+
+var conf cfg
+
+// client is built once in Configure; the Enabled gate in Dispatch means
+// Handle never runs before that.
+var client agentclient.Client
+
+func (plugin) ConfigKey() string { return "Agent" }
+
+func (plugin) Configure(s config.Sectioner) error {
+	if err := s.Section("Agent", &conf); err != nil {
+		return err
+	}
+	if !conf.Enabled {
+		return nil
+	}
+	if conf.Type == "" {
+		conf.Type = "openai"
+	}
+	// Build the client at startup so an unknown type or missing url fails
+	// loudly via registry.ConfigureAll instead of at first use.
+	cl, err := agentclient.New(conf.Config)
+	if err != nil {
+		return err
+	}
+	client = cl
+	return nil
+}
+
+// Enabled honors the Agent.enabled flag: false hides .agent and the @[BotName]
+// mention matcher from routing and help entirely (the example config ships
+// enabled: false). The handler's not_configured reply is a defensive fallback
+// only — Dispatch never routes to a disabled plugin.
+func (plugin) Enabled() bool { return conf.Enabled }
+
+func init() { registry.Register(plugin{}) }

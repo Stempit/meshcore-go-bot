@@ -30,7 +30,7 @@ so each plugin's `conf` is configured-once then read-only. Defaults live in the 
 
 This keeps the user-facing config a **single file** while moving Go ownership of each
 section next to its command. Infra vs per-command tiering: infra stays in `Config`;
-per-command sections (`Weather`, `Top`, `Words`, `Claw`, `Stats`, `vote`) live in the
+per-command sections (`Weather`, `Top`, `Words`, `Agent`, `Stats`, `vote`) live in the
 plugin folders. `Trace` stays central even though `.trace` is a command, because
 dispatch reads it while building `PingMeta` before it knows which command will run.
 

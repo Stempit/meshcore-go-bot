@@ -13,7 +13,7 @@ runtime and the pure message fitter live in
 | [`dispatch/`](dispatch/README.md) | the message engine: inbound worker pool + serialized outbound sender |
 | [`commands/`](commands/README.md) | self-registering command plugins (one folder each) |
 | [`support/`](support/README.md) | shared framework + support layer above `commands/` (`registry`, `games`, `helpers`, `historylog`) |
-| [`bridge/`](bridge/README.md) | external integrations (Telegram, MQTT, LLM, picoclaw, hazard alerts) |
+| [`bridge/`](bridge/README.md) | external integrations (Telegram, MQTT, LLM, universal agent client, hazard alerts) |
 | [`greeter/`](greeter/README.md) | greets newly-seen nodes |
 | [`migrator/`](migrator/README.md) | nudges 1-byte-hash nodes to switch to 2-byte |
 | [`shrink/`](shrink/README.md) | config policy over the `fit` package (meshcore-kit): fits every outgoing reply into the 140-byte mesh limit |

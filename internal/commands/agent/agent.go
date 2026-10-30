@@ -1,7 +1,9 @@
-// Package claw routes .claw and @[BotName] mentions to the picoclaw AI agent.
+// Package agent routes .agent and @[BotName] mentions to the user's AI agent
+// (nanobot behind the OpenAI-compatible adapter, a legacy picoclaw gateway, or
+// any other backend of internal/bridge/agentclient).
 // It is an interceptor: the @[BotName] mention is matched at a Priority above
 // bbs so a mention beats an active BBS session.
-package claw
+package agent
 
 import (
 	"context"
@@ -11,7 +13,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/stempit/meshcore-go-bot/internal/bridge/picoclaw"
 	"github.com/stempit/meshcore-go-bot/internal/support/i18n"
 	"github.com/stempit/meshcore-go-bot/internal/support/netgate"
 	"github.com/stempit/meshcore-go-bot/internal/support/registry"
@@ -22,50 +23,51 @@ var langFS embed.FS
 
 var tr = i18n.MustLoad(langFS)
 
-// clawPriority sits above bbs (10) so a @[BotName] mention beats BBS mode.
-const clawPriority = 20
+// agentPriority sits above bbs (10) so a @[BotName] mention beats BBS mode.
+const agentPriority = 20
 
 type plugin struct{}
 
 func (plugin) Meta() registry.Meta {
 	return registry.Meta{
-		Name:      "claw",
-		Triggers:  []string{".claw"},
+		Name:      "agent",
+		Triggers:  []string{".agent"},
 		Match:     registry.Prefix,
-		HelpShort: "ask picoclaw",
-		HelpLong:  ".claw <question>\nask the picoclaw AI agent",
+		HelpShort: "ask your AI agent",
+		HelpLong:  ".agent <question>\nask your AI agent",
 		Group:     "AI",
-		Priority:  clawPriority,
+		Priority:  agentPriority,
 	}
 }
 
-// LocalizedHelp returns the per-language long help for ".claw help".
+// LocalizedHelp returns the per-language long help for ".agent help".
 func (plugin) LocalizedHelp(lang string) string { return tr.T(lang, "help.long") }
 
-// Matches handles both the @[BotName] mention (when configured) and the .claw
-// trigger, reproducing the command's two original entry points.
-func (plugin) Matches(c registry.Ctx) bool {
-	if conf.Enabled && conf.BotName != "" {
-		mp := strings.ToLower("@[" + conf.BotName + "]")
-		if strings.HasPrefix(c.Lower, mp) {
-			return true
-		}
+// mentionPrefix returns "@[BotName]" when mention routing is active, else "".
+func mentionPrefix() string {
+	if !conf.Enabled || conf.BotName == "" {
+		return ""
 	}
-	return c.Lower == ".claw" || strings.HasPrefix(c.Lower, ".claw ")
+	return "@[" + conf.BotName + "]"
+}
+
+// Matches handles both the @[BotName] mention (when configured) and the .agent
+// trigger, reproducing the command's two entry points.
+func (plugin) Matches(c registry.Ctx) bool {
+	if mp := mentionPrefix(); mp != "" && strings.HasPrefix(c.Lower, strings.ToLower(mp)) {
+		return true
+	}
+	return c.Lower == ".agent" || strings.HasPrefix(c.Lower, ".agent ")
 }
 
 func (plugin) Handle(c registry.Ctx) ([]string, error) {
-	// @[BotName] mention: rewrite to a .claw prompt.
-	if conf.Enabled && conf.BotName != "" {
-		mentionPrefix := "@[" + conf.BotName + "]"
-		if strings.HasPrefix(c.Lower, strings.ToLower(mentionPrefix)) {
-			prompt := mentionPrompt(c.Trimmed, mentionPrefix)
-			return processClaw(c.Lang, prompt, c.SenderKey, c.Channel)
-		}
+	if mp := mentionPrefix(); mp != "" && strings.HasPrefix(c.Lower, strings.ToLower(mp)) {
+		// @[BotName] mention: rewrite to an .agent prompt.
+		return processAgent(c.Lang, mentionPrompt(c.Trimmed, mp), c.SenderKey, c.Channel)
 	}
-	// claw is a Matcher interceptor, so Dispatch leaves Rest empty; cut the
+	// agent is a Matcher interceptor, so Dispatch leaves Rest empty; cut the
 	// trigger with the case-insensitive Arg helper instead.
-	return processClaw(c.Lang, c.Arg(".claw"), c.SenderKey, c.Channel)
+	return processAgent(c.Lang, c.Arg(".agent"), c.SenderKey, c.Channel)
 }
 
 // mentionPrompt extracts the prompt after a mention that matched
@@ -81,7 +83,7 @@ func mentionPrompt(trimmed, mentionPrefix string) string {
 	return strings.TrimSpace(string(runes[n:]))
 }
 
-func processClaw(lang, prompt, senderKey, channelName string) ([]string, error) {
+func processAgent(lang, prompt, senderKey, channelName string) ([]string, error) {
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
 		return []string{tr.T(lang, "usage")}, nil
@@ -106,24 +108,24 @@ func processClaw(lang, prompt, senderKey, channelName string) ([]string, error) 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSec)*time.Second)
 	defer cancel()
 
-	sessionID := clawSessionID(senderKey, channelName)
-	parts, err := picoclaw.Ask(ctx, conf.URL, conf.Token, sessionID, prompt)
+	sessionID := agentSessionID(senderKey, channelName)
+	parts, err := client.Ask(ctx, sessionID, prompt)
 	if err != nil {
-		log().Warn("picoclaw request failed", "error", err)
+		log().Warn("agent request failed", "error", err)
 		return []string{tr.T(lang, "connection_error")}, nil
 	}
-	log().Info("picoclaw response", "parts", len(parts))
+	log().Info("agent response", "parts", len(parts), "type", conf.Type)
 
-	// Each picoclaw part is a separate logical message; mesh-fit shrinking
-	// (the "claw" split override) is applied at the send site.
+	// Each agent part is a separate logical message; mesh-fit shrinking
+	// (the "agent" split override) is applied at the send site.
 	return parts, nil
 }
 
-// clawSessionID derives a stable, URL-safe session identifier.
+// agentSessionID derives a stable, URL-safe session identifier.
 // Channel messages share one session per channel; DMs get one session per sender.
 // senderKey is raw bytes (from contact.PublicKey); we hex-encode to avoid
 // JSON encoding corrupting non-UTF-8 byte sequences.
-func clawSessionID(senderKey, channelName string) string {
+func agentSessionID(senderKey, channelName string) string {
 	if channelName != "" {
 		return fmt.Sprintf("mesh-ch-%x", []byte(channelName))
 	}

@@ -1,0 +1,8 @@
+# AI agent bridge (Agent.type picks the backend).
+help.long: |-
+  .agent <question>
+  ask your AI agent
+usage: "usage: .agent <question>"
+not_configured: "agent not configured"
+connection_error: "agent connection error"
+busy: "the agent is busy, try again in a minute."

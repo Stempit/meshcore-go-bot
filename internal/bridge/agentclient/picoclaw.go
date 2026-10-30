@@ -1,8 +1,9 @@
-package picoclaw
+package agentclient
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -10,6 +11,21 @@ import (
 
 	"github.com/gorilla/websocket"
 )
+
+// picoClaw speaks the legacy Pico Protocol WebSocket of a picoclaw gateway
+// (moved unchanged from the former internal/bridge/picoclaw package, now as a
+// Client adapter).
+type picoClaw struct {
+	url   string
+	token string
+}
+
+func newPicoClaw(cfg Config) (*picoClaw, error) {
+	if err := checkScheme(cfg.URL, "ws", "wss"); err != nil {
+		return nil, fmt.Errorf(`agentclient: picoclaw adapter %w (e.g. "ws://host:18790/pico/ws")`, err)
+	}
+	return &picoClaw{url: cfg.URL, token: cfg.Token}, nil
+}
 
 type picoMessage struct {
 	Type      string         `json:"type"`
@@ -24,13 +40,13 @@ type picoMessage struct {
 // the agent — typically one item, but multi-message turns are preserved.
 //
 // sessionID should be stable per-user so conversation history is maintained.
-// wsURL must point directly at the picoclaw gateway (default port 18790), e.g.
+// url must point directly at the picoclaw gateway (default port 18790), e.g.
 // "ws://host:18790/pico/ws". The web dashboard port (18800) uses session-cookie
 // auth and cannot be used here.
-func Ask(ctx context.Context, wsURL, token, sessionID, text string) ([]string, error) {
+func (c *picoClaw) Ask(ctx context.Context, sessionID, text string) ([]string, error) {
 	// Pass session_id as a query parameter so the gateway registers the connection
 	// under this session and can route responses back to us.
-	u, err := url.Parse(wsURL)
+	u, err := url.Parse(c.url)
 	if err != nil {
 		return nil, fmt.Errorf("invalid url: %w", err)
 	}
@@ -39,7 +55,7 @@ func Ask(ctx context.Context, wsURL, token, sessionID, text string) ([]string, e
 	u.RawQuery = q.Encode()
 
 	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
-	header := http.Header{"Authorization": {"Bearer " + token}}
+	header := http.Header{"Authorization": {"Bearer " + c.token}}
 
 	conn, resp, err := dialer.DialContext(ctx, u.String(), header)
 	if err != nil {
@@ -163,7 +179,7 @@ func Ask(ctx context.Context, wsURL, token, sessionID, text string) ([]string, e
 
 	msgs := buildMessages(msgOrder, msgContent)
 	if len(msgs) == 0 {
-		return nil, fmt.Errorf("no response received")
+		return nil, errors.New("no response received")
 	}
 	return msgs, nil
 }
