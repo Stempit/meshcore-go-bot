@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 	"sync"
+
+	"github.com/stempit/meshcore-go-bot/internal/support/helpers"
 )
 
 // KnownKeys tracks which node public keys have already been greeted.
@@ -70,7 +72,9 @@ func (kk *KnownKeys) CheckAndAdd(pubKey []byte, name string) (alreadyKnown bool,
 	defer f.Close()
 	line := id
 	if name != "" {
-		line += " # " + name
+		// Node names are attacker-controlled: a newline would forge extra
+		// key lines that NewKnownKeys parses back as known keys.
+		line += " # " + helpers.SingleLine(name)
 	}
 	_, err = fmt.Fprintln(f, line)
 	return false, err

@@ -27,6 +27,8 @@ import (
 	"sync"
 	"time"
 	"unicode"
+
+	"github.com/stempit/meshcore-go-bot/internal/support/helpers"
 )
 
 // keyPrefixLen is the number of public-key bytes used to name a DM log file.
@@ -189,6 +191,12 @@ func (l *Logger) write(relKey, line string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
+	// Sender names and message text are attacker-controlled on a public mesh:
+	// a raw newline would forge an extra entry that the readers (and .last/.top)
+	// parse back as authentic history. Every Log* line is single-line by design;
+	// the trailing newline is stripped here and re-added by Fprintln below.
+	line = helpers.SingleLine(strings.TrimSuffix(line, "\n"))
+
 	f, ok := l.files[relKey]
 	if !ok {
 		dir := filepath.Join(l.baseDir, filepath.Dir(relKey))
@@ -204,7 +212,7 @@ func (l *Logger) write(relKey, line string) error {
 		l.files[relKey] = f
 	}
 
-	if _, err := fmt.Fprint(f, line); err != nil {
+	if _, err := fmt.Fprintln(f, line); err != nil {
 		return fmt.Errorf("historylog: write: %w", err)
 	}
 	return nil
