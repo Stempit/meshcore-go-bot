@@ -1,23 +1,15 @@
 package config
 
+import "slices"
+
 // IsAllowed returns true if the key should be processed.
 // Whitelist takes priority: if non-empty, key must be in it.
 // Otherwise key must not be in blacklist.
 func (s *SecurityListConfig) IsAllowed(key string) bool {
 	if len(s.Whitelist) > 0 {
-		for _, v := range s.Whitelist {
-			if v == key {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(s.Whitelist, key)
 	}
-	for _, v := range s.Blacklist {
-		if v == key {
-			return false
-		}
-	}
-	return true
+	return !slices.Contains(s.Blacklist, key)
 }
 
 // Lookup returns the redirect notice for command name on channel, and whether a
@@ -28,22 +20,13 @@ func (r *RedirectConfig) Lookup(name, channel string) (string, bool) {
 		return "", false
 	}
 	for _, rule := range r.Rules {
-		if !contains(rule.Commands, name) {
+		if !slices.Contains(rule.Commands, name) {
 			continue
 		}
-		if len(rule.On) > 0 && !contains(rule.On, channel) {
+		if len(rule.On) > 0 && !slices.Contains(rule.On, channel) {
 			continue
 		}
 		return rule.Message, true
 	}
 	return "", false
-}
-
-func contains(list []string, v string) bool {
-	for _, e := range list {
-		if e == v {
-			return true
-		}
-	}
-	return false
 }

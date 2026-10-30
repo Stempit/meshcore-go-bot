@@ -3,7 +3,10 @@
 // name-clipping logic.
 package helpers
 
-import "strings"
+import (
+	"strings"
+	"unicode/utf8"
+)
 
 // HistoryDir is the base directory the .last/.top/.stat readers scan for
 // channel and DM message history (written by the bot's history logger).
@@ -21,9 +24,8 @@ func SingleLine(s string) string {
 // had to cut. It counts runes (not bytes) so multi-byte Cyrillic names stay
 // readable; callers that need a byte budget must clip by bytes themselves.
 func ClipRunes(s string, maxRunes int) string {
-	r := []rune(s)
-	if len(r) <= maxRunes {
+	if utf8.RuneCountInString(s) <= maxRunes { // no-cut fast path: skip the []rune alloc
 		return s
 	}
-	return string(r[:maxRunes]) + "…"
+	return string([]rune(s)[:maxRunes]) + "…"
 }

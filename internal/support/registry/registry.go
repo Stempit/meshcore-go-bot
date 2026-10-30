@@ -66,8 +66,30 @@ type Configurable interface {
 
 var registered []Command
 
+// dispatchOrderCache holds the commands sorted by Priority desc, ties broken by
+// registration order. Registration happens in init() of every plugin — before
+// any message is processed — so the cache is rebuilt only there and never
+// re-sorted per incoming message.
+var dispatchOrderCache []Command
+
 // Register adds a command; called from each plugin's init().
-func Register(c Command) { registered = append(registered, c) }
+func Register(c Command) {
+	registered = append(registered, c)
+	dispatchOrderCache = nil
+}
+
+// dispatchOrder returns the commands in routing order, sorting once and reusing
+// the cached slice (Dispatch only iterates it).
+func dispatchOrder() []Command {
+	if dispatchOrderCache == nil {
+		dispatchOrderCache = make([]Command, len(registered))
+		copy(dispatchOrderCache, registered)
+		sort.SliceStable(dispatchOrderCache, func(i, j int) bool {
+			return dispatchOrderCache[i].Meta().Priority > dispatchOrderCache[j].Meta().Priority
+		})
+	}
+	return dispatchOrderCache
+}
 
 // ConfigureAll runs each Configurable plugin's Configure in registration order.
 // It fails loud on a malformed/invalid section value.
@@ -90,17 +112,6 @@ func enabled(c Command) bool {
 		return cf.Enabled()
 	}
 	return true
-}
-
-// dispatchOrder returns the registered commands sorted by Priority desc, ties
-// broken by registration order (stable sort over a copy).
-func dispatchOrder() []Command {
-	out := make([]Command, len(registered))
-	copy(out, registered)
-	sort.SliceStable(out, func(i, j int) bool {
-		return out[i].Meta().Priority > out[j].Meta().Priority
-	})
-	return out
 }
 
 // matchedTrigger reports whether c handles ctx, via its Matcher or its

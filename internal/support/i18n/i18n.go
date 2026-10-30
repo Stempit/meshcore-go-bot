@@ -29,6 +29,12 @@ type Localizer struct {
 // Load parses every "<lang>.yaml" file found under fsys (searched recursively),
 // using each file's base name without extension as the language code. Each file
 // must be a flat YAML map of key -> string | list-of-strings.
+//
+// T formats via fmt.Sprintf, so a stray '%' in a translation garbles the output
+// whenever args are passed (templates must escape a literal percent as %%).
+// Load validates what it can statically: every key present in both the Base
+// language and another language must carry the same number of %-verbs, since
+// translations must preserve argument order.
 func Load(fsys fs.FS) (*Localizer, error) {
 	l := &Localizer{m: map[string]map[string]any{}}
 	err := fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, err error) error {
@@ -53,7 +59,52 @@ func Load(fsys fs.FS) (*Localizer, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := l.validateVerbParity(); err != nil {
+		return nil, err
+	}
 	return l, nil
+}
+
+// validateVerbParity checks that translated string keys keep the same number
+// of printf verbs as the Base catalog. Placeholders are positional, so a
+// missing or extra verb in a translation misroutes arguments at runtime.
+func (l *Localizer) validateVerbParity() error {
+	base := l.m[Base]
+	for key, bv := range base {
+		bs, ok := bv.(string)
+		if !ok {
+			continue
+		}
+		bn := verbCount(bs)
+		for lang, cat := range l.m {
+			if lang == Base {
+				continue
+			}
+			ls, ok := cat[key].(string)
+			if !ok || verbCount(ls) == bn {
+				continue
+			}
+			return fmt.Errorf("key %q: %s has %d placeholder(s), %s has %d — translations must preserve argument order",
+				key, Base, bn, lang, verbCount(ls))
+		}
+	}
+	return nil
+}
+
+// verbCount counts printf-style verbs, treating "%%" as an escaped percent.
+func verbCount(s string) int {
+	n := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] != '%' {
+			continue
+		}
+		if i+1 < len(s) && s[i+1] == '%' {
+			i++
+			continue
+		}
+		n++
+	}
+	return n
 }
 
 // MustLoad is Load for package-init use with embedded data; it panics on error.
