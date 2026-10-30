@@ -202,3 +202,21 @@ vote:
   max_options: 6     # max options per poll; 0 or unset = default 6
   # The results list is multi-line; to wrap (rather than truncate) it, add:
   #   Shrink.overrides.vote: split
+
+poker:
+  # ".poker" — fixed-limit Texas Hold'em on a channel (2–6 players). The
+  # channel carries dealer commentary only (deals, betting news, streets,
+  # results); every betting action happens in the bot's DMs, where players
+  # also receive hole cards and a personal event log. Turn prompts are
+  # dynamic and priced ("call 10 / raise до 20 / fold"). Opt-in: stays off
+  # until enabled.
+  enabled: false
+  starting_stack: 200     # chips per player; 0/unset = default 200
+  small_bet: 10           # bet size preflop/flop (blinds are small_bet/2 and small_bet); default 10
+  big_bet: 20             # bet size turn/river; default 20
+  max_raises: 3           # raises per street; default 3
+  max_players: 6          # table size, 2–6; default 6
+  join_sec: 60            # join window after .poker start; default 60
+  turn_timeout_sec: 90    # auto check-else-fold per turn; default 90
+  deal_pause_sec: 20      # join window between hands; default 20
+  idle_timeout_sec: 900   # idle table close; default 900 (15 min)
