@@ -42,7 +42,7 @@ func (plugin) Meta() registry.Meta {
 func (plugin) LocalizedHelp(lang string) string { return tr.T(lang, "help.long") }
 
 func (plugin) Handle(c registry.Ctx) ([]string, error) {
-	return processHang(c.Lang, c.Text, c.SenderKey, c.SenderName, c.Channel)
+	return processHang(c.Lang, c.Rest, c.SenderKey, c.SenderName, c.Channel)
 }
 
 //go:embed words_ru.txt
@@ -121,8 +121,9 @@ var (
 //	.hang top           – leaderboard for this scope (last 30 days)
 //
 // Works in both channels (collaborative) and DMs (solo).
+// text is Ctx.Rest: everything after the matched ".hang" trigger.
 func processHang(lang, text, senderKey, senderName, channelName string) ([]string, error) {
-	rest := strings.TrimSpace(strings.TrimPrefix(text, ".hang"))
+	rest := strings.TrimSpace(text)
 	fields := strings.Fields(rest)
 
 	verb := ""

@@ -99,7 +99,9 @@ func (plugin) Handle(c registry.Ctx) ([]string, error) {
 			exitBBSMode(c.SenderKey)
 			return []string{tr.T(c.Lang, "left")}, nil
 		}
-		return processBBSCommand(c.Lang, c.Text, c.SenderKey, c.SenderName)
+		// Trimmed, not Text: the sub-command parsers slice fixed byte offsets
+		// ("/nw …"), which is only correct when leading space is already gone.
+		return processBBSCommand(c.Lang, c.Trimmed, c.SenderKey, c.SenderName)
 	}
 	// Enter BBS mode. Unidentified senders are refused: sessions are keyed on
 	// SenderKey, which is "" for anyone the bot cannot resolve — one anonymous

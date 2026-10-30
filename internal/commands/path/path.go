@@ -43,7 +43,7 @@ func (plugin) Meta() registry.Meta {
 func (plugin) LocalizedHelp(lang string) string { return tr.T(lang, "help.long") }
 
 func (plugin) Handle(c registry.Ctx) ([]string, error) {
-	return processPath(c.Lang, c.Trimmed)
+	return processPath(c.Lang, c.Rest)
 }
 
 // ── JSON models (mirrors Let's Mesh analyzer edge-stats API) ─────────────────
@@ -479,6 +479,8 @@ func trySplits(stats *statsResponse, rawArgs []string) [][2]string {
 //	.path <from> to <to>     — best path; "to" is the explicit separator
 //	.path <from> <to>        — both names may contain spaces; the unique split
 //	                           where both parts match a node is chosen automatically
+//
+// text is Ctx.Rest: everything after the matched ".path" trigger.
 func processPath(lang, text string) ([]string, error) {
 	stats, err := getStats()
 	if err != nil {
@@ -486,8 +488,8 @@ func processPath(lang, text string) ([]string, error) {
 		return []string{tr.T(lang, "stats_unavailable")}, nil
 	}
 
-	// Strip prefix, preserve original case for name matching.
-	rawArgs := strings.Fields(strings.TrimSpace(strings.TrimPrefix(text, ".path")))
+	// Arguments preserve original case for name matching.
+	rawArgs := strings.Fields(strings.TrimSpace(text))
 
 	if len(rawArgs) == 0 {
 		rCount, eCount := 0, 0

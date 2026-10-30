@@ -40,7 +40,7 @@ func (plugin) Meta() registry.Meta {
 func (plugin) LocalizedHelp(lang string) string { return tr.T(lang, "help.long") }
 
 func (plugin) Handle(c registry.Ctx) ([]string, error) {
-	return processDice(c.Lang, c.Text, c.SenderName, c.Channel)
+	return processDice(c.Lang, c.Rest, c.SenderName, c.Channel)
 }
 
 const (
@@ -76,8 +76,9 @@ var (
 //	.dice status                 – who has rolled so far
 //
 // senderName attributes rolls; channelName keys the roll-off (empty in DMs).
+// text is Ctx.Rest: everything after the matched ".dice" trigger.
 func processDice(lang, text, senderName, channelName string) ([]string, error) {
-	rest := strings.TrimSpace(strings.TrimPrefix(text, ".dice"))
+	rest := strings.TrimSpace(text)
 	fields := strings.Fields(rest)
 
 	verb := ""

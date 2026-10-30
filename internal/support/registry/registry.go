@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/stempit/meshcore-go-bot/internal/config"
 )
@@ -102,25 +103,41 @@ func dispatchOrder() []Command {
 	return out
 }
 
-// matches reports whether c handles ctx, via its Matcher or its Triggers/Match.
-func matches(c Command, ctx Ctx) bool {
+// matchedTrigger reports whether c handles ctx, via its Matcher or its
+// Triggers/Match, returning the matched trigger ("" for Matcher interceptors,
+// which cut their own prefixes) so Dispatch can fill Ctx.Rest.
+func matchedTrigger(c Command, ctx Ctx) (string, bool) {
 	if m, ok := c.(Matcher); ok {
-		return m.Matches(ctx)
+		return "", m.Matches(ctx)
 	}
 	meta := c.Meta()
 	for _, t := range meta.Triggers {
 		switch meta.Match {
 		case Exact:
 			if ctx.Lower == t {
-				return true
+				return t, true
 			}
 		case Prefix:
 			if ctx.Lower == t || strings.HasPrefix(ctx.Lower, t+" ") {
-				return true
+				return t, true
 			}
 		}
 	}
-	return false
+	return "", false
+}
+
+// restAfterTrigger cuts the matched trigger off the original-case text,
+// rune-aligned (ToLower preserves rune count, not byte length), and trims the
+// remainder. Exact matches leave Rest empty.
+func restAfterTrigger(ctx Ctx, trigger string) string {
+	if trigger == "" {
+		return ""
+	}
+	r := []rune(ctx.Trimmed)
+	if n := utf8.RuneCountInString(trigger); len(r) >= n {
+		return strings.TrimSpace(string(r[n:]))
+	}
+	return ""
 }
 
 // Dispatch routes ctx to the first matching enabled command (highest Priority
@@ -135,20 +152,23 @@ func Dispatch(ctx Ctx) (replies []string, name string, err error) {
 		if !enabled(c) {
 			continue
 		}
-		if matches(c, ctx) {
-			name := c.Meta().Name
-			// Redirect gate: steer flood-prone commands off busy channels before
-			// the handler runs, so no game state mutates and no network call fires.
-			// DMs are exempt (Lookup returns false for an empty channel).
-			if msg, ok := ctx.Cfg.Redirect.Lookup(name, ctx.Channel); ok {
-				if allowNotice(ctx.Channel, name, ctx.Cfg.Redirect.Cooldown) {
-					return []string{msg}, name, nil
-				}
-				return nil, "", nil // throttled → stay silent
-			}
-			r, e := c.Handle(ctx)
-			return r, name, e
+		trig, ok := matchedTrigger(c, ctx)
+		if !ok {
+			continue
 		}
+		name := c.Meta().Name
+		// Redirect gate: steer flood-prone commands off busy channels before
+		// the handler runs, so no game state mutates and no network call fires.
+		// DMs are exempt (Lookup returns false for an empty channel).
+		if msg, ok := ctx.Cfg.Redirect.Lookup(name, ctx.Channel); ok {
+			if allowNotice(ctx.Channel, name, ctx.Cfg.Redirect.Cooldown) {
+				return []string{msg}, name, nil
+			}
+			return nil, "", nil // throttled → stay silent
+		}
+		ctx.Rest = restAfterTrigger(ctx, trig)
+		r, e := c.Handle(ctx)
+		return r, name, e
 	}
 	return nil, "", nil
 }

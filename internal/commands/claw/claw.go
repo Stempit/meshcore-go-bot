@@ -59,10 +59,12 @@ func (plugin) Handle(c registry.Ctx) ([]string, error) {
 		mentionPrefix := "@[" + conf.BotName + "]"
 		if strings.HasPrefix(c.Lower, strings.ToLower(mentionPrefix)) {
 			prompt := mentionPrompt(c.Trimmed, mentionPrefix)
-			return processClaw(c.Lang, ".claw "+prompt, c.SenderKey, c.Channel)
+			return processClaw(c.Lang, prompt, c.SenderKey, c.Channel)
 		}
 	}
-	return processClaw(c.Lang, c.Text, c.SenderKey, c.Channel)
+	// claw is a Matcher interceptor, so Dispatch leaves Rest empty; cut the
+	// trigger with the case-insensitive Arg helper instead.
+	return processClaw(c.Lang, c.Arg(".claw"), c.SenderKey, c.Channel)
 }
 
 // mentionPrompt extracts the prompt after a mention that matched
@@ -78,8 +80,8 @@ func mentionPrompt(trimmed, mentionPrefix string) string {
 	return strings.TrimSpace(string(runes[n:]))
 }
 
-func processClaw(lang, text, senderKey, channelName string) ([]string, error) {
-	prompt := strings.TrimSpace(strings.TrimPrefix(text, ".claw"))
+func processClaw(lang, prompt, senderKey, channelName string) ([]string, error) {
+	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
 		return []string{tr.T(lang, "usage")}, nil
 	}

@@ -38,7 +38,7 @@ func (plugin) Meta() registry.Meta {
 func (plugin) LocalizedHelp(lang string) string { return tr.T(lang, "help.long") }
 
 func (plugin) Handle(c registry.Ctx) ([]string, error) {
-	reply, err := ProcessLLMMessage(c.Text)
+	reply, err := ProcessLLMMessage(c.Rest)
 	if err != nil {
 		return []string{tr.T(c.Lang, "error")}, nil
 	}
@@ -46,12 +46,13 @@ func (plugin) Handle(c registry.Ctx) ([]string, error) {
 }
 
 // ProcessLLMMessage queries the configured LLM and returns the raw response.
-// Mesh-fit shrinking is applied centrally at the send site (internal/shrink).
-// Exported for the manual_test.go prompt harness (-tags manual). The
-// bot-wide language (global config) steers the model's reply language via an
-// appended system directive.
-func ProcessLLMMessage(text string) (response string, err error) {
-	text = strings.TrimSpace(strings.TrimPrefix(text, ".llm"))
+// query is the text after the matched ".llm" trigger (Ctx.Rest). Mesh-fit
+// shrinking is applied centrally at the send site (internal/shrink).
+// Exported for the manual_test.go prompt harness (-tags manual). The bot-wide
+// language (global config) steers the model's reply language via an appended
+// system directive.
+func ProcessLLMMessage(query string) (response string, err error) {
+	text := strings.TrimSpace(query)
 
 	cfg := config.Get()
 

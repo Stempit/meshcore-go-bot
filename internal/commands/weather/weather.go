@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stempit/meshcore-go-bot/internal/proxy"
 	"github.com/stempit/meshcore-go-bot/internal/support/i18n"
@@ -48,7 +49,10 @@ func (plugin) Handle(c registry.Ctx) ([]string, error) {
 	for _, kw := range []string{"завтра", "tomorrow"} {
 		if strings.HasPrefix(textLower, kw) {
 			day = 1
-			text = strings.TrimSpace(text[len(kw):])
+			// Cut rune-aligned: byte-slicing works for these keywords today,
+			// but any future keyword whose lowercase is byte-shorter would
+			// mis-cut or panic.
+			text = strings.TrimSpace(string([]rune(text)[utf8.RuneCountInString(kw):]))
 			break
 		}
 	}

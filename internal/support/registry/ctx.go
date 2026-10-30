@@ -3,6 +3,7 @@ package registry
 import (
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stempit/meshcore-go-bot/internal/config"
 	"github.com/stempit/meshcore-go-bot/internal/support/i18n"
@@ -26,9 +27,14 @@ type PingMeta struct {
 // Ctx is the unified handler input, replacing the divergent per-command
 // signatures of the old commands package.
 type Ctx struct {
-	Text       string         // raw incoming text
-	Trimmed    string         // strings.TrimSpace(Text)
-	Lower      string         // strings.ToLower(Trimmed)
+	Text    string // raw incoming text
+	Trimmed string // strings.TrimSpace(Text)
+	Lower   string // strings.ToLower(Trimmed)
+	// Rest is the remainder after the trigger Dispatch matched, trimmed of
+	// surrounding space (".path TIM to CHEP" → "TIM to CHEP"). Dispatch fills
+	// it for trigger-matched commands; Matcher interceptors leave it empty and
+	// cut their own prefixes with Arg.
+	Rest       string
 	Channel    string         // channel name; "" for DMs
 	SenderKey  string         // stable per-sender id (see dispatch for encoding)
 	SenderName string         // human-readable author; may be ""
@@ -57,9 +63,28 @@ func NewCtx(text, channel, senderKey, senderName string, pm *PingMeta, cfg *conf
 	}
 }
 
-// Arg returns the argument after a command prefix: TrimSpace(TrimPrefix(Trimmed, prefix)).
+// Arg returns the argument after a command prefix, following the registry's
+// Prefix rule: the prefix must be followed by a space or end the message
+// (".W moscow" and ".w moscow" both yield "moscow"; Arg(".w") on ".words x"
+// yields "" instead of slicing mid-word). The cut is rune-aligned because
+// ToLower preserves rune count but not byte length. Returns "" when the text
+// does not start with the prefix — it deliberately does not fall back to the
+// whole text, which the old case-sensitive TrimPrefix silently did on
+// ".W city", producing garbage args.
 func (c Ctx) Arg(prefix string) string {
-	return strings.TrimSpace(strings.TrimPrefix(c.Trimmed, prefix))
+	p := strings.ToLower(prefix)
+	if !strings.HasPrefix(c.Lower, p) {
+		return ""
+	}
+	if rest := c.Lower[len(p):]; rest != "" && !strings.HasPrefix(rest, " ") {
+		return ""
+	}
+	r := []rune(c.Trimmed)
+	n := utf8.RuneCountInString(p)
+	if len(r) < n {
+		return ""
+	}
+	return strings.TrimSpace(string(r[n:]))
 }
 
 // IsDM reports whether this message arrived as a direct message.

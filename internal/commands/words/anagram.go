@@ -88,8 +88,9 @@ var (
 //	.words top            – leaderboard for this scope (last 30 days)
 //
 // Works in both channels (shared base word, per-player scores) and DMs (solo).
+// text is Ctx.Rest: everything after the matched ".words" trigger.
 func processWords(lang, text, senderKey, senderName, channelName string) ([]string, error) {
-	rest := strings.TrimSpace(strings.TrimPrefix(text, ".words"))
+	rest := strings.TrimSpace(text)
 	fields := strings.Fields(rest)
 
 	verb := ""
