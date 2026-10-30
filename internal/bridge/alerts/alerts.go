@@ -20,6 +20,9 @@ const (
 	defaultPollIntervalSec = 60
 	defaultMaxPerPoll      = 3
 	fetchTimeout           = 10 * time.Second
+	// maxFeedBytes caps how much of an external feed/page is read into memory:
+	// fetchTimeout bounds time, not bytes, and a hostile source can stream.
+	maxFeedBytes = 5 << 20 // 5 MiB
 )
 
 // fetchFunc retrieves the current item list for one source, oldest-first.

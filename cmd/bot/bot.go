@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -23,6 +24,7 @@ import (
 	"github.com/stempit/meshcore-go-bot/internal/proxy"
 	"github.com/stempit/meshcore-go-bot/internal/shrink"
 	"github.com/stempit/meshcore-go-bot/internal/support/games"
+	"github.com/stempit/meshcore-go-bot/internal/support/helpers"
 	"github.com/stempit/meshcore-go-bot/internal/support/historylog"
 	"github.com/stempit/meshcore-go-bot/internal/support/registry"
 )
@@ -67,14 +69,19 @@ func main() {
 		os.Exit(1)
 	}
 	if proxyCfg.Enabled {
-		log().Info("Proxy enabled", "url", proxyCfg.URL)
+		// Redact credentials: the documented URL form carries user:pass.
+		if u, err := url.Parse(proxyCfg.URL); err == nil {
+			log().Info("Proxy enabled", "url", u.Redacted())
+		} else {
+			log().Info("Proxy enabled")
+		}
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	// history logger
-	histlog := historylog.New("log/history")
+	histlog := historylog.New(helpers.HistoryDir)
 	defer histlog.Close()
 
 	// meshcore client — BLE (default) or USB serial depending on config

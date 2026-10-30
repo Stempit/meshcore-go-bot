@@ -100,7 +100,8 @@ func wttrGet(rawURL string) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	// External untrusted source: cap the bytes read into memory.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxWeatherBytes))
 	if err != nil {
 		return nil, fmt.Errorf("read body: %w", err)
 	}
@@ -111,6 +112,9 @@ func wttrGet(rawURL string) ([]byte, error) {
 
 	return body, nil
 }
+
+// maxWeatherBytes caps the wttr.in payload (the request context bounds time).
+const maxWeatherBytes = 1 << 20 // 1 MiB — wttr.in replies are a few KB
 
 type wttrCurrentCondition struct {
 	TempC          string `json:"temp_C"`

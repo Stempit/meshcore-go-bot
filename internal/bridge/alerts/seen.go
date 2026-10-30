@@ -53,8 +53,11 @@ func (s *SeenSet) Empty() bool {
 	return len(s.ids) == 0
 }
 
-// CheckAndAdd returns true if id was already known. If unknown, it adds it to
-// the in-memory set and appends it to the file.
+// CheckAndAdd returns true if id was already known. If unknown, it appends it
+// to the file and only then records it in memory: if the write fails, the
+// event stays unknown so the next poll retries it. (Recording first left the
+// event permanently swallowed on any transient file error while it was also
+// missing from disk — inconsistent with what a restart would load.)
 func (s *SeenSet) CheckAndAdd(id string) (alreadyKnown bool, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -62,7 +65,6 @@ func (s *SeenSet) CheckAndAdd(id string) (alreadyKnown bool, err error) {
 	if _, ok := s.ids[id]; ok {
 		return true, nil
 	}
-	s.ids[id] = struct{}{}
 
 	f, err := os.OpenFile(s.path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644)
 	if err != nil {
@@ -70,6 +72,9 @@ func (s *SeenSet) CheckAndAdd(id string) (alreadyKnown bool, err error) {
 	}
 	defer f.Close()
 
-	_, err = fmt.Fprintln(f, id)
-	return false, err
+	if _, err := fmt.Fprintln(f, id); err != nil {
+		return false, fmt.Errorf("writing seen-ids file: %w", err)
+	}
+	s.ids[id] = struct{}{}
+	return false, nil
 }

@@ -3,6 +3,7 @@ package alerts
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
@@ -40,7 +41,8 @@ func fetchHTMLCards(ctx context.Context, httpClient *http.Client, pageURL string
 		return nil, fmt.Errorf("alerts page status %d", resp.StatusCode)
 	}
 
-	doc, err := html.Parse(resp.Body)
+	// External untrusted page: cap the bytes parsed (fetchTimeout bounds time).
+	doc, err := html.Parse(io.LimitReader(resp.Body, maxFeedBytes))
 	if err != nil {
 		return nil, fmt.Errorf("parse html: %w", err)
 	}

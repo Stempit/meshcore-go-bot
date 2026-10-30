@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -44,7 +45,9 @@ func fetchRSS(ctx context.Context, httpClient *http.Client, feedURL string) ([]E
 	}
 
 	var doc rssDoc
-	if err := xml.NewDecoder(resp.Body).Decode(&doc); err != nil {
+	// The feed is external and untrusted: fetchTimeout bounds time, not bytes,
+	// so cap the body a hostile feed can stream into memory.
+	if err := xml.NewDecoder(io.LimitReader(resp.Body, maxFeedBytes)).Decode(&doc); err != nil {
 		return nil, fmt.Errorf("parse rss: %w", err)
 	}
 

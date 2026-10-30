@@ -136,8 +136,12 @@ func statsHTTPGet(rawURL string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
-	return io.ReadAll(resp.Body)
+	// External untrusted source: cap the bytes read into memory.
+	return io.ReadAll(io.LimitReader(resp.Body, maxStatsBytes))
 }
+
+// maxStatsBytes caps the analyzer stats payload (fetch timeout bounds time).
+const maxStatsBytes = 5 << 20 // 5 MiB
 
 // validateStats drops nodes whose public_key_hex is malformed (short or not
 // hex) and any edge referencing a dropped node. The stats source is external
