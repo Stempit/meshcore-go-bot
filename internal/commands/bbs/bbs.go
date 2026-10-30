@@ -6,6 +6,7 @@ package bbs
 import (
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/stempit/meshcore-go-bot/internal/support/helpers"
 	"github.com/stempit/meshcore-go-bot/internal/support/i18n"
 	"github.com/stempit/meshcore-go-bot/internal/support/registry"
 )
@@ -23,15 +25,21 @@ var langFS embed.FS
 
 var tr = i18n.MustLoad(langFS)
 
-const (
+// Threads live under log/2ch; vars (not consts) so tests can redirect them.
+var (
 	bbsDir          = "log/2ch"
 	bbsThreadsFile  = "log/2ch/threads.json"
 	bbsPageSize     = 8 // threads per /ls page
 	bbsPostsPerPage = 3 // posts per /rd page
 	bbsMsgMax       = 138
+	bbsMaxThreads   = 50 // forum growth cap: oldest activity pruned at save
 	// bbsPriority sits above normal commands (0) but below claw (20).
 	bbsPriority = 10
 )
+
+// bbsSessionTTL is how long a BBS session survives without activity: someone
+// who forgets .exit must not have their input swallowed forever.
+const bbsSessionTTL = 30 * time.Minute
 
 // BBSPost is a single post in a thread.
 type BBSPost struct {
@@ -51,8 +59,8 @@ type BBSThread struct {
 }
 
 var (
-	bbsSessions   = map[string]bool{}
-	bbsSessionsMu sync.RWMutex
+	bbsSessions   = map[string]time.Time{} // session key -> last activity
+	bbsSessionsMu sync.Mutex
 
 	bbsThreads   []*BBSThread
 	bbsThreadsMu sync.Mutex
@@ -86,29 +94,51 @@ func (plugin) Matches(c registry.Ctx) bool {
 
 func (plugin) Handle(c registry.Ctx) ([]string, error) {
 	if isBBSMode(c.SenderKey) {
+		touchBBSMode(c.SenderKey)
 		if c.Lower == ".exit" {
 			exitBBSMode(c.SenderKey)
 			return []string{tr.T(c.Lang, "left")}, nil
 		}
 		return processBBSCommand(c.Lang, c.Text, c.SenderKey, c.SenderName)
 	}
-	// Enter BBS mode.
+	// Enter BBS mode. Unidentified senders are refused: sessions are keyed on
+	// SenderKey, which is "" for anyone the bot cannot resolve — one anonymous
+	// ".2ch" would otherwise capture every unidentified sender bot-wide.
+	if c.SenderKey == "" {
+		return []string{tr.T(c.Lang, "need_key")}, nil
+	}
 	enterBBSMode(c.SenderKey)
 	return []string{tr.T(c.Lang, "welcome")}, nil
 }
 
-// isBBSMode returns true when the session key is in BBS mode.
+// isBBSMode reports whether the session key is in BBS mode, lazily dropping
+// sessions idle past bbsSessionTTL.
 func isBBSMode(sessionKey string) bool {
-	bbsSessionsMu.RLock()
-	defer bbsSessionsMu.RUnlock()
-	return bbsSessions[sessionKey]
+	bbsSessionsMu.Lock()
+	defer bbsSessionsMu.Unlock()
+	last, ok := bbsSessions[sessionKey]
+	if !ok {
+		return false
+	}
+	if time.Since(last) > bbsSessionTTL {
+		delete(bbsSessions, sessionKey)
+		return false
+	}
+	return true
+}
+
+// touchBBSMode records activity for the session key, renewing its TTL.
+func touchBBSMode(sessionKey string) {
+	bbsSessionsMu.Lock()
+	defer bbsSessionsMu.Unlock()
+	bbsSessions[sessionKey] = time.Now()
 }
 
 // enterBBSMode puts the session key into BBS mode.
 func enterBBSMode(sessionKey string) {
 	bbsSessionsMu.Lock()
 	defer bbsSessionsMu.Unlock()
-	bbsSessions[sessionKey] = true
+	bbsSessions[sessionKey] = time.Now()
 }
 
 // exitBBSMode removes the session key from BBS mode.
@@ -129,16 +159,18 @@ func processBBSCommand(lang, text, authorKey, authorName string) ([]string, erro
 
 	lower := strings.ToLower(strings.TrimSpace(text))
 
+	// Sub-command matching follows the registry's prefix rule: exact, or the
+	// trigger followed by a space — so "/rdzone" is not parsed as "/rd zone".
 	switch {
 	case lower == "/hl" || strings.HasPrefix(lower, "/hl "):
 		return bbsHelp(lang), nil
 	case lower == "/ls" || strings.HasPrefix(lower, "/ls "):
 		return bbsList(lang, text), nil
-	case strings.HasPrefix(lower, "/rd"):
+	case lower == "/rd" || strings.HasPrefix(lower, "/rd "):
 		return bbsRead(lang, text), nil
-	case strings.HasPrefix(lower, "/nw"):
+	case lower == "/nw" || strings.HasPrefix(lower, "/nw "):
 		return bbsNew(lang, text, authorKey, authorName), nil
-	case strings.HasPrefix(lower, "/rp"):
+	case lower == "/rp" || strings.HasPrefix(lower, "/rp "):
 		return bbsReply(lang, text, authorKey, authorName), nil
 	default:
 		return []string{tr.T(lang, "unknown_cmd")}, nil
@@ -173,14 +205,7 @@ func bbsList(lang, text string) []string {
 	sorted := make([]*BBSThread, len(bbsThreads))
 	copy(sorted, bbsThreads)
 	sort.Slice(sorted, func(i, j int) bool {
-		ti, tj := sorted[i].CreatedAt, sorted[j].CreatedAt
-		if n := len(sorted[i].Posts); n > 0 {
-			ti = sorted[i].Posts[n-1].CreatedAt
-		}
-		if n := len(sorted[j].Posts); n > 0 {
-			tj = sorted[j].Posts[n-1].CreatedAt
-		}
-		return ti.After(tj)
+		return lastActivity(sorted[i]).After(lastActivity(sorted[j]))
 	})
 
 	totalPages := int(math.Ceil(float64(len(sorted)) / float64(bbsPageSize)))
@@ -208,10 +233,7 @@ func bbsList(lang, text string) []string {
 			label = tr.T(lang, "label_re", len(t.Posts)-1)
 		}
 		author := bbsAuthor(t.Posts[0].AuthorKey, t.Posts[0].AuthorName)
-		title := t.Title
-		if len(title) > 20 {
-			title = title[:18] + ".."
-		}
+		title := helpers.ClipRunes(t.Title, 18)
 		lines = append(lines, tr.T(lang, "list_line", t.ID, label, title, author))
 	}
 	if page < totalPages {
@@ -266,10 +288,7 @@ func bbsRead(lang, text string) []string {
 	}
 
 	var msgs []string
-	title := thread.Title
-	if len(title) > 25 {
-		title = title[:23] + ".."
-	}
+	title := helpers.ClipRunes(thread.Title, 23)
 	msgs = append(msgs, tr.T(lang, "thread_header", id, title, page, totalPages))
 
 	for _, post := range thread.Posts[start:end] {
@@ -360,17 +379,24 @@ func bbsReply(lang, text, authorKey, authorName string) []string {
 }
 
 // bbsAuthor returns a display name: username or first 6 hex chars of key.
+// Clipping is by runes so Cyrillic names never emit invalid UTF-8.
 func bbsAuthor(key, name string) string {
 	if name != "" {
-		if len(name) > 8 {
-			return name[:8]
-		}
-		return name
+		return helpers.ClipRunes(name, 8)
 	}
 	if len(key) >= 6 {
 		return key[:6]
 	}
 	return key
+}
+
+// lastActivity returns the thread's most recent post time (creation time for
+// a fresh thread).
+func lastActivity(t *BBSThread) time.Time {
+	if n := len(t.Posts); n > 0 {
+		return t.Posts[n-1].CreatedAt
+	}
+	return t.CreatedAt
 }
 
 func bbsTimeAgo(lang string, t time.Time) string {
@@ -416,17 +442,30 @@ func bbsLoad() error {
 		return err
 	}
 	data, err := os.ReadFile(bbsThreadsFile)
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
+		// Either a fresh install or the atomic-save rename window: fall back
+		// to the previous generation kept by bbsSave.
+		data, err = os.ReadFile(bbsThreadsFile + ".bak")
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if len(data) == 0 {
 		bbsThreads = []*BBSThread{}
 		bbsNextID = 1
 		bbsLoaded = true
 		return nil
 	}
-	if err != nil {
-		return err
-	}
 	if err := json.Unmarshal(data, &bbsThreads); err != nil {
-		return err
+		// The main file is corrupt; try the previous generation before
+		// giving up (bbsSave keeps one around).
+		bak, bakErr := os.ReadFile(bbsThreadsFile + ".bak")
+		if bakErr != nil {
+			return err
+		}
+		if bakErr := json.Unmarshal(bak, &bbsThreads); bakErr != nil {
+			return err // both generations unreadable
+		}
 	}
 	bbsThreads = validThreads(bbsThreads)
 	bbsNextID = 1
@@ -453,10 +492,41 @@ func validThreads(threads []*BBSThread) []*BBSThread {
 }
 
 // bbsSave serialises threads to disk. Caller must hold bbsThreadsMu.
+// The write is atomic (temp file + rename) — these nodes run on battery, and
+// a crash mid-write must not truncate the forum. The previous generation is
+// kept as .bak so bbsLoad can recover from a corrupt new file.
 func bbsSave() error {
+	pruneThreads()
 	data, err := json.MarshalIndent(bbsThreads, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(bbsThreadsFile, data, 0o644)
+	if err := os.MkdirAll(bbsDir, 0o755); err != nil {
+		return err
+	}
+	tmp := bbsThreadsFile + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return err
+	}
+	// Rotating the old file away first leaves a window where only .bak holds
+	// the data — that is exactly what the .bak fallback in bbsLoad covers.
+	if err := os.Rename(bbsThreadsFile, bbsThreadsFile+".bak"); err != nil && !errors.Is(err, os.ErrNotExist) {
+		os.Remove(tmp)
+		return err
+	}
+	return os.Rename(tmp, bbsThreadsFile)
+}
+
+// pruneThreads caps forum growth from anonymous mesh input: beyond
+// bbsMaxThreads the oldest-activity threads are dropped. Caller holds
+// bbsThreadsMu. Note this reorders bbsThreads by activity — harmless, every
+// consumer looks threads up by ID or sorts its own copy.
+func pruneThreads() {
+	if len(bbsThreads) <= bbsMaxThreads {
+		return
+	}
+	sort.Slice(bbsThreads, func(i, j int) bool {
+		return lastActivity(bbsThreads[i]).After(lastActivity(bbsThreads[j]))
+	})
+	bbsThreads = bbsThreads[:bbsMaxThreads]
 }
