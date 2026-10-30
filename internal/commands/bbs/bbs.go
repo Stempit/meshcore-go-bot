@@ -200,6 +200,9 @@ func bbsList(lang, text string) []string {
 	var lines []string
 	lines = append(lines, tr.T(lang, "page_header", page, totalPages))
 	for _, t := range sorted[start:end] {
+		if len(t.Posts) == 0 { // belt-and-braces: validThreads drops these at load
+			continue
+		}
 		label := tr.T(lang, "label_new")
 		if len(t.Posts) > 1 {
 			label = tr.T(lang, "label_re", len(t.Posts)-1)
@@ -425,6 +428,7 @@ func bbsLoad() error {
 	if err := json.Unmarshal(data, &bbsThreads); err != nil {
 		return err
 	}
+	bbsThreads = validThreads(bbsThreads)
 	bbsNextID = 1
 	for _, t := range bbsThreads {
 		if t.ID >= bbsNextID {
@@ -433,6 +437,19 @@ func bbsLoad() error {
 	}
 	bbsLoaded = true
 	return nil
+}
+
+// validThreads drops zero-post threads: threads.json is hand-editable and
+// written non-transactionally by older versions, and bbsList indexes
+// Posts[0] — a single empty entry must not poison every later /ls.
+func validThreads(threads []*BBSThread) []*BBSThread {
+	kept := make([]*BBSThread, 0, len(threads))
+	for _, t := range threads {
+		if len(t.Posts) > 0 {
+			kept = append(kept, t)
+		}
+	}
+	return kept
 }
 
 // bbsSave serialises threads to disk. Caller must hold bbsThreadsMu.

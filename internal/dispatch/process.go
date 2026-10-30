@@ -39,6 +39,12 @@ func (s *inflightSet) done(key string) {
 }
 
 func (d *Dispatcher) processDM(m *meshcore.Message) {
+	// A malformed (short) sender key makes every later key-prefix slice below
+	// unsafe — drop the message rather than guess an identity for it.
+	if len(m.SenderKey) < 6 {
+		log().Warn("Direct message with short sender key, dropping", "len", len(m.SenderKey))
+		return
+	}
 	senderKeyHex := fmt.Sprintf("%x", m.SenderKey)
 	if !config.Get().Security.Direct.IsAllowed(senderKeyHex) {
 		log().Info("Direct message filtered by security policy", "sender", senderKeyHex[:12])

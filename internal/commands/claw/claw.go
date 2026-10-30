@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stempit/meshcore-go-bot/internal/bridge/picoclaw"
 	"github.com/stempit/meshcore-go-bot/internal/support/i18n"
@@ -57,11 +58,24 @@ func (plugin) Handle(c registry.Ctx) ([]string, error) {
 	if conf.Enabled && conf.BotName != "" {
 		mentionPrefix := "@[" + conf.BotName + "]"
 		if strings.HasPrefix(c.Lower, strings.ToLower(mentionPrefix)) {
-			prompt := strings.TrimSpace(c.Trimmed[len(mentionPrefix):])
+			prompt := mentionPrompt(c.Trimmed, mentionPrefix)
 			return processClaw(c.Lang, ".claw "+prompt, c.SenderKey, c.Channel)
 		}
 	}
 	return processClaw(c.Lang, c.Text, c.SenderKey, c.Channel)
+}
+
+// mentionPrompt extracts the prompt after a mention that matched
+// case-insensitively. The cut is by rune count: ToLower preserves rune count
+// but not byte length (İ → i), so slicing Trimmed by len(lowercased prefix)
+// could panic or mis-cut for names containing such runes.
+func mentionPrompt(trimmed, mentionPrefix string) string {
+	n := utf8.RuneCountInString(strings.ToLower(mentionPrefix))
+	runes := []rune(trimmed)
+	if n > len(runes) {
+		return ""
+	}
+	return strings.TrimSpace(string(runes[n:]))
 }
 
 func processClaw(lang, text, senderKey, channelName string) ([]string, error) {

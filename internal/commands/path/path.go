@@ -5,6 +5,7 @@ package path
 import (
 	"context"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -108,6 +109,7 @@ func getStats() (*statsResponse, error) {
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return nil, fmt.Errorf("parse stats: %w", err)
 	}
+	validateStats(&resp)
 
 	ttl := time.Duration(conf.CacheTTLSec) * time.Second
 	if ttl <= 0 {
@@ -135,6 +137,41 @@ func statsHTTPGet(rawURL string) ([]byte, error) {
 		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 	return io.ReadAll(resp.Body)
+}
+
+// validateStats drops nodes whose public_key_hex is malformed (short or not
+// hex) and any edge referencing a dropped node. The stats source is external
+// and untrusted: the route builder slices pk[:2] off every key, so a
+// truncated key would panic the handler. Keys are compared case-insensitively
+// so mixed-case sources cannot silently strand edges.
+func validateStats(resp *statsResponse) {
+	ok := make(map[string]bool, len(resp.Nodes))
+	nodes := make([]statsNode, 0, len(resp.Nodes))
+	for _, n := range resp.Nodes {
+		if !isHexKey(n.PublicKeyHex) {
+			log().Warn("stats: dropping node with malformed public_key_hex", "key", n.PublicKeyHex)
+			continue
+		}
+		ok[strings.ToLower(n.PublicKeyHex)] = true
+		nodes = append(nodes, n)
+	}
+	edges := make([]statsEdge, 0, len(resp.Edges))
+	for _, e := range resp.Edges {
+		if ok[strings.ToLower(e.NodeA)] && ok[strings.ToLower(e.NodeB)] {
+			edges = append(edges, e)
+		}
+	}
+	resp.Nodes, resp.Edges = nodes, edges
+}
+
+// isHexKey reports whether s is valid hex and long enough for the 1-byte hash
+// prefix (2 hex chars) used in route building.
+func isHexKey(s string) bool {
+	if len(s) < 2 || len(s)%2 != 0 {
+		return false
+	}
+	_, err := hex.DecodeString(s)
+	return err == nil
 }
 
 // ── Link cost model ───────────────────────────────────────────────────────────

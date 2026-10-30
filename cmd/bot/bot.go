@@ -250,7 +250,11 @@ drainLoop:
 
 	// Log and optionally process stored messages exactly once.
 	for _, m := range client.GetAllMessages() {
-		log().Info("Stored DM", "sender", fmt.Sprintf("%x", m.SenderKey[:6]), "text", m.Text)
+		key := m.SenderKey
+		if len(key) > 6 {
+			key = key[:6]
+		}
+		log().Info("Stored DM", "sender", fmt.Sprintf("%x", key), "text", m.Text)
 		if processStoredMessages {
 			d.Submit(m)
 		}
