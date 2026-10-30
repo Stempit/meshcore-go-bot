@@ -1,5 +1,5 @@
 # Top authors. %d = number of scanned messages.
-help.long: ".top — top-5 channel authors by message count"
+help.long: ".top — top-3 channel authors by message count"
 channels_only: "Top is available in channels only"
 no_messages: "No messages for the top yet"
 header: "🏆 Top msgs of %d:"

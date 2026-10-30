@@ -37,10 +37,12 @@ An action verb typed on the channel gets guidance only (`Ходы — тольк
 
 Fixed-limit: blinds 5/10 (small_bet/2, small_bet), small bet (10) preflop and
 flop, big bet (20) turn and river, one raise = one full increment, max 3
-raises per street (an all-in short of a full raise is allowed but does not
-reopen the cap accounting). Heads-up: the button posts the SB and acts first
-preflop. Side pots split by contribution levels (uncalled bets refunded
-first); split pots divide evenly, the odd chip going to the first winner left
+raises per street. An all-in below a full raise is allowed and reopens the
+action (everyone gets to call the new amount), but it still counts against
+the raise cap — the cap is never reset. Heads-up: the button posts the SB and
+acts first preflop. Side pots split by contribution levels (uncalled bets
+refunded first); split pots divide evenly, the odd chip going to the first
+winner left
 of the button. Showdown names every live hand (`P0 — пара A`); the win and
 split lines additionally reveal the **winners'** hole cards (losers' cards
 stay hidden). The deck is shuffled with crypto/rand.

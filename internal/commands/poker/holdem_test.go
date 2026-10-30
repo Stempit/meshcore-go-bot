@@ -202,9 +202,9 @@ func TestShowdownSplitOddChip(t *testing.T) {
 	tb := mkTable(3)
 	board := []cards.Card{card(7, cards.Spades), card(8, cards.Diamonds), card(9, cards.Clubs), card(11, cards.Hearts), card(13, cards.Spades)}
 	riverState(tb, map[int][2]cards.Card{
-		0: {card(5, cards.Clubs), card(5, cards.Diamonds)},  // pair 5
-		1: {card(5, cards.Hearts), card(5, cards.Spades)},    // pair 5 — tie with P0
-		2: {card(2, cards.Clubs), card(3, cards.Diamonds)},   // king high, loses
+		0: {card(5, cards.Clubs), card(5, cards.Diamonds)}, // pair 5
+		1: {card(5, cards.Hearts), card(5, cards.Spades)},  // pair 5 — tie with P0
+		2: {card(2, cards.Clubs), card(3, cards.Diamonds)}, // king high, loses
 	}, []int{10, 10, 5}, board)
 
 	o := newOut()

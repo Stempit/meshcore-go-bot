@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/stempit/meshcore-go-bot/internal/support/games"
 	"github.com/stempit/meshcore-go-bot/internal/support/i18n"
 	"github.com/stempit/meshcore-go-bot/internal/support/registry"
 )
@@ -216,7 +217,7 @@ func diceRoll(lang, senderName, channelName string) ([]string, error) {
 		return []string{tr.T(lang, "not_open")}, nil
 	}
 
-	who := diceWho(senderName)
+	who := games.Who(senderName)
 	if prev, ok := s.rolls[who]; ok {
 		return []string{tr.T(lang, "already_rolled", prev)}, nil
 	}
@@ -311,12 +312,4 @@ func diceResult(lang string, s *diceSession) string {
 		head += " (" + strings.Join(others, ", ") + ")"
 	}
 	return head
-}
-
-// diceWho returns a usable player label, falling back when the name is empty.
-func diceWho(senderName string) string {
-	if name := strings.TrimSpace(senderName); name != "" {
-		return name
-	}
-	return "?"
 }

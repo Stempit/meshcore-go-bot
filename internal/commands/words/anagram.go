@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"fmt"
 	"log/slog"
+	"math"
 	"math/rand"
 	"sort"
 	"strconv"
@@ -169,7 +170,7 @@ func wordsStart(lang, scope string) ([]string, error) {
 	wordsGames[scope] = g
 
 	slog.Info("words round started", "scope", scope, "base", string(base))
-	return []string{tr.T(lang, "started", strings.ToUpper(string(base)), int(ttl.Minutes()))}, nil
+	return []string{tr.T(lang, "started", strings.ToUpper(string(base)), int(math.Ceil(ttl.Minutes())))}, nil
 }
 
 // wordsSubmit validates a submission and, on success, scores it. The validation
