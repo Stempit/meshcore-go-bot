@@ -3,7 +3,7 @@ package words
 import "github.com/stempit/meshcore-go-bot/internal/config"
 
 // cfg is the .words config section (yaml key "words"). It is opt-in via Enabled
-// (same convention as Claw). The int fields are defaulted at their use sites
+// (same convention as Agent). The int fields are defaulted at their use sites
 // when zero (see the wordsRoundDur/wordsMinSub/... accessors in anagram.go).
 type cfg struct {
 	Enabled    bool `yaml:"enabled"`      // opt-in: .words stays off unless true

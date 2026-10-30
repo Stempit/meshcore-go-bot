@@ -134,7 +134,7 @@ func (d *Dispatcher) runSender() {
 	}
 }
 
-// runWorkers processes incoming messages concurrently so slow commands (.claw,
+// runWorkers processes incoming messages concurrently so slow commands (.agent,
 // .llm — they block on network) don't hold up fast ones like .ping. Reply
 // generation runs concurrently; reply sending stays serialized through the
 // outgoing queue. The semaphore caps total in-flight messages so a burst can't

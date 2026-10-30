@@ -1,6 +1,6 @@
 // Package bbs is a stateful interceptor: once a sender enters BBS mode (.2ch)
 // it claims all of that sender's input until they .exit. It registers at a
-// Priority above normal commands (but below claw) so the interception wins.
+// Priority above normal commands (but below agent) so the interception wins.
 package bbs
 
 import (
@@ -33,7 +33,7 @@ var (
 	bbsPostsPerPage = 3 // posts per /rd page
 	bbsMsgMax       = 138
 	bbsMaxThreads   = 50 // forum growth cap: oldest activity pruned at save
-	// bbsPriority sits above normal commands (0) but below claw (20).
+	// bbsPriority sits above normal commands (0) but below agent (20).
 	bbsPriority = 10
 )
 

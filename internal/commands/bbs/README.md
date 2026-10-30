@@ -5,7 +5,7 @@ Once a sender enters BBS mode it claims **all** of that sender's input until the
 `.exit`, so plain messages become BBS sub-commands rather than normal bot commands.
 
 `bbs` is a `Matcher` interceptor at **Priority 10** — above normal commands (0) but
-below claw (20), so an `@[BotName]` mention still beats BBS mode.
+below agent (20), so an `@[BotName]` mention still beats BBS mode.
 
 ## Command surface
 

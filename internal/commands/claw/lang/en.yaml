@@ -1,8 +1,0 @@
-# picoclaw AI agent bridge.
-help.long: |-
-  .claw <question>
-  ask the picoclaw AI agent
-usage: "usage: .claw <question>"
-not_configured: "picoclaw not configured"
-connection_error: "picoclaw connection error"
-busy: "picoclaw is busy, try again in a minute."

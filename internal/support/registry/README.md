@@ -38,8 +38,8 @@ type Command interface {
 Two optional interfaces, checked by type assertion:
 
 - **`Matcher`** — `Matches(Ctx) bool`, used *instead of* `Triggers` for custom matching
-  (claw's `@[Bot]` mention, bbs-mode interception). Order interceptors with `Priority`
-  (claw 20 > bbs 10 > normal 0).
+  (agent's `@[Bot]` mention, bbs-mode interception). Order interceptors with `Priority`
+  (agent 20 > bbs 10 > normal 0).
 - **`Configurable`** — `ConfigKey()`, `Configure(config.Sectioner)`, `Enabled()`; a
   false `Enabled()` hides the command from routing *and* help.
 
@@ -55,7 +55,7 @@ func HelpIndex() string                // grouped index, generated from Meta
 `Dispatch`:
 
 1. **Per-command help first** — `ctx.Lower == "<trigger> help"` returns `HelpLong`
-   (before any matcher, so it beats claw/bbs interceptors).
+   (before any matcher, so it beats agent/bbs interceptors).
 2. Sort by `Priority` desc, then registration order.
 3. Skip disabled `Configurable`s.
 4. Match via `Matches` if implemented, else `Triggers`/`Match`.

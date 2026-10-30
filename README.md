@@ -16,7 +16,7 @@ from a single tiny Go binary.
 
 - 📡 **Works where nothing else does.** Pure LoRa mesh. Off-grid campsites, dead zones,
   emergencies, field ops — if two MeshCore nodes can hear each other, meshcore-go-bot is there.
-- 🧠 **AI on the mesh.** `.llm` and `.claw` bring an LLM / AI agent to a network with no
+- 🧠 **AI on the mesh.** `.llm` and `.agent` bring an LLM / AI agent to a network with no
   internet in sight (the bot's host bridges out; the mesh stays radio-only).
 - 🎮 **It's actually fun.** Dice roll-offs, hangman, guess-the-number, anagram races, and
   live polls — with 30-day leaderboards. Your channel becomes a game room.
@@ -43,7 +43,7 @@ Talk to it over mesh radio with simple `.commands`:
 | 📜 | `.last [n]` | Recent channel history |
 | 📰 | `.news [feed]` | RSS headlines |
 | 🧠 | `.llm <q>` | Ask an LLM |
-| 🐾 | `.claw <q>` / `@Bot` | Ask the picoclaw AI agent |
+| 🐾 | `.agent <q>` / `@Bot` | Ask your AI agent (nanobot or any OpenAI-compatible API) |
 | ☀️ | `.w [город]` | Current / tomorrow's weather |
 | 🗺️ | `.path A to B` | Best route between repeaters |
 | 🏆 | `.top` · `.stat` | Channel activity & 24h traffic |
@@ -99,7 +99,7 @@ Connection:
 Language: "en"          # bot-wide reply language: "en" | "ru"
 
 # Optional features — see config.example.yaml for every section:
-#   Telegram bridge, MQTT / Let's Mesh analyzer, LLM (.llm), picoclaw (.claw),
+#   Telegram bridge, MQTT / Let's Mesh analyzer, LLM (.llm), AI agent (.agent),
 #   hazard alerts, weather, per-command settings…
 ```
 

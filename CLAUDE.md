@@ -36,7 +36,7 @@ internal/
   commands/             – self-registering command plugins (one folder each; no loose files)
     allcommands/        – aggregator: blank-imports every plugin so they self-register
     ping/ trace/ last/ news/ llm/ weather/ path/ top/ stat/ eightball/
-    ticket/ help/ claw/ bbs/ dice/ num/ hang/ words/ poker/  – one command per folder
+    ticket/ help/ agent/ bbs/ dice/ num/ hang/ words/ poker/  – one command per folder
     advert/             – .advert parser; handled in the dispatch layer (needs the
                           client's SendSelfAdvert), so it is not a registry plugin
   support/              – shared framework + support layer sitting above commands/
@@ -57,7 +57,10 @@ internal/
                           incident cards, МЧС RSS feeds) and announces new items to a mesh
                           channel; no meshcore/dispatch dependency, delivery via an injected
                           OnEvent callback (same shape as tgbridge)
-    picoclaw/           – picoclaw AI agent WebSocket client (used by .claw)
+    agentclient/        – universal AI agent client; Agent.type picks the adapter:
+                          "openai" (OpenAI-compatible chat completions — nanobot,
+                          LiteLLM, vLLM, …) or "picoclaw" (legacy Pico Protocol
+                          WebSocket); used by .agent
 ```
 
 Sibling module repos (local checkouts next to this repo, wired via `replace`
@@ -127,7 +130,7 @@ Each command is a self-registering plugin in its own folder; the table's **Plugi
 | `.last [n] [channel]` | `commands/last` → `last` | Last *n* lines from `historylog` (max 7) |
 | `.llm <prompt>` | `commands/llm` → `llm` | LLM query; auto-shrinks response to ≤130 chars |
 | `.news [feed] [n] [offset]` | `commands/news` → `news` | Lists feeds or returns recent RSS items from `log/news/`, populated by the [newswire](https://github.com/Stempit/newswire) poller |
-| `.claw <prompt>` / `@[BotName]` mention | `commands/claw` → `claw` | `Matcher` interceptor (Priority 20, above bbs): mention beats BBS. Sends prompt to picoclaw AI agent via WebSocket; auto-shrinks response |
+| `.agent <prompt>` / `@[BotName]` mention | `commands/agent` → `agent` | `Matcher` interceptor (Priority 20, above bbs): mention beats BBS. Sends prompt to the user's AI agent via `agentclient` (`Agent.type`: openai = nanobot & friends, picoclaw = legacy WS); auto-shrinks response |
 | `.2ch` (+ all input while in BBS mode) | `commands/bbs` → `bbs` | Stateful `Matcher` interceptor (Priority 10): forum/BBS mode until `.exit` |
 | `.ticket [random]` | `commands/ticket` → `ticket` | Stable random "callsign" per sender (persisted); not in `.help` index |
 | `.help` | `commands/help` → `help` | Grouped command index from registered `Meta` (`Group`/`HelpShort`); per-command help is `.<cmd> help` (`HelpLong`), intercepted in `registry.Dispatch` |

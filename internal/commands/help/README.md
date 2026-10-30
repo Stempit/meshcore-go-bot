@@ -13,7 +13,7 @@ list — a command appears in the index when its `Meta` has a non-empty `HelpSho
 ```
 
 Per-command help (`.<cmd> help`) is **not** handled here — it is intercepted centrally
-in `registry.Dispatch` before the normal matchers, so it beats interceptors like claw
+in `registry.Dispatch` before the normal matchers, so it beats interceptors like agent
 and bbs. `.help` itself is not listed in its own index.
 
 ## Configuration

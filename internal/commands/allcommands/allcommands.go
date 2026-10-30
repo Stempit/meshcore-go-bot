@@ -9,8 +9,8 @@
 package allcommands
 
 import (
+	_ "github.com/stempit/meshcore-go-bot/internal/commands/agent"
 	_ "github.com/stempit/meshcore-go-bot/internal/commands/bbs"
-	_ "github.com/stempit/meshcore-go-bot/internal/commands/claw"
 	_ "github.com/stempit/meshcore-go-bot/internal/commands/dice"
 	_ "github.com/stempit/meshcore-go-bot/internal/commands/eightball"
 	_ "github.com/stempit/meshcore-go-bot/internal/commands/hang"
