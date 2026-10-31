@@ -64,7 +64,7 @@ routing, forwards Telegram ⇄ mesh, publishes to MQTT analyzers, and fires haza
 - ✅ Runs off-grid on LoRa mesh — no internet needed for radio operation
 - ✅ Huge feature set out of the box: info, AI, games, bridges, alerts
 - ✅ Real delivery reliability on a lossy, ACK-less medium
-- ✅ Single static Go binary; connects over **Bluetooth LE or USB serial**
+- ✅ Single static Go binary; connects over **Bluetooth LE, USB serial or TCP (Wi-Fi/Ethernet)**
 - ✅ Bilingual (en/ru); replies tuned to the mesh's tight byte budget
 - ✅ Clean plugin architecture — trivial to extend, well documented per package
 
@@ -92,9 +92,12 @@ A minimal working `config.yaml` — everything else is optional:
 
 ```yaml
 Connection:
-  type: "bt"            # "bt" (Bluetooth LE, default) or "serial"
+  type: "bt"            # "bt" (Bluetooth LE, default), "serial" or "tcp" (Wi-Fi/Ethernet)
   # serial_port: "/dev/ttyUSB0"   # when type: "serial"
   # serial_baud: 115200
+  # tcp_address: "192.168.1.50"   # when type: "tcp" — host or host:port (default 5000)
+  # device_name: "MeshCore-AB12"  # when type: "bt" — pick one device by advertised name
+  # device_address: "AA:BB:CC:DD:EE:FF"  # when type: "bt" — or by platform address
 
 Language: "en"          # bot-wide reply language: "en" | "ru"
 
@@ -115,7 +118,7 @@ in sibling repos:
 
 | Repo | What it is |
 |---|---|
-| [meshcore-go](https://github.com/stempit/meshcore-go) | the protocol driver: BLE/serial, wire format, delivery-confirmed sends |
+| [meshcore-go](https://github.com/stempit/meshcore-go) | the protocol driver: BLE/serial/TCP, wire format, delivery-confirmed sends |
 | [meshcore-kit](https://github.com/stempit/meshcore-kit) | shared app runtime (connect, sync, inbox, keepalive) + the 140-byte message fitter |
 | [meshcore-http-gateway](https://github.com/stempit/meshcore-http-gateway) | your mesh behind a plain HTTP API (`/get`, `/send`, `/messages`) |
 | [meshcore-mcp-gateway](https://github.com/stempit/meshcore-mcp-gateway) | your mesh as voice tools for the XiaoZhi assistant |

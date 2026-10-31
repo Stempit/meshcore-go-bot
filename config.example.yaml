@@ -5,7 +5,8 @@
 Language: ru
 
 Connection:
-  # Transport type: "bt" (Bluetooth LE, default) or "serial" (USB/UART)
+  # Transport type: "bt" (Bluetooth LE, default), "serial" (USB/UART) or
+  # "tcp" (alias "wifi": Wi-Fi/Ethernet companion firmware)
   type: bt
   # serial_port is required when type is "serial"
   # Linux:   /dev/ttyUSB0  or  /dev/ttyACM0
@@ -13,6 +14,16 @@ Connection:
   # Windows: COM3
   # serial_port: /dev/ttyUSB0
   # serial_baud: 115200   # default 115200, matches MeshCore firmware
+  # tcp_address is required when type is "tcp" — the companion firmware
+  # serves the same protocol on TCP over Wi-Fi/Ethernet.
+  # Either a bare host or host:port; a bare host gets the default port 5000.
+  # tcp_address: 192.168.1.50
+  # BLE device selection when type is "bt" (both optional): without them the
+  # bot scans for any MeshCore device and picks the strongest signal. On
+  # macOS the address is a per-machine CoreBluetooth UUID, so device_name is
+  # the portable identifier.
+  # device_name: MeshCore-AB12
+  # device_address: AA:BB:CC:DD:EE:FF
   # Maximum number of times to transmit each channel reply. Channel messages
   # have no delivery ACK and the device can silently drop a queued packet, so
   # the bot may send the same packet a few times (receivers dedup it) to improve

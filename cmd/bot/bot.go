@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -43,6 +44,15 @@ func bridgeCfg(key string, target any) {
 		log().Error("Failed to decode config section", "section", key, "error", err)
 		os.Exit(1)
 	}
+}
+
+// tcpDialAddr accepts a bare host and appends the companion firmware's
+// default TCP port; "host:port" passes through unchanged.
+func tcpDialAddr(addr string) string {
+	if strings.Contains(addr, ":") {
+		return addr
+	}
+	return addr + ":5000"
 }
 
 func main() {
@@ -84,7 +94,8 @@ func main() {
 	histlog := historylog.New(helpers.HistoryDir)
 	defer histlog.Close()
 
-	// meshcore client — BLE (default) or USB serial depending on config
+	// meshcore client — BLE (default), USB serial or TCP (Wi-Fi/Ethernet)
+	// depending on config
 	var client *meshcore.MeshCoreClient
 	conn := config.Get().Connection
 	switch conn.Type {
@@ -99,8 +110,21 @@ func main() {
 			baud = 115200
 		}
 		client = meshcore.CreateSerialClient(port, baud)
+	case "tcp", "wifi":
+		if conn.TCPAddress == "" {
+			log().Error("Connection.tcp_address must be set when Connection.type is \"tcp\"")
+			os.Exit(1)
+		}
+		client = meshcore.CreateTCPClient(tcpDialAddr(conn.TCPAddress))
 	default:
-		client = meshcore.CreateClient()
+		var ble []meshcore.BLEOption
+		if conn.DeviceName != "" {
+			ble = append(ble, meshcore.WithDeviceName(conn.DeviceName))
+		}
+		if conn.DeviceAddress != "" {
+			ble = append(ble, meshcore.WithDeviceAddress(conn.DeviceAddress))
+		}
+		client = meshcore.CreateClient(ble...)
 	}
 	defer client.Disconnect()
 
@@ -291,7 +315,7 @@ drainLoop:
 		fmt.Println(client.FormatStats())
 	}
 
-	// ─── Periodic stats (keeps MQTT up to date, detects BLE disconnection) ────
+	// ─── Periodic stats (keeps MQTT up to date, detects disconnection) ────────
 
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
@@ -302,7 +326,7 @@ drainLoop:
 				if err := client.RequestAllStats(); err != nil {
 					log().Error("Failed to request periodic stats", "error", err)
 					if !client.IsConnected() {
-						log().Warn("BLE connection lost, reconnecting...")
+						log().Warn("Connection lost, reconnecting...")
 						time.Sleep(5 * time.Second)
 						if err := client.Reconnect(); err != nil {
 							log().Error("Reconnect failed", "error", err)
